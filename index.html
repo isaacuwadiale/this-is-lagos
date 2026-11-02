@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>This Is Lagos — Playable Prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}
+</script>
+</head>
+<body>
+<div id="game"></div>
+<div class="topbar">
+  <div class="brand"><span class="brand-mark">TL</span><span>THIS IS <b>LAGOS</b><small>EARLY ACCESS · CITY PROTOTYPE</small></span></div>
+  <div class="top-info"><span class="live-dot"></span><span>LOCAL WORLD</span><b id="clock">12:00</b><span id="weatherLabel">☀ Clear</span></div>
+  <button class="icon-btn" id="menuBtn" aria-label="Open menu">☰</button>
+</div>
+<div class="left-panel glass">
+  <div class="eyebrow">YOUR CHARACTER</div>
+  <div class="player-name">New Lagosian</div>
+  <div class="muted">Citizen · Exploring</div>
+  <div class="stat-row"><span>District</span><b>Victoria Island</b></div>
+  <div class="stat-row"><span>World time</span><b id="worldTime">Day</b></div>
+  <button class="panel-button" id="profileBtn">Edit profile</button>
+</div>
+<div class="right-controls">
+  <button class="control" id="cameraBtn"><span>◉</span><small>THIRD PERSON</small></button>
+  <button class="control" id="weatherBtn"><span>☀</span><small>WEATHER</small></button>
+  <button class="control" id="activityBtn"><span>＋</span><small>ACTIVITIES</small></button>
+</div>
+<div class="bottom-hint"><span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span> Move <i>·</i> Drag to look <i>·</i> <span class="key">C</span> Change camera</div>
+<div class="mobile-pad" id="mobilePad"><button data-dir="up">▲</button><div><button data-dir="left">◀</button><button data-dir="down">▼</button><button data-dir="right">▶</button></div></div>
+<div class="modal-backdrop hidden" id="modalBackdrop">
+  <section class="modal glass">
+    <button class="close" id="closeModal">×</button>
+    <div class="eyebrow" id="modalEyebrow">THIS IS LAGOS</div>
+    <h2 id="modalTitle">Your Lagos journey starts here.</h2>
+    <div id="modalBody" class="modal-body">Explore the city prototype.</div>
+    <div id="modalActions" class="modal-actions"></div>
+  </section>
+</div>
+<div class="toast" id="toast">Welcome to Lagos.</div>
+<script type="module" src="game.js"></script>
+</body>
+</html>
