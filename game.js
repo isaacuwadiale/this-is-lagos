@@ -32,7 +32,7 @@ for(let z=-65;z<80;z+=17){palm(-12,z);palm(12,z)}
 // Customizable human avatar: varied skin tones, face, hair and clothing.
 const player=new THREE.Group();scene.add(player);
 let body;
-const avatarDefaults={skin:"#70452f",hair:"#171513",style:"Low cut",top:"#16834a",bottom:"#263d35",shoes:"#f3f3e9",name:"New Lagosian"};
+const avatarDefaults={gender:"Male",skin:"#70452f",hair:"#171513",style:"Low cut",top:"#16834a",bottom:"#263d35",shoes:"#f3f3e9",name:"New Lagosian"};
 let avatarSettings={...avatarDefaults};
 function part(parent,geometry,material,x,y,z,sx=1,sy=1,sz=1){
   const mesh=new THREE.Mesh(geometry,material);mesh.position.set(x,y,z);mesh.scale.set(sx,sy,sz);mesh.castShadow=true;mesh.receiveShadow=true;parent.add(mesh);return mesh;
@@ -43,8 +43,17 @@ function rebuildAvatar(opts=avatarSettings){
   const hairMat=new THREE.MeshStandardMaterial({color:avatarSettings.hair,roughness:.92});
   const shirt=mat(avatarSettings.top),trousers=mat(avatarSettings.bottom),shoe=mat(avatarSettings.shoes);
   const joint=mat(avatarSettings.skin);
-  // Natural human proportions: torso, neck, shoulders, arms, hands, legs and shoes.
-  body=part(player,new THREE.CapsuleGeometry(.34,.72,7,14),shirt,0,1.08,0,1.05,1,0.72);
+  // Gender-aware base proportions. These are still procedural game models,
+  // designed as a bridge until licensed, high-detail rigged human models are added.
+  const female=avatarSettings.gender==="Female";
+  body=part(player,new THREE.CapsuleGeometry(female?.31:.35,female?.70:.76,8,18),shirt,0,1.08,0,female?1.02:1.08,1,female?.78:.74);
+  // Shoulder and waist shaping gives the two base silhouettes distinct proportions.
+  part(player,new THREE.SphereGeometry(.34,20,16),shirt,0,1.43,0,female?1.12:1.22,.62,.78);
+  part(player,new THREE.CapsuleGeometry(female?.245:.30,.28,6,12),shirt,0,.79,0,female?1.02:1.0,.92,.78);
+  if(female){
+    part(player,new THREE.SphereGeometry(.19,20,16),shirt,-.16,1.17,.235,.9,.78,.72);
+    part(player,new THREE.SphereGeometry(.19,20,16),shirt,.16,1.17,.235,.9,.78,.72);
+  }
   part(player,new THREE.CylinderGeometry(.105,.12,.22,16),skin,0,1.72,0);
   const head=part(player,new THREE.SphereGeometry(.29,32,24),skin,0,2.02,0,.88,1.12,.9);
   // Ears
@@ -60,7 +69,8 @@ function rebuildAvatar(opts=avatarSettings){
   part(player,new THREE.SphereGeometry(.055,16,12),skin,0,1.968,.285,1.05,.58,.72);
   // Lips
   part(player,new THREE.SphereGeometry(.066,16,10),mat(0x713d36),0,1.91,.253,1.15,.34,.45);
-  // Hair styles
+  // Hair styles. The same options are available to either character; Headwrap
+  // is especially useful for traditional and contemporary Lagos fashion.
   if(avatarSettings.style==="Afro"){
     part(player,new THREE.SphereGeometry(.315,24,18),hairMat,0,2.22,-.005,1.08,.82,1.02);
     for(let i=0;i<18;i++){const a=i*Math.PI*2/18;part(player,new THREE.SphereGeometry(.075,10,8),hairMat,Math.cos(a)*.24,2.27+Math.sin(i*2)*.025,Math.sin(a)*.23,.9,.9,.9)}
@@ -111,6 +121,7 @@ document.querySelector('#profileBtn').onclick=()=>{
     <p>Build a Lagosian who looks and dresses the way you choose. These are prototype customizations saved in this browser.</p>
     <div class="creator-grid">
       <label>Display name<input id="nameInput" value="${avatarSettings.name}" maxlength="24"></label>
+      <label>Character<select id="genderInput">${opts(["Male","Female"],avatarSettings.gender||"Male")}</select></label>
       <label>Skin tone<select id="skinInput">${swatches.map(v=>`<option value="${v}" ${v===avatarSettings.skin?"selected":""}>${v}</option>`).join("")}</select></label>
       <label>Hairstyle<select id="hairStyleInput">${opts(["Low cut","Afro","Braids","Locs","Headwrap"],avatarSettings.style)}</select></label>
       <label>Hair colour<select id="hairInput">${["#171513","#24180f","#392317","#5a3925","#171d18"].map(v=>`<option value="${v}" ${v===avatarSettings.hair?"selected":""}>${v}</option>`).join("")}</select></label>
@@ -118,12 +129,12 @@ document.querySelector('#profileBtn').onclick=()=>{
       <label>Trousers<select id="bottomInput">${["#263d35","#20252c","#253b66","#6b6a62","#34243c"].map(v=>`<option value="${v}" ${v===avatarSettings.bottom?"selected":""}>${v}</option>`).join("")}</select></label>
       <label>Shoes<select id="shoesInput">${["#f3f3e9","#171717","#b83b2e","#e1b33e"].map(v=>`<option value="${v}" ${v===avatarSettings.shoes?"selected":""}>${v}</option>`).join("")}</select></label>
     </div>
-    <p class="small-note">Next character update: more face-shape controls, body types, gender presentation, detailed Nigerian outfits and high-quality rigged 3D models.</p>`,
+    <p class="small-note">Choose a male or female base character. This is an early procedural model; detailed realistic human models and full-body animations are a later upgrade.</p>`,
     [['Save character',()=>{
       const val=id=>document.getElementById(id)?.value;
-      const settings={name:val('nameInput')||'New Lagosian',skin:val('skinInput'),style:val('hairStyleInput'),hair:val('hairInput'),top:val('topInput'),bottom:val('bottomInput'),shoes:val('shoesInput')};
+      const settings={name:val('nameInput')||'New Lagosian',gender:val('genderInput')||'Male',skin:val('skinInput'),style:val('hairStyleInput'),hair:val('hairInput'),top:val('topInput'),bottom:val('bottomInput'),shoes:val('shoesInput')};
       rebuildAvatar(settings);localStorage.setItem('til-character',JSON.stringify(settings));
-      document.querySelector('.player-name').textContent=settings.name;toast('Character updated!');
+      document.querySelector('.player-name').textContent=settings.name;toast(settings.gender+' character updated!');
     }],['Cancel',null,true]]
   );
 };
