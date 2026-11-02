@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const mount=document.querySelector('#game');
 const scene=new THREE.Scene();
@@ -32,7 +33,45 @@ for(let z=-65;z<80;z+=17){palm(-12,z);palm(12,z)}
 // Customizable human avatar: varied skin tones, face, hair and clothing.
 const player=new THREE.Group();scene.add(player);
 let body;
-const avatarDefaults={gender:"Male",skin:"#70452f",hair:"#171513",style:"Low cut",top:"#16834a",bottom:"#263d35",shoes:"#f3f3e9",name:"New Lagosian"};
+let avatarMixer=null, avatarActions={}, activeAvatarAction=null, detailedAvatarLoaded=false;
+function playAvatarAnimation(name){
+  if(!avatarMixer) return;
+  const next=avatarActions[name] || avatarActions['Idle-loop'];
+  if(!next || next===activeAvatarAction) return;
+  next.reset().fadeIn(.18).play();
+  if(activeAvatarAction) activeAvatarAction.fadeOut(.18);
+  activeAvatarAction=next;
+}
+function loadDetailedAvatar(){
+  const loader=new GLTFLoader();
+  loader.load('./models/The_Miami_Dealer.glb',gltf=>{
+    const model=gltf.scene;
+    model.updateMatrixWorld(true);
+    const bounds=new THREE.Box3().setFromObject(model);
+    const size=bounds.getSize(new THREE.Vector3());
+    const height=size.y || 2;
+    const scale=2.35/height;
+    model.scale.setScalar(scale);
+    model.position.y=-bounds.min.y*scale;
+    model.traverse(obj=>{if(obj.isMesh){obj.castShadow=true;obj.receiveShadow=true;}});
+    while(player.children.length) player.remove(player.children[0]);
+    player.add(model);
+    avatarMixer=new THREE.AnimationMixer(model);
+    avatarActions={};
+    for(const clip of gltf.animations){
+      const action=avatarMixer.clipAction(clip);
+      if(/-loop$/i.test(clip.name)) action.setLoop(THREE.LoopRepeat,Infinity);
+      else action.setLoop(THREE.LoopOnce,1);
+      action.clampWhenFinished=!/-loop$/i.test(clip.name);
+      avatarActions[clip.name]=action;
+    }
+    detailedAvatarLoaded=true;
+    playAvatarAnimation('Idle-loop');
+    toast('3D character loaded');
+  },undefined,error=>{console.error('Could not load character GLB:',error);toast('Character model could not load — using prototype avatar');});
+}
+
+const avatarDefaults={skin:"#70452f",hair:"#171513",style:"Low cut",top:"#16834a",bottom:"#263d35",shoes:"#f3f3e9",name:"New Lagosian"};
 let avatarSettings={...avatarDefaults};
 function part(parent,geometry,material,x,y,z,sx=1,sy=1,sz=1){
   const mesh=new THREE.Mesh(geometry,material);mesh.position.set(x,y,z);mesh.scale.set(sx,sy,sz);mesh.castShadow=true;mesh.receiveShadow=true;parent.add(mesh);return mesh;
@@ -43,17 +82,8 @@ function rebuildAvatar(opts=avatarSettings){
   const hairMat=new THREE.MeshStandardMaterial({color:avatarSettings.hair,roughness:.92});
   const shirt=mat(avatarSettings.top),trousers=mat(avatarSettings.bottom),shoe=mat(avatarSettings.shoes);
   const joint=mat(avatarSettings.skin);
-  // Gender-aware base proportions. These are still procedural game models,
-  // designed as a bridge until licensed, high-detail rigged human models are added.
-  const female=avatarSettings.gender==="Female";
-  body=part(player,new THREE.CapsuleGeometry(female?.31:.35,female?.70:.76,8,18),shirt,0,1.08,0,female?1.02:1.08,1,female?.78:.74);
-  // Shoulder and waist shaping gives the two base silhouettes distinct proportions.
-  part(player,new THREE.SphereGeometry(.34,20,16),shirt,0,1.43,0,female?1.12:1.22,.62,.78);
-  part(player,new THREE.CapsuleGeometry(female?.245:.30,.28,6,12),shirt,0,.79,0,female?1.02:1.0,.92,.78);
-  if(female){
-    part(player,new THREE.SphereGeometry(.19,20,16),shirt,-.16,1.17,.235,.9,.78,.72);
-    part(player,new THREE.SphereGeometry(.19,20,16),shirt,.16,1.17,.235,.9,.78,.72);
-  }
+  // Natural human proportions: torso, neck, shoulders, arms, hands, legs and shoes.
+  body=part(player,new THREE.CapsuleGeometry(.34,.72,7,14),shirt,0,1.08,0,1.05,1,0.72);
   part(player,new THREE.CylinderGeometry(.105,.12,.22,16),skin,0,1.72,0);
   const head=part(player,new THREE.SphereGeometry(.29,32,24),skin,0,2.02,0,.88,1.12,.9);
   // Ears
@@ -69,8 +99,7 @@ function rebuildAvatar(opts=avatarSettings){
   part(player,new THREE.SphereGeometry(.055,16,12),skin,0,1.968,.285,1.05,.58,.72);
   // Lips
   part(player,new THREE.SphereGeometry(.066,16,10),mat(0x713d36),0,1.91,.253,1.15,.34,.45);
-  // Hair styles. The same options are available to either character; Headwrap
-  // is especially useful for traditional and contemporary Lagos fashion.
+  // Hair styles
   if(avatarSettings.style==="Afro"){
     part(player,new THREE.SphereGeometry(.315,24,18),hairMat,0,2.22,-.005,1.08,.82,1.02);
     for(let i=0;i<18;i++){const a=i*Math.PI*2/18;part(player,new THREE.SphereGeometry(.075,10,8),hairMat,Math.cos(a)*.24,2.27+Math.sin(i*2)*.025,Math.sin(a)*.23,.9,.9,.9)}
@@ -99,6 +128,7 @@ function rebuildAvatar(opts=avatarSettings){
 rebuildAvatar();
 try{const saved=JSON.parse(localStorage.getItem('til-character')||'null');if(saved){rebuildAvatar(saved);document.querySelector('.player-name').textContent=saved.name||'New Lagosian'}}catch(e){}
 player.position.set(0,0,5);
+loadDetailedAvatar();
 const rainGroup=new THREE.Group();scene.add(rainGroup);const drops=[];
 for(let i=0;i<500;i++){const d=new THREE.Mesh(new THREE.BoxGeometry(.025,.45,.025),new THREE.MeshBasicMaterial({color:0xd9efff,transparent:true,opacity:.55}));d.position.set((Math.random()-.5)*70,Math.random()*35,(Math.random()-.5)*70);rainGroup.add(d);drops.push(d)}
 rainGroup.visible=false;
@@ -115,26 +145,15 @@ document.querySelector('#cameraBtn').onclick=()=>{cameraMode=(cameraMode+1)%3;do
 document.querySelector('#weatherBtn').onclick=()=>{weather=weather==='Clear'?'Rain':'Clear';rainGroup.visible=weather==='Rain';document.querySelector('#weatherLabel').textContent=weather==='Rain'?'🌧 Rain':'☀ Clear';toast('Weather changed to '+weather.toLowerCase())};
 document.querySelector('#activityBtn').onclick=()=>modal('What would you like to do?','Choose an activity in this early city prototype. More activities will arrive as the world expands.',[['Explore the street',()=>toast('Enjoy exploring Lagos!')],['Close',null,true]]);
 document.querySelector('#profileBtn').onclick=()=>{
-  const swatches=["#4b2d20","#70452f","#8a563b","#a86f4e","#c58a65"];
-  const opts=(values,current)=>values.map(v=>`<option ${v===current?"selected":""}>${v}</option>`).join("");
-  modal('Create your character',`
-    <p>Build a Lagosian who looks and dresses the way you choose. These are prototype customizations saved in this browser.</p>
-    <div class="creator-grid">
-      <label>Display name<input id="nameInput" value="${avatarSettings.name}" maxlength="24"></label>
-      <label>Character<select id="genderInput">${opts(["Male","Female"],avatarSettings.gender||"Male")}</select></label>
-      <label>Skin tone<select id="skinInput">${swatches.map(v=>`<option value="${v}" ${v===avatarSettings.skin?"selected":""}>${v}</option>`).join("")}</select></label>
-      <label>Hairstyle<select id="hairStyleInput">${opts(["Low cut","Afro","Braids","Locs","Headwrap"],avatarSettings.style)}</select></label>
-      <label>Hair colour<select id="hairInput">${["#171513","#24180f","#392317","#5a3925","#171d18"].map(v=>`<option value="${v}" ${v===avatarSettings.hair?"selected":""}>${v}</option>`).join("")}</select></label>
-      <label>Top / shirt<select id="topInput">${["#16834a","#f2f4ec","#172c55","#a83232","#d18b22","#5b477c"].map(v=>`<option value="${v}" ${v===avatarSettings.top?"selected":""}>${v}</option>`).join("")}</select></label>
-      <label>Trousers<select id="bottomInput">${["#263d35","#20252c","#253b66","#6b6a62","#34243c"].map(v=>`<option value="${v}" ${v===avatarSettings.bottom?"selected":""}>${v}</option>`).join("")}</select></label>
-      <label>Shoes<select id="shoesInput">${["#f3f3e9","#171717","#b83b2e","#e1b33e"].map(v=>`<option value="${v}" ${v===avatarSettings.shoes?"selected":""}>${v}</option>`).join("")}</select></label>
-    </div>
-    <p class="small-note">Choose a male or female base character. This is an early procedural model; detailed realistic human models and full-body animations are a later upgrade.</p>`,
-    [['Save character',()=>{
-      const val=id=>document.getElementById(id)?.value;
-      const settings={name:val('nameInput')||'New Lagosian',gender:val('genderInput')||'Male',skin:val('skinInput'),style:val('hairStyleInput'),hair:val('hairInput'),top:val('topInput'),bottom:val('bottomInput'),shoes:val('shoesInput')};
-      rebuildAvatar(settings);localStorage.setItem('til-character',JSON.stringify(settings));
-      document.querySelector('.player-name').textContent=settings.name;toast(settings.gender+' character updated!');
+  modal('Your character',`
+    <p>Your imported 3D character is now being used in the city. The model includes its own appearance, rig and animation library.</p>
+    <div class="creator-grid"><label>Display name<input id="nameInput" value="${avatarSettings.name}" maxlength="24"></label></div>
+    <p class="small-note">Appearance, clothing and gender options will be connected to compatible character models in a later update. Your display name is saved on this device.</p>`,
+    [['Save name',()=>{
+      const name=document.getElementById('nameInput')?.value.trim()||'New Lagosian';
+      avatarSettings={...avatarSettings,name};
+      localStorage.setItem('til-character',JSON.stringify(avatarSettings));
+      document.querySelector('.player-name').textContent=name;toast('Character name saved!');
     }],['Cancel',null,true]]
   );
 };
@@ -142,7 +161,7 @@ document.querySelector('#menuBtn').onclick=()=>modal('THIS IS LAGOS','<p>Welcome
 window.addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;if(e.key.toLowerCase()==='c')document.querySelector('#cameraBtn').click()});window.addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
 let pointer=null;renderer.domElement.addEventListener('pointerdown',e=>{pointer={x:e.clientX,y:e.clientY,id:e.pointerId};renderer.domElement.setPointerCapture(e.pointerId)});renderer.domElement.addEventListener('pointermove',e=>{if(pointer&&pointer.id===e.pointerId){lookAngle+=(e.clientX-pointer.x)*.005;lookPitch=Math.max(-.35,Math.min(.7,lookPitch+(e.clientY-pointer.y)*.003));pointer.x=e.clientX;pointer.y=e.clientY}});renderer.domElement.addEventListener('pointerup',()=>pointer=null);renderer.domElement.addEventListener('pointercancel',()=>pointer=null);
 const touchDirs={};document.querySelectorAll('.mobile-pad button').forEach(b=>{const d=b.dataset.dir;b.addEventListener('pointerdown',e=>{e.preventDefault();touchDirs[d]=true});['pointerup','pointerleave','pointercancel'].forEach(ev=>b.addEventListener(ev,()=>touchDirs[d]=false))});
-function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);worldMinutes=(worldMinutes+dt*daySpeed)%1440;let h=Math.floor(worldMinutes/60),m=Math.floor(worldMinutes%60);document.querySelector('#clock').textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');setDay();let forward=(keys.w||keys.arrowup||touchDirs.up?1:0)-(keys.s||keys.arrowdown||touchDirs.down?1:0);let side=(keys.d||keys.arrowright||touchDirs.right?1:0)-(keys.a||keys.arrowleft||touchDirs.left?1:0);moving=!!(forward||side);if(moving){const speed=dt*7;const dx=(Math.sin(lookAngle)*forward+Math.cos(lookAngle)*side)*speed;const dz=(Math.cos(lookAngle)*forward-Math.sin(lookAngle)*side)*speed;player.position.x+=dx;player.position.z+=dz;player.rotation.y=Math.atan2(dx,dz);player.position.x=Math.max(-8,Math.min(8,player.position.x));player.position.z=Math.max(-120,Math.min(120,player.position.z));body.position.y=1.05+Math.sin(performance.now()*.012)*.045}if(weather==='Rain'){for(const d of drops){d.position.y-=dt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*70;d.position.z=player.position.z+(Math.random()-.5)*70}}}updateCamera();renderer.render(scene,camera)}
+function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);worldMinutes=(worldMinutes+dt*daySpeed)%1440;let h=Math.floor(worldMinutes/60),m=Math.floor(worldMinutes%60);document.querySelector('#clock').textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');setDay();let forward=(keys.w||keys.arrowup||touchDirs.up?1:0)-(keys.s||keys.arrowdown||touchDirs.down?1:0);let side=(keys.d||keys.arrowright||touchDirs.right?1:0)-(keys.a||keys.arrowleft||touchDirs.left?1:0);moving=!!(forward||side);if(moving){const speed=dt*7;const dx=(Math.sin(lookAngle)*forward+Math.cos(lookAngle)*side)*speed;const dz=(Math.cos(lookAngle)*forward-Math.sin(lookAngle)*side)*speed;player.position.x+=dx;player.position.z+=dz;player.rotation.y=Math.atan2(dx,dz);player.position.x=Math.max(-8,Math.min(8,player.position.x));player.position.z=Math.max(-120,Math.min(120,player.position.z));if(!detailedAvatarLoaded&&body)body.position.y=1.05+Math.sin(performance.now()*.012)*.045;playAvatarAnimation('Walk-loop')}else{playAvatarAnimation('Idle-loop')}if(avatarMixer)avatarMixer.update(dt);if(weather==='Rain'){for(const d of drops){d.position.y-=dt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*70;d.position.z=player.position.z+(Math.random()-.5)*70}}}updateCamera();renderer.render(scene,camera)}
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
 toast('Welcome to This Is Lagos — explore the city');

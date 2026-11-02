@@ -4,7 +4,3 @@
 .creator-grid input,.creator-grid select{width:100%;padding:10px;border:1px solid #d8e6da;border-radius:9px;background:#fff;color:#234431;font:inherit;font-size:12px}
 .small-note{font-size:10px;color:#7b8d80;margin-top:14px}
 @media(max-width:480px){.creator-grid{grid-template-columns:1fr 1fr}.modal{max-height:85vh;overflow:auto}}
-
-/* v0.3 character selection */
-.creator-grid label{line-height:1.35}
-.creator-grid select:focus,.creator-grid input:focus{outline:2px solid #13834455;border-color:#138344}
