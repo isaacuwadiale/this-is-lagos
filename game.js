@@ -33,44 +33,6 @@ for(let z=-65;z<80;z+=17){palm(-12,z);palm(12,z)}
 // Customizable human avatar: varied skin tones, face, hair and clothing.
 const player=new THREE.Group();scene.add(player);
 let body;
-let avatarMixer=null, avatarActions={}, activeAvatarAction=null, detailedAvatarLoaded=false;
-function playAvatarAnimation(name){
-  if(!avatarMixer) return;
-  const next=avatarActions[name] || avatarActions['Idle-loop'];
-  if(!next || next===activeAvatarAction) return;
-  next.reset().fadeIn(.18).play();
-  if(activeAvatarAction) activeAvatarAction.fadeOut(.18);
-  activeAvatarAction=next;
-}
-function loadDetailedAvatar(){
-  const loader=new GLTFLoader();
-  loader.load('./models/The_Miami_Dealer.glb',gltf=>{
-    const model=gltf.scene;
-    model.updateMatrixWorld(true);
-    const bounds=new THREE.Box3().setFromObject(model);
-    const size=bounds.getSize(new THREE.Vector3());
-    const height=size.y || 2;
-    const scale=2.35/height;
-    model.scale.setScalar(scale);
-    model.position.y=-bounds.min.y*scale;
-    model.traverse(obj=>{if(obj.isMesh){obj.castShadow=true;obj.receiveShadow=true;}});
-    while(player.children.length) player.remove(player.children[0]);
-    player.add(model);
-    avatarMixer=new THREE.AnimationMixer(model);
-    avatarActions={};
-    for(const clip of gltf.animations){
-      const action=avatarMixer.clipAction(clip);
-      if(/-loop$/i.test(clip.name)) action.setLoop(THREE.LoopRepeat,Infinity);
-      else action.setLoop(THREE.LoopOnce,1);
-      action.clampWhenFinished=!/-loop$/i.test(clip.name);
-      avatarActions[clip.name]=action;
-    }
-    detailedAvatarLoaded=true;
-    playAvatarAnimation('Idle-loop');
-    toast('3D character loaded');
-  },undefined,error=>{console.error('Could not load character GLB:',error);toast('Character model could not load — using prototype avatar');});
-}
-
 const avatarDefaults={skin:"#70452f",hair:"#171513",style:"Low cut",top:"#16834a",bottom:"#263d35",shoes:"#f3f3e9",name:"New Lagosian"};
 let avatarSettings={...avatarDefaults};
 function part(parent,geometry,material,x,y,z,sx=1,sy=1,sz=1){
@@ -125,10 +87,24 @@ function rebuildAvatar(opts=avatarSettings){
     part(player,new THREE.BoxGeometry(.22,.13,.38),shoe,side*.16,.105,-.075);
   }
 }
-rebuildAvatar();
-try{const saved=JSON.parse(localStorage.getItem('til-character')||'null');if(saved){rebuildAvatar(saved);document.querySelector('.player-name').textContent=saved.name||'New Lagosian'}}catch(e){}
+let avatarReady=false, avatarMixer=null, avatarModel=null, avatarActions={}, activeAvatarAction=null;
+player.visible=false; // Avoid showing the old placeholder while the detailed character loads.
+try{const saved=JSON.parse(localStorage.getItem('til-character')||'null');if(saved){avatarSettings={...avatarDefaults,...saved};document.querySelector('.player-name').textContent=saved.name||'New Lagosian'}}catch(e){}
 player.position.set(0,0,5);
-loadDetailedAvatar();
+const loadingBadge=document.createElement('div');loadingBadge.id='modelLoading';loadingBadge.textContent='Loading your character…';document.body.appendChild(loadingBadge);
+const gltfLoader=new GLTFLoader();
+gltfLoader.load('./models/The_Miami_Dealer.glb',gltf=>{
+  avatarModel=gltf.scene;avatarModel.position.set(0,0,0);avatarModel.scale.setScalar(1);
+  const box=new THREE.Box3().setFromObject(avatarModel);const size=box.getSize(new THREE.Vector3());
+  const height=size.y||2.3;avatarModel.scale.setScalar(2.35/height);
+  const scaledBox=new THREE.Box3().setFromObject(avatarModel);avatarModel.position.y-=scaledBox.min.y;
+  avatarModel.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true}});
+  player.add(avatarModel);player.visible=true;avatarReady=true;
+  if(gltf.animations?.length){avatarMixer=new THREE.AnimationMixer(avatarModel);for(const clip of gltf.animations)avatarActions[clip.name.toLowerCase()]=avatarMixer.clipAction(clip);const idle=Object.keys(avatarActions).find(n=>n.includes('idle'))||Object.keys(avatarActions)[0];activeAvatarAction=avatarActions[idle];activeAvatarAction?.play();}
+  loadingBadge.remove();toast('Character loaded');
+},undefined,error=>{
+  console.warn('Detailed character could not load:',error);rebuildAvatar(avatarSettings);player.visible=true;avatarReady=true;loadingBadge.textContent='Using local character preview';setTimeout(()=>loadingBadge.remove(),2600);
+});
 const rainGroup=new THREE.Group();scene.add(rainGroup);const drops=[];
 for(let i=0;i<500;i++){const d=new THREE.Mesh(new THREE.BoxGeometry(.025,.45,.025),new THREE.MeshBasicMaterial({color:0xd9efff,transparent:true,opacity:.55}));d.position.set((Math.random()-.5)*70,Math.random()*35,(Math.random()-.5)*70);rainGroup.add(d);drops.push(d)}
 rainGroup.visible=false;
@@ -143,25 +119,71 @@ function closeModal(){document.querySelector('#modalBackdrop').classList.add('hi
 document.querySelector('#closeModal').onclick=closeModal;
 document.querySelector('#cameraBtn').onclick=()=>{cameraMode=(cameraMode+1)%3;document.querySelector('#cameraBtn small').textContent=modes[cameraMode];toast('Camera: '+modes[cameraMode].toLowerCase());updateCamera()};
 document.querySelector('#weatherBtn').onclick=()=>{weather=weather==='Clear'?'Rain':'Clear';rainGroup.visible=weather==='Rain';document.querySelector('#weatherLabel').textContent=weather==='Rain'?'🌧 Rain':'☀ Clear';toast('Weather changed to '+weather.toLowerCase())};
-document.querySelector('#activityBtn').onclick=()=>modal('What would you like to do?','Choose an activity in this early city prototype. More activities will arrive as the world expands.',[['Explore the street',()=>toast('Enjoy exploring Lagos!')],['Close',null,true]]);
+document.querySelector('#activityBtn').onclick=()=>{document.querySelector('#activityPanel').classList.toggle('panel-open')};
+document.querySelector('#feedClose').onclick=()=>document.querySelector('#activityPanel').classList.remove('panel-open');
+document.querySelector('#feedCreate').onclick=()=>openCreateActivity();
+document.querySelectorAll('[data-feed-action]').forEach(b=>b.addEventListener('click',()=>handleFeedAction(b.dataset.feedAction)));
+document.querySelector('#transportBtn').onclick=()=>openTransport();
+document.querySelector('#dealerBtn').onclick=()=>openDealer();
+document.querySelector('#vehiclesBtn').onclick=()=>openGarage();
+
+const demoActivities=[
+ {id:1,title:'12 vs 12 Football Match',place:'Lagos Football Arena',kind:'Football',joined:15,total:24,fee:'Free',status:'Recruiting'},
+ {id:2,title:'Tennis Singles Challenge',place:'Victoria Island Tennis Club',kind:'Tennis',joined:1,total:2,fee:'Free',status:'Recruiting'},
+ {id:3,title:'Lagos City Meetup',place:'Tafawa Balewa Square',kind:'Meetup',joined:8,total:20,fee:'Free',status:'Recruiting'}
+];
+function handleFeedAction(action){
+ if(action==='competitions')openCompetitions();
+ else if(action==='transport')openTransport();
+ else if(action==='dealer')openDealer();
+ else if(action==='garage')openGarage();
+ else if(action==='police')toast('Police and theft reports are planned; online police players are not connected yet.');
+}
+function openCompetitions(){
+ const rows=demoActivities.map(a=>`<div class="activity-row"><b>${a.title}</b><span>${a.place}</span><span>${a.joined}/${a.total} players · ${a.fee}</span><small>${a.status}</small><button class="panel-button" data-join="${a.id}">Join activity</button></div>`).join('');
+ modal('Competitions at Lagos venues',`<p>Demo recruitment board. Players can discover a competition here or visit its venue in the city.</p>${rows}<p class="small-note">Joining and readiness are simulated on this device. Live invitations to online players need the multiplayer server.</p>`,[['Close',null,true]]);
+ document.querySelectorAll('[data-join]').forEach(b=>b.onclick=()=>{const a=demoActivities.find(x=>x.id===Number(b.dataset.join));if(a.joined<a.total){a.joined++;toast('Joined: '+a.title);openCompetitions()}else toast('This activity is full')});
+}
+function openCreateActivity(){
+ modal('Create a venue competition',`<p>Choose a venue and recruit players. Real-money entry and prize pools remain disabled until the required legal and payment approvals are in place.</p><div class="creator-grid"><label>Activity<input id="newActivity" value="Football match"></label><label>Venue<select id="newVenue"><option>Lagos Football Arena</option><option>Victoria Island Tennis Club</option><option>Lagos Racing Circuit</option><option>Lagos Marina</option></select></label><label>Players needed<input id="newCapacity" type="number" min="2" max="44" value="24"></label><label>Entry type<select id="newFee"><option>Free</option><option disabled>Real-money (not enabled)</option></select></label></div><p class="small-note">The creator sets the rules, capacity, venue and schedule. When full, all participants must confirm readiness before the match begins.</p>`,[['Post activity',()=>{const title=document.querySelector('#newActivity')?.value||'New activity';toast('Local demo activity created: '+title)}],['Cancel',null,true]]);
+}
+function openTransport(){
+ modal('Get to the venue',`<p>Choose transport for a demo fare estimate. Fare depends on distance and vehicle type.</p><div class="creator-grid"><label>Destination<select id="tripPlace"><option value="2">Nearby venue · 2 km</option><option value="5">Mid-distance venue · 5 km</option><option value="10">Far venue · 10 km</option><option value="15">Distant venue · 15 km</option></select></label><label>Transport<select id="tripType"><option value="taxi">Taxi</option><option value="danfo">Danfo</option><option value="bike">Okada / bike</option><option value="boat">Boat</option></select></label></div><div id="fareQuote" class="fare-quote">Estimated fare: ₦—</div><p class="small-note">Demo estimate only. No wallet is charged and no real driver is connected.</p>`,[['Close',null,true]]);
+ const calc=()=>{const km=Number(document.querySelector('#tripPlace')?.value||2),type=document.querySelector('#tripType')?.value||'taxi';const rate={taxi:180,danfo:55,bike:110,boat:220}[type];document.querySelector('#fareQuote').textContent='Estimated fare: ₦'+Math.max(100,Math.round(km*rate/50)*50).toLocaleString('en-NG')+' · '+km+' km'};
+ document.querySelector('#tripPlace').onchange=calc;document.querySelector('#tripType').onchange=calc;calc();
+}
+const demoStock=[['City compact car','Car','₦8,500,000'],['Family SUV','Car','₦18,000,000'],['Commercial danfo','Bus','₦12,000,000'],['Okada motorcycle','Bike','₦1,200,000'],['Passenger speedboat','Boat','₦25,000,000']];
+function openDealer(){const items=demoStock.map((v,i)=>`<div class="activity-row"><b>${v[0]}</b><span>${v[1]} · ${v[2]}</span><button class="panel-button" data-vehicle="${i}">View purchase</button></div>`).join('');modal('Official vehicle dealership',`<p>Vehicles and prices are set by the game operator. A player may buy for themselves or choose another player as recipient.</p>${items}<p class="small-note">Catalogue prices are illustrative placeholders. Purchases and real-money payment are not enabled in this prototype.</p>`,[['Close',null,true]]);document.querySelectorAll('[data-vehicle]').forEach(b=>b.onclick=()=>{const v=demoStock[Number(b.dataset.vehicle)];modal('Vehicle purchase preview',`<p><b>${v[0]}</b></p><p>Listed demo price: ${v[2]}</p><label class="recipient-label">Recipient player<input id="vehicleRecipient" placeholder="Enter player name" value="Your character"></label><p class="small-note">No payment will be taken in this preview.</p>`,[['Confirm preview',()=>toast('Purchase flow previewed; no charge made.')],['Back',()=>openDealer(),true]])})}
+function openGarage(){modal('Vehicle garage & security',`<p><b>Your demo garage</b></p><p>No vehicles are registered to this local preview yet.</p><p>Each owned vehicle will have a unique unlock code. Owners must physically touch the vehicle to lock or unlock it; remote locking is not available.</p><p>Unlocked vehicles or vehicles with the owner inside can be targeted for theft. A successful theft may trigger an owner report and a player-police pursuit.</p><p class="small-note">Theft, arrests, fixed penalties and negative real-money balances are design concepts only. They are not active or connected to a real wallet.</p>`,[['Close',null,true]])}
+
 document.querySelector('#profileBtn').onclick=()=>{
-  modal('Your character',`
-    <p>Your imported 3D character is now being used in the city. The model includes its own appearance, rig and animation library.</p>
-    <div class="creator-grid"><label>Display name<input id="nameInput" value="${avatarSettings.name}" maxlength="24"></label></div>
-    <p class="small-note">Appearance, clothing and gender options will be connected to compatible character models in a later update. Your display name is saved on this device.</p>`,
-    [['Save name',()=>{
-      const name=document.getElementById('nameInput')?.value.trim()||'New Lagosian';
-      avatarSettings={...avatarSettings,name};
-      localStorage.setItem('til-character',JSON.stringify(avatarSettings));
-      document.querySelector('.player-name').textContent=name;toast('Character name saved!');
+  const swatches=["#4b2d20","#70452f","#8a563b","#a86f4e","#c58a65"];
+  const opts=(values,current)=>values.map(v=>`<option ${v===current?"selected":""}>${v}</option>`).join("");
+  modal('Create your character',`
+    <p>Build a Lagosian who looks and dresses the way you choose. These are prototype customizations saved in this browser.</p>
+    <div class="creator-grid">
+      <label>Display name<input id="nameInput" value="${avatarSettings.name}" maxlength="24"></label>
+      <label>Skin tone<select id="skinInput">${swatches.map(v=>`<option value="${v}" ${v===avatarSettings.skin?"selected":""}>${v}</option>`).join("")}</select></label>
+      <label>Hairstyle<select id="hairStyleInput">${opts(["Low cut","Afro","Braids","Locs","Headwrap"],avatarSettings.style)}</select></label>
+      <label>Hair colour<select id="hairInput">${["#171513","#24180f","#392317","#5a3925","#171d18"].map(v=>`<option value="${v}" ${v===avatarSettings.hair?"selected":""}>${v}</option>`).join("")}</select></label>
+      <label>Top / shirt<select id="topInput">${["#16834a","#f2f4ec","#172c55","#a83232","#d18b22","#5b477c"].map(v=>`<option value="${v}" ${v===avatarSettings.top?"selected":""}>${v}</option>`).join("")}</select></label>
+      <label>Trousers<select id="bottomInput">${["#263d35","#20252c","#253b66","#6b6a62","#34243c"].map(v=>`<option value="${v}" ${v===avatarSettings.bottom?"selected":""}>${v}</option>`).join("")}</select></label>
+      <label>Shoes<select id="shoesInput">${["#f3f3e9","#171717","#b83b2e","#e1b33e"].map(v=>`<option value="${v}" ${v===avatarSettings.shoes?"selected":""}>${v}</option>`).join("")}</select></label>
+    </div>
+    <p class="small-note">Next character update: more face-shape controls, body types, gender presentation, detailed Nigerian outfits and high-quality rigged 3D models.</p>`,
+    [['Save character',()=>{
+      const val=id=>document.getElementById(id)?.value;
+      const settings={name:val('nameInput')||'New Lagosian',skin:val('skinInput'),style:val('hairStyleInput'),hair:val('hairInput'),top:val('topInput'),bottom:val('bottomInput'),shoes:val('shoesInput')};
+      avatarSettings={...settings};if(!avatarModel)rebuildAvatar(settings);localStorage.setItem('til-character',JSON.stringify(settings));
+      document.querySelector('.player-name').textContent=settings.name;toast(avatarModel?'Profile saved. Detailed model appearance controls are coming next.':'Character updated!');
     }],['Cancel',null,true]]
   );
 };
-document.querySelector('#menuBtn').onclick=()=>modal('THIS IS LAGOS','<p>Welcome to the Lagos city prototype.</p><p><b>Prototype controls</b><br>WASD / arrow keys: move<br>Drag: look around<br>C: switch camera<br>Weather button: clear / rain</p><p>This prototype currently runs locally in your browser. Online accounts, multiplayer, trading and real-money payments are not connected yet.</p>',[['Continue',null]]);
+document.querySelector('#menuBtn').onclick=()=>modal('THIS IS LAGOS','<p>Welcome to the Lagos city prototype.</p><p><b>Prototype controls</b><br>WASD / arrow keys: move<br>Drag: look around<br>C: switch camera<br>Weather button: clear / rain</p><p>This v0.5 build is a local interface prototype. Online accounts, live multiplayer, real-money wallet payments, police services and vehicle ownership records still require a secure online backend.</p>',[['Continue',null]]);
 window.addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;if(e.key.toLowerCase()==='c')document.querySelector('#cameraBtn').click()});window.addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
 let pointer=null;renderer.domElement.addEventListener('pointerdown',e=>{pointer={x:e.clientX,y:e.clientY,id:e.pointerId};renderer.domElement.setPointerCapture(e.pointerId)});renderer.domElement.addEventListener('pointermove',e=>{if(pointer&&pointer.id===e.pointerId){lookAngle+=(e.clientX-pointer.x)*.005;lookPitch=Math.max(-.35,Math.min(.7,lookPitch+(e.clientY-pointer.y)*.003));pointer.x=e.clientX;pointer.y=e.clientY}});renderer.domElement.addEventListener('pointerup',()=>pointer=null);renderer.domElement.addEventListener('pointercancel',()=>pointer=null);
 const touchDirs={};document.querySelectorAll('.mobile-pad button').forEach(b=>{const d=b.dataset.dir;b.addEventListener('pointerdown',e=>{e.preventDefault();touchDirs[d]=true});['pointerup','pointerleave','pointercancel'].forEach(ev=>b.addEventListener(ev,()=>touchDirs[d]=false))});
-function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);worldMinutes=(worldMinutes+dt*daySpeed)%1440;let h=Math.floor(worldMinutes/60),m=Math.floor(worldMinutes%60);document.querySelector('#clock').textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');setDay();let forward=(keys.w||keys.arrowup||touchDirs.up?1:0)-(keys.s||keys.arrowdown||touchDirs.down?1:0);let side=(keys.d||keys.arrowright||touchDirs.right?1:0)-(keys.a||keys.arrowleft||touchDirs.left?1:0);moving=!!(forward||side);if(moving){const speed=dt*7;const dx=(Math.sin(lookAngle)*forward+Math.cos(lookAngle)*side)*speed;const dz=(Math.cos(lookAngle)*forward-Math.sin(lookAngle)*side)*speed;player.position.x+=dx;player.position.z+=dz;player.rotation.y=Math.atan2(dx,dz);player.position.x=Math.max(-8,Math.min(8,player.position.x));player.position.z=Math.max(-120,Math.min(120,player.position.z));if(!detailedAvatarLoaded&&body)body.position.y=1.05+Math.sin(performance.now()*.012)*.045;playAvatarAnimation('Walk-loop')}else{playAvatarAnimation('Idle-loop')}if(avatarMixer)avatarMixer.update(dt);if(weather==='Rain'){for(const d of drops){d.position.y-=dt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*70;d.position.z=player.position.z+(Math.random()-.5)*70}}}updateCamera();renderer.render(scene,camera)}
+function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);worldMinutes=(worldMinutes+dt*daySpeed)%1440;let h=Math.floor(worldMinutes/60),m=Math.floor(worldMinutes%60);document.querySelector('#clock').textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');setDay();let forward=(keys.w||keys.arrowup||touchDirs.up?1:0)-(keys.s||keys.arrowdown||touchDirs.down?1:0);let side=(keys.d||keys.arrowright||touchDirs.right?1:0)-(keys.a||keys.arrowleft||touchDirs.left?1:0);moving=!!(forward||side);if(avatarMixer){const desired=Object.keys(avatarActions).find(n=>moving?n.includes('walk-loop'):n.includes('idle'))||Object.keys(avatarActions)[0];const next=avatarActions[desired];if(next&&next!==activeAvatarAction){next.reset().fadeIn(.2).play();activeAvatarAction?.fadeOut(.2);activeAvatarAction=next;}avatarMixer.update(dt)}if(moving){const speed=dt*7;const dx=(Math.sin(lookAngle)*forward+Math.cos(lookAngle)*side)*speed;const dz=(Math.cos(lookAngle)*forward-Math.sin(lookAngle)*side)*speed;player.position.x+=dx;player.position.z+=dz;player.rotation.y=Math.atan2(dx,dz);player.position.x=Math.max(-8,Math.min(8,player.position.x));player.position.z=Math.max(-120,Math.min(120,player.position.z));if(body)body.position.y=1.05+Math.sin(performance.now()*.012)*.045}if(weather==='Rain'){for(const d of drops){d.position.y-=dt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*70;d.position.z=player.position.z+(Math.random()-.5)*70}}}updateCamera();renderer.render(scene,camera)}
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
 toast('Welcome to This Is Lagos — explore the city');

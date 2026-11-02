@@ -30,8 +30,20 @@
 <div class="right-controls">
   <button class="control" id="cameraBtn"><span>◉</span><small>THIRD PERSON</small></button>
   <button class="control" id="weatherBtn"><span>☀</span><small>WEATHER</small></button>
-  <button class="control" id="activityBtn"><span>＋</span><small>ACTIVITIES</small></button>
+  <button class="control" id="activityBtn"><span>＋</span><small>ACTIVITY FEED</small></button>
+  <button class="control" id="transportBtn"><span>🚕</span><small>TRANSPORT</small></button>
+  <button class="control" id="dealerBtn"><span>🚘</span><small>DEALERS</small></button>
+  <button class="control" id="vehiclesBtn"><span>🔑</span><small>MY VEHICLES</small></button>
 </div>
+<aside class="activity-panel glass" id="activityPanel" aria-label="Lagos Activity Feed">
+  <div class="feed-heading"><div><div class="eyebrow">AROUND THE CITY</div><strong>Lagos Activity Feed</strong></div><button id="feedClose" class="feed-close" aria-label="Close activity feed">×</button></div>
+  <div class="feed-tabs"><span class="feed-live"><i></i> LOCAL PREVIEW</span><button id="feedCreate">＋ Create</button></div>
+  <div class="feed-card"><b>12 vs 12 Football Match</b><span>Lagos Football Arena · 15/24 players</span><small>Recruiting · Free</small><button data-feed-action="competitions">View competitions</button></div>
+  <div class="feed-card"><b>Tennis Singles Challenge</b><span>Victoria Island Tennis Club · 1/2 players</span><small>Recruiting · Free</small><button data-feed-action="competitions">Find a match</button></div>
+  <div class="feed-card"><b>Transport to activities</b><span>Taxi · Danfo · Bike · Boat</span><small>Distance-based fare estimate</small><button data-feed-action="transport">Get transport</button></div>
+  <div class="feed-links"><button data-feed-action="competitions">Venues & competitions</button><button data-feed-action="dealer">Vehicle dealership</button><button data-feed-action="garage">Garage & security</button><button data-feed-action="police">Police reports</button></div>
+  <p class="feed-footnote">Preview content on this device. Live posts from online players are not connected yet.</p>
+</aside>
 <div class="bottom-hint"><span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span> Move <i>·</i> Drag to look <i>·</i> <span class="key">C</span> Change camera</div>
 <div class="mobile-pad" id="mobilePad"><button data-dir="up">▲</button><div><button data-dir="left">◀</button><button data-dir="down">▼</button><button data-dir="right">▶</button></div></div>
 <div class="modal-backdrop hidden" id="modalBackdrop">
