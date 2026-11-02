@@ -29,12 +29,65 @@ for(let i=0;i<34;i++){let x=(Math.random()-.5)*125,z=-100+Math.random()*180;if(M
 // palm trees
 function palm(x,z){const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.16,.28,5,7),mat(0x80613d));trunk.position.set(x,2.5,z);trunk.castShadow=true;scene.add(trunk);for(let i=0;i<7;i++){let a=i*Math.PI*2/7;const leaf=new THREE.Mesh(new THREE.ConeGeometry(.34,4,5),mat(0x237a43));leaf.position.set(x+Math.cos(a)*1.2,5.1,z+Math.sin(a)*1.2);leaf.rotation.z=-Math.cos(a)*.9;leaf.rotation.x=Math.sin(a)*.9;scene.add(leaf)}}
 for(let z=-65;z<80;z+=17){palm(-12,z);palm(12,z)}
-// simple player avatar
+// Customizable human avatar: varied skin tones, face, hair and clothing.
 const player=new THREE.Group();scene.add(player);
-const body=new THREE.Mesh(new THREE.CapsuleGeometry(.42,.85,4,8),green);body.position.y=1.05;body.castShadow=true;player.add(body);
-const head=new THREE.Mesh(new THREE.SphereGeometry(.29,16,12),mat(0x8b5a3c));head.position.y=1.95;head.castShadow=true;player.add(head);
-const hair=new THREE.Mesh(new THREE.SphereGeometry(.3,16,8,0,Math.PI*2,0,Math.PI/2),dark);hair.position.y=2.08;player.add(hair);
-const legMat=mat(0x243b32);for(let x of [-.18,.18]){const leg=new THREE.Mesh(new THREE.CapsuleGeometry(.13,.55,3,7),legMat);leg.position.set(x,.38,0);player.add(leg)}
+let body;
+const avatarDefaults={skin:"#70452f",hair:"#171513",style:"Low cut",top:"#16834a",bottom:"#263d35",shoes:"#f3f3e9",name:"New Lagosian"};
+let avatarSettings={...avatarDefaults};
+function part(parent,geometry,material,x,y,z,sx=1,sy=1,sz=1){
+  const mesh=new THREE.Mesh(geometry,material);mesh.position.set(x,y,z);mesh.scale.set(sx,sy,sz);mesh.castShadow=true;mesh.receiveShadow=true;parent.add(mesh);return mesh;
+}
+function rebuildAvatar(opts=avatarSettings){
+  avatarSettings={...opts};while(player.children.length)player.remove(player.children[0]);
+  const skin=new THREE.MeshStandardMaterial({color:avatarSettings.skin,roughness:.72});
+  const hairMat=new THREE.MeshStandardMaterial({color:avatarSettings.hair,roughness:.92});
+  const shirt=mat(avatarSettings.top),trousers=mat(avatarSettings.bottom),shoe=mat(avatarSettings.shoes);
+  const joint=mat(avatarSettings.skin);
+  // Natural human proportions: torso, neck, shoulders, arms, hands, legs and shoes.
+  body=part(player,new THREE.CapsuleGeometry(.34,.72,7,14),shirt,0,1.08,0,1.05,1,0.72);
+  part(player,new THREE.CylinderGeometry(.105,.12,.22,16),skin,0,1.72,0);
+  const head=part(player,new THREE.SphereGeometry(.29,32,24),skin,0,2.02,0,.88,1.12,.9);
+  // Ears
+  for(const x of [-.255,.255])part(player,new THREE.SphereGeometry(.075,16,12),skin,x,2.01,0,.72,1.15,.7);
+  // Eyes, irises and eyebrows
+  for(const x of [-.105,.105]){
+    part(player,new THREE.SphereGeometry(.047,16,12),mat(0xf5eee2),x,2.075,.239,.95,.7,.5);
+    part(player,new THREE.SphereGeometry(.022,12,10),mat(0x24160f),x,2.075,.26);
+    part(player,new THREE.BoxGeometry(.095,.018,.025),hairMat,x,2.145,.24,1,1,1);
+  }
+  // Nose bridge and nostrils; proportions remain editable through the future face controls.
+  part(player,new THREE.SphereGeometry(.07,16,12),skin,0,2.005,.265,.72,1.05,.75);
+  part(player,new THREE.SphereGeometry(.055,16,12),skin,0,1.968,.285,1.05,.58,.72);
+  // Lips
+  part(player,new THREE.SphereGeometry(.066,16,10),mat(0x713d36),0,1.91,.253,1.15,.34,.45);
+  // Hair styles
+  if(avatarSettings.style==="Afro"){
+    part(player,new THREE.SphereGeometry(.315,24,18),hairMat,0,2.22,-.005,1.08,.82,1.02);
+    for(let i=0;i<18;i++){const a=i*Math.PI*2/18;part(player,new THREE.SphereGeometry(.075,10,8),hairMat,Math.cos(a)*.24,2.27+Math.sin(i*2)*.025,Math.sin(a)*.23,.9,.9,.9)}
+  }else if(avatarSettings.style==="Braids"){
+    part(player,new THREE.SphereGeometry(.29,20,14),hairMat,0,2.19,0,1,.65,1);
+    for(let i=0;i<9;i++){const x=(i-4)*.055;const braid=part(player,new THREE.CylinderGeometry(.025,.025,.42,8),hairMat,x,2.15,.12,1,1,1);braid.rotation.z=-.18}
+    for(let i=0;i<5;i++)part(player,new THREE.CylinderGeometry(.023,.023,.45,8),hairMat,-.24+i*.12,1.98,.08);
+  }else if(avatarSettings.style==="Locs"){
+    part(player,new THREE.SphereGeometry(.30,20,14),hairMat,0,2.2,0,1,.72,1);
+    for(let i=0;i<11;i++){const a=i*Math.PI*2/11;const loc=part(player,new THREE.CylinderGeometry(.027,.032,.38,7),hairMat,Math.cos(a)*.24,2.05,Math.sin(a)*.23);loc.rotation.z=Math.cos(a)*.35;loc.rotation.x=Math.sin(a)*.3}
+  }else if(avatarSettings.style==="Headwrap"){
+    part(player,new THREE.SphereGeometry(.32,24,16),mat(avatarSettings.hair),0,2.24,0,1.12,.62,1.05);
+    part(player,new THREE.TorusGeometry(.27,.055,8,24),mat(avatarSettings.top),0,2.18,0,1,1,.9);
+  }else{
+    part(player,new THREE.SphereGeometry(.295,24,14,0,Math.PI*2,0,Math.PI/2),hairMat,0,2.18,-.005,1,.7,1);
+  }
+  // Arms and hands
+  for(const side of [-1,1]){
+    const arm=part(player,new THREE.CapsuleGeometry(.105,.53,5,10),joint,side*.39,1.12,0,1,1,.95);arm.rotation.z=side*-.12;
+    part(player,new THREE.SphereGeometry(.095,14,10),skin,side*.43,.78,.015,.85,1.1,.8);
+    // Legs and footwear
+    part(player,new THREE.CapsuleGeometry(.135,.52,5,10),trousers,side*.16,.39,0,1,1,.9);
+    part(player,new THREE.BoxGeometry(.22,.13,.38),shoe,side*.16,.105,-.075);
+  }
+}
+rebuildAvatar();
+try{const saved=JSON.parse(localStorage.getItem('til-character')||'null');if(saved){rebuildAvatar(saved);document.querySelector('.player-name').textContent=saved.name||'New Lagosian'}}catch(e){}
 player.position.set(0,0,5);
 const rainGroup=new THREE.Group();scene.add(rainGroup);const drops=[];
 for(let i=0;i<500;i++){const d=new THREE.Mesh(new THREE.BoxGeometry(.025,.45,.025),new THREE.MeshBasicMaterial({color:0xd9efff,transparent:true,opacity:.55}));d.position.set((Math.random()-.5)*70,Math.random()*35,(Math.random()-.5)*70);rainGroup.add(d);drops.push(d)}
@@ -51,7 +104,29 @@ document.querySelector('#closeModal').onclick=closeModal;
 document.querySelector('#cameraBtn').onclick=()=>{cameraMode=(cameraMode+1)%3;document.querySelector('#cameraBtn small').textContent=modes[cameraMode];toast('Camera: '+modes[cameraMode].toLowerCase());updateCamera()};
 document.querySelector('#weatherBtn').onclick=()=>{weather=weather==='Clear'?'Rain':'Clear';rainGroup.visible=weather==='Rain';document.querySelector('#weatherLabel').textContent=weather==='Rain'?'🌧 Rain':'☀ Clear';toast('Weather changed to '+weather.toLowerCase())};
 document.querySelector('#activityBtn').onclick=()=>modal('What would you like to do?','Choose an activity in this early city prototype. More activities will arrive as the world expands.',[['Explore the street',()=>toast('Enjoy exploring Lagos!')],['Close',null,true]]);
-document.querySelector('#profileBtn').onclick=()=>modal('Your player profile','<label>Display name<br><input id="nameInput" value="New Lagosian" maxlength="24" style="width:100%;padding:11px;border:1px solid #d8e6da;border-radius:9px;margin-top:6px"></label><p>Profile setup, verified qualifications and clothing inventory will be added in the next development stage.</p>',[['Save name',()=>{let n=document.querySelector('#nameInput')?.value?.trim();if(n){document.querySelector('.player-name').textContent=n;toast('Profile name saved on this device')}}]]);
+document.querySelector('#profileBtn').onclick=()=>{
+  const swatches=["#4b2d20","#70452f","#8a563b","#a86f4e","#c58a65"];
+  const opts=(values,current)=>values.map(v=>`<option ${v===current?"selected":""}>${v}</option>`).join("");
+  modal('Create your character',`
+    <p>Build a Lagosian who looks and dresses the way you choose. These are prototype customizations saved in this browser.</p>
+    <div class="creator-grid">
+      <label>Display name<input id="nameInput" value="${avatarSettings.name}" maxlength="24"></label>
+      <label>Skin tone<select id="skinInput">${swatches.map(v=>`<option value="${v}" ${v===avatarSettings.skin?"selected":""}>${v}</option>`).join("")}</select></label>
+      <label>Hairstyle<select id="hairStyleInput">${opts(["Low cut","Afro","Braids","Locs","Headwrap"],avatarSettings.style)}</select></label>
+      <label>Hair colour<select id="hairInput">${["#171513","#24180f","#392317","#5a3925","#171d18"].map(v=>`<option value="${v}" ${v===avatarSettings.hair?"selected":""}>${v}</option>`).join("")}</select></label>
+      <label>Top / shirt<select id="topInput">${["#16834a","#f2f4ec","#172c55","#a83232","#d18b22","#5b477c"].map(v=>`<option value="${v}" ${v===avatarSettings.top?"selected":""}>${v}</option>`).join("")}</select></label>
+      <label>Trousers<select id="bottomInput">${["#263d35","#20252c","#253b66","#6b6a62","#34243c"].map(v=>`<option value="${v}" ${v===avatarSettings.bottom?"selected":""}>${v}</option>`).join("")}</select></label>
+      <label>Shoes<select id="shoesInput">${["#f3f3e9","#171717","#b83b2e","#e1b33e"].map(v=>`<option value="${v}" ${v===avatarSettings.shoes?"selected":""}>${v}</option>`).join("")}</select></label>
+    </div>
+    <p class="small-note">Next character update: more face-shape controls, body types, gender presentation, detailed Nigerian outfits and high-quality rigged 3D models.</p>`,
+    [['Save character',()=>{
+      const val=id=>document.getElementById(id)?.value;
+      const settings={name:val('nameInput')||'New Lagosian',skin:val('skinInput'),style:val('hairStyleInput'),hair:val('hairInput'),top:val('topInput'),bottom:val('bottomInput'),shoes:val('shoesInput')};
+      rebuildAvatar(settings);localStorage.setItem('til-character',JSON.stringify(settings));
+      document.querySelector('.player-name').textContent=settings.name;toast('Character updated!');
+    }],['Cancel',null,true]]
+  );
+};
 document.querySelector('#menuBtn').onclick=()=>modal('THIS IS LAGOS','<p>Welcome to the Lagos city prototype.</p><p><b>Prototype controls</b><br>WASD / arrow keys: move<br>Drag: look around<br>C: switch camera<br>Weather button: clear / rain</p><p>This prototype currently runs locally in your browser. Online accounts, multiplayer, trading and real-money payments are not connected yet.</p>',[['Continue',null]]);
 window.addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;if(e.key.toLowerCase()==='c')document.querySelector('#cameraBtn').click()});window.addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
 let pointer=null;renderer.domElement.addEventListener('pointerdown',e=>{pointer={x:e.clientX,y:e.clientY,id:e.pointerId};renderer.domElement.setPointerCapture(e.pointerId)});renderer.domElement.addEventListener('pointermove',e=>{if(pointer&&pointer.id===e.pointerId){lookAngle+=(e.clientX-pointer.x)*.005;lookPitch=Math.max(-.35,Math.min(.7,lookPitch+(e.clientY-pointer.y)*.003));pointer.x=e.clientX;pointer.y=e.clientY}});renderer.domElement.addEventListener('pointerup',()=>pointer=null);renderer.domElement.addEventListener('pointercancel',()=>pointer=null);
