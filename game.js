@@ -79,18 +79,63 @@ for(let x=-840;x<=840;x+=210){
 const wallPalette=[0xd9d1bd,0xe2dfd1,0xc8d3c9,0xd6c3a8,0xbfc9c4,0xe8e2d2,0xc7b8a5,0xd7d9cf].map(c=>mat(c));
 const roofPalette=[0x9a5544,0x9c674b,0x6d7770,0x8b4e3f,0xb5a18a].map(c=>mat(c));
 const glassBlue=new THREE.MeshStandardMaterial({color:0x5e9295,roughness:.24,metalness:.25});
+const trimMat=mat(0xeee8d8), darkMetal=mat(0x303b36), rustRoof=mat(0x765044);
+function addWaterTank(parent,x,y,z,scale=1){
+ const tank=new THREE.Mesh(new THREE.CylinderGeometry(.85*scale,.85*scale,1.7*scale,12),mat(0x263f48));
+ tank.position.set(x,y+1.05*scale,z);parent.add(tank);
+ const lid=new THREE.Mesh(new THREE.CylinderGeometry(.88*scale,.88*scale,.12*scale,12),darkMetal);
+ lid.position.set(x,y+1.92*scale,z);parent.add(lid);
+ const legs=new THREE.Mesh(new THREE.BoxGeometry(1.8*scale,.16*scale,1.8*scale),darkMetal);
+ legs.position.set(x,y+.12*scale,z);parent.add(legs);
+}
 function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
  const wall=wallPalette[Math.abs(seed)%wallPalette.length];
  const obj=new THREE.Group();obj.position.set(x,0,z);scene.add(obj);
  const main=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),wall);main.position.y=h/2;main.castShadow=true;main.receiveShadow=true;obj.add(main);
  const roof=new THREE.Mesh(new THREE.BoxGeometry(w+.35,.5,d+.35),roofPalette[Math.abs(seed+2)%roofPalette.length]);roof.position.y=h+.18;roof.castShadow=true;obj.add(roof);
- // Lagos-inspired external stair cores, balconies and shaded window bands.
- if(kind==='residential'||kind==='mixed'){
-  for(let floor=2.4;floor<h-1;floor+=2.8){
-   const balcony=new THREE.Mesh(new THREE.BoxGeometry(w+.35,.12,.75),concreteMat);balcony.position.set(0,floor,d/2+.35);obj.add(balcony);
-   for(let wx=-w/2+1.2;wx<w/2-.6;wx+=2.5){
-    const win=new THREE.Mesh(new THREE.BoxGeometry(1.05,1.15,.08),glassBlue);win.position.set(wx,floor+.45,d/2+.06);obj.add(win);
+ // Lagos residential facades: recessed-looking windows, balcony slabs,
+ // painted fascia bands, security grilles and rooftop water storage.
+ if(kind==='residential'||kind==='mixed'||kind==='tenement'||kind==='bungalow'||kind==='duplex'){
+  const floors = Math.max(1,Math.floor(h/3));
+  for(let floor=2.0;floor<h-1.2;floor+=2.8){
+   const balcony=new THREE.Mesh(new THREE.BoxGeometry(w+.35,.16,.9),concreteMat);
+   balcony.position.set(0,floor,d/2+.42);obj.add(balcony);
+   const rail=new THREE.Mesh(new THREE.BoxGeometry(w*.82,.72,.10),darkMetal);
+   rail.position.set(0,floor+.43,d/2+.82);obj.add(rail);
+   for(let wx=-w/2+1.25;wx<w/2-.55;wx+=2.55){
+    const win=new THREE.Mesh(new THREE.BoxGeometry(1.12,1.28,.10),glassBlue);
+    win.position.set(wx,floor+.62,d/2+.07);obj.add(win);
+    const grille=new THREE.Mesh(new THREE.BoxGeometry(1.22,1.38,.07),darkMetal);
+    grille.position.set(wx,floor+.62,d/2+.13);obj.add(grille);
    }
+  }
+  const fascia=new THREE.Mesh(new THREE.BoxGeometry(w+.22,.28,d+.22),trimMat);
+  fascia.position.y=Math.min(h-1.2,3.0);obj.add(fascia);
+  if(h>7) addWaterTank(obj,w*.24,h+.35,-d*.18,Math.min(1.25,Math.max(.7,w/18)));
+  // External stair/service core on one side, common in walk-up blocks.
+  if(kind==='tenement'||kind==='residential'){
+   const stair=new THREE.Mesh(new THREE.BoxGeometry(1.5,Math.min(h,10),d*.58),concreteMat);
+   stair.position.set(-w*.36,Math.min(h,10)/2,d*.18);obj.add(stair);
+  }
+ }
+ if(kind==='bungalow'||kind==='duplex'){
+  // Pitched roof, deep veranda, porch columns and a visible front entrance.
+  const roofMesh=new THREE.Mesh(new THREE.ConeGeometry(Math.max(w,d)*.72,Math.max(2.2,h*.22),4),rustRoof);
+  roofMesh.position.set(0,h+1.0,0);roofMesh.rotation.y=Math.PI/4;obj.add(roofMesh);
+  const porch=new THREE.Mesh(new THREE.BoxGeometry(w*.72,.25,2.4),concreteMat);
+  porch.position.set(0,1.5,d/2+1.1);obj.add(porch);
+  for(const px of [-w*.32,w*.32]){
+   const col=new THREE.Mesh(new THREE.BoxGeometry(.32,2.8,.32),trimMat);
+   col.position.set(px,1.4,d/2+1.9);obj.add(col);
+  }
+  const door=new THREE.Mesh(new THREE.BoxGeometry(1.35,2.35,.12),darkMetal);
+  door.position.set(0,1.18,d/2+.09);obj.add(door);
+ }
+ if(kind==='tenement'){
+  // Repeated narrow door bays and shared frontage typical of dense compounds.
+  for(let dx=-w/2+1.5;dx<w/2-1;dx+=3.2){
+   const door=new THREE.Mesh(new THREE.BoxGeometry(1.05,2.15,.12),darkMetal);
+   door.position.set(dx,1.08,d/2+.12);obj.add(door);
   }
  }
  if(kind==='shop'||kind==='market'){
@@ -152,7 +197,10 @@ function compound(cx,cz,kind='residential',seed=0){
   const m=new THREE.Mesh(new THREE.BoxGeometry(w,2.2,d),wall);m.position.set(x,1.1,z);g.add(m)
  }
  const gate=new THREE.Mesh(new THREE.BoxGeometry(8,2.4,.5),mat(0x354c40));gate.position.set(0,1.2,25);g.add(gate);
+ const gateHeader=new THREE.Mesh(new THREE.BoxGeometry(10,.45,.8),trimMat);gateHeader.position.set(0,2.55,25);g.add(gateHeader);
+ // Two low-rise buildings create the familiar shared-yard compound layout.
  makeBuilding(cx-12,cz-8,22,17,10,kind,seed);makeBuilding(cx+13,cz-7,18,16,8,kind,seed+1);
+ const gen=new THREE.Mesh(new THREE.BoxGeometry(1.5,1.1,1.1),darkMetal);gen.position.set(cx+22,.55,cz+16);scene.add(gen);
  const yard=new THREE.Mesh(new THREE.BoxGeometry(20,.12,16),grass);yard.position.set(cx,0,cz+13);scene.add(yard);
 }
 function buildDistrict(name,cx,cz,type,seed){
@@ -171,7 +219,24 @@ function buildDistrict(name,cx,cz,type,seed){
   makeBuilding(cx-35,cz,45,38,22,'office',seed);makeBuilding(cx+35,cz,42,36,18,'office',seed+1);
   makeBuilding(cx,cz+58,88,28,8,'mixed',seed+2);signBoard(name.toUpperCase(),cx,cz-48,34,0x205c82);
  }else{
-  for(let i=0;i<18;i++){const x=cx+(i%6)*28-70,z=cz+Math.floor(i/6)*34-35;compound(x,z,'residential',seed+i)}
+  const isMainland=/YABA|SURULERE|OSHODI|MUSHIN|AGEGE|FESTAC/i.test(name);
+  const isLuxury=/LEKKI|AJAH|IKOYI/i.test(name);
+  const houseKind=isMainland?'tenement':(isLuxury?'duplex':'bungalow');
+  const count=isMainland?24:18;
+  for(let i=0;i<count;i++){
+   const x=cx+(i%6)*28-70,z=cz+Math.floor(i/6)*34-35;
+   if(isMainland){
+    compound(x,z,'tenement',seed+i);
+    if(i%3===0)makeBuilding(x+4,z+30,18,12,12,'tenement',seed+i+30);
+   }else if(isLuxury){
+    // Larger gated plots with detached duplexes and landscaped setbacks.
+    const yard=new THREE.Mesh(new THREE.BoxGeometry(34,.12,30),grass);yard.position.set(x,.02,z);scene.add(yard);
+    compound(x,z,'duplex',seed+i);
+    for(const sx of [-12,12]){
+     const hedge=new THREE.Mesh(new THREE.BoxGeometry(1.1,1.5,25),mat(0x326b3c));hedge.position.set(x+sx, .75,z);scene.add(hedge);
+    }
+   }else compound(x,z,houseKind,seed+i);
+  }
   for(let i=0;i<7;i++)makeBuilding(cx+(i%4)*36-54,cz-100+Math.floor(i/4)*28,24,18,5+(i%2)*2,'shop',seed+i);
   signBoard(name.toUpperCase(),cx,cz-135,28,0x24613d);
  }
