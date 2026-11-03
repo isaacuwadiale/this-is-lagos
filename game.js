@@ -108,14 +108,14 @@ gltfLoader.load('./models/The_Miami_Dealer.glb',gltf=>{
 const rainGroup=new THREE.Group();scene.add(rainGroup);const drops=[];
 for(let i=0;i<500;i++){const d=new THREE.Mesh(new THREE.BoxGeometry(.025,.45,.025),new THREE.MeshBasicMaterial({color:0xd9efff,transparent:true,opacity:.55}));d.position.set((Math.random()-.5)*70,Math.random()*35,(Math.random()-.5)*70);rainGroup.add(d);drops.push(d)}
 rainGroup.visible=false;
-let cameraMode=0,weather='Clear',worldMinutes=12*60,daySpeed=3,lookAngle=0,lookPitch=.16,cameraDistance=6.5;
+let cameraMode=0,weather='Clear',worldMinutes=12*60,daySpeed=3,lookAngle=0,lookPitch=.12,cameraDistance=10.5;
 const modes=['THIRD PERSON','FIRST PERSON','ISOMETRIC'];
 const keys={};let moving=false;
 function updateCamera(){
-  const targetY=player.position.y+(cameraMode===1?1.68:1.12);
+  const targetY=player.position.y+(cameraMode===1?1.68:1.18);
   if(cameraMode===0){
     const horizontal=Math.cos(lookPitch)*cameraDistance;
-    camera.position.set(player.position.x+Math.sin(lookAngle)*horizontal,player.position.y+1.12+Math.sin(lookPitch)*cameraDistance,player.position.z+Math.cos(lookAngle)*horizontal);
+    camera.position.set(player.position.x+Math.sin(lookAngle)*horizontal,player.position.y+1.18+Math.sin(lookPitch)*cameraDistance,player.position.z+Math.cos(lookAngle)*horizontal);
     camera.lookAt(player.position.x,targetY,player.position.z);
   }else if(cameraMode===1){
     camera.position.set(player.position.x,player.position.y+1.68,player.position.z);
@@ -194,15 +194,43 @@ document.querySelector('#profileBtn').onclick=()=>{
 };
 document.querySelector('#menuBtn').onclick=()=>modal('THIS IS LAGOS','<p>Welcome to the Lagos city prototype.</p><p><b>Prototype controls</b><br>WASD / arrow keys: move<br>Drag: look around<br>C: switch camera<br>Weather button: clear / rain</p><p>This v0.5 build is a local interface prototype. Online accounts, live multiplayer, real-money wallet payments, police services and vehicle ownership records still require a secure online backend.</p>',[['Continue',null]]);
 window.addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;if(e.key.toLowerCase()==='c')document.querySelector('#cameraBtn').click()});window.addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
-// Mouse/touch camera orbit: start dragging on the 3D world, then track on window so movement stays reliable.
-let pointer=null;renderer.domElement.style.touchAction='none';renderer.domElement.style.cursor='grab';
-renderer.domElement.addEventListener('pointerdown',e=>{if(e.button!==undefined&&e.button!==0)return;pointer={x:e.clientX,y:e.clientY,id:e.pointerId};renderer.domElement.style.cursor='grabbing';e.preventDefault()});
-window.addEventListener('pointermove',e=>{if(pointer&&pointer.id===e.pointerId){const dx=e.clientX-pointer.x,dy=e.clientY-pointer.y;lookAngle-=dx*.006;lookPitch=Math.max(-.12,Math.min(.82,lookPitch+dy*.004));pointer.x=e.clientX;pointer.y=e.clientY}});
-function stopCameraDrag(e){if(pointer&&(!e||e.pointerId===undefined||pointer.id===e.pointerId)){pointer=null;renderer.domElement.style.cursor='grab'}}
-window.addEventListener('pointerup',stopCameraDrag);window.addEventListener('pointercancel',stopCameraDrag);window.addEventListener('blur',()=>stopCameraDrag());
-renderer.domElement.addEventListener('wheel',e=>{if(cameraMode!==0)return;e.preventDefault();cameraDistance=Math.max(3.6,Math.min(12,cameraDistance+Math.sign(e.deltaY)*.55));updateCamera()},{passive:false});
+// Reliable camera controls: capture drag on the canvas and track globally.
+let pointer=null;
+renderer.domElement.style.touchAction='none';
+renderer.domElement.style.cursor='grab';
+renderer.domElement.addEventListener('pointerdown',e=>{
+  if(e.pointerType==='mouse'&&e.button!==0)return;
+  pointer={x:e.clientX,y:e.clientY,id:e.pointerId};
+  renderer.domElement.style.cursor='grabbing';
+  try{renderer.domElement.setPointerCapture(e.pointerId)}catch(_e){}
+  e.preventDefault();
+});
+window.addEventListener('pointermove',e=>{
+  if(!pointer||pointer.id!==e.pointerId)return;
+  const dx=e.clientX-pointer.x,dy=e.clientY-pointer.y;
+  lookAngle-=dx*.008;
+  lookPitch=Math.max(-.18,Math.min(.72,lookPitch+dy*.006));
+  pointer.x=e.clientX;pointer.y=e.clientY;
+  updateCamera();
+});
+function stopCameraDrag(e){
+  if(pointer&&(!e||e.pointerId===undefined||pointer.id===e.pointerId)){
+    try{renderer.domElement.releasePointerCapture(pointer.id)}catch(_e){}
+    pointer=null;renderer.domElement.style.cursor='grab';
+  }
+}
+window.addEventListener('pointerup',stopCameraDrag);
+window.addEventListener('pointercancel',stopCameraDrag);
+window.addEventListener('blur',()=>stopCameraDrag());
+window.addEventListener('wheel',e=>{
+  if(!document.querySelector('#game').contains(e.target)||cameraMode!==0)return;
+  e.preventDefault();
+  cameraDistance=Math.max(6,Math.min(18,cameraDistance+Math.sign(e.deltaY)*.8));
+  updateCamera();
+},{passive:false});
 const touchDirs={};document.querySelectorAll('.mobile-pad button').forEach(b=>{const d=b.dataset.dir;b.addEventListener('pointerdown',e=>{e.preventDefault();touchDirs[d]=true});['pointerup','pointerleave','pointercancel'].forEach(ev=>b.addEventListener(ev,()=>touchDirs[d]=false))});
 function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);worldMinutes=(worldMinutes+dt*daySpeed)%1440;let h=Math.floor(worldMinutes/60),m=Math.floor(worldMinutes%60);document.querySelector('#clock').textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');setDay();let forward=(keys.w||keys.arrowup||touchDirs.up?1:0)-(keys.s||keys.arrowdown||touchDirs.down?1:0);let side=(keys.d||keys.arrowright||touchDirs.right?1:0)-(keys.a||keys.arrowleft||touchDirs.left?1:0);moving=!!(forward||side);if(avatarMixer){const desired=Object.keys(avatarActions).find(n=>moving?n.includes('walk-loop'):n.includes('idle'))||Object.keys(avatarActions)[0];const next=avatarActions[desired];if(next&&next!==activeAvatarAction){next.reset().fadeIn(.2).play();activeAvatarAction?.fadeOut(.2);activeAvatarAction=next;}avatarMixer.update(dt)}if(moving){const speed=dt*7;const dx=(Math.sin(lookAngle)*forward+Math.cos(lookAngle)*side)*speed;const dz=(Math.cos(lookAngle)*forward-Math.sin(lookAngle)*side)*speed;player.position.x+=dx;player.position.z+=dz;player.rotation.y=Math.atan2(dx,dz);player.position.x=Math.max(-8,Math.min(8,player.position.x));player.position.z=Math.max(-120,Math.min(120,player.position.z));if(body)body.position.y=1.05+Math.sin(performance.now()*.012)*.045}if(weather==='Rain'){for(const d of drops){d.position.y-=dt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*70;d.position.z=player.position.z+(Math.random()-.5)*70}}}updateCamera();renderer.render(scene,camera)}
+updateCamera();
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
 toast('Welcome to This Is Lagos — explore the city');
