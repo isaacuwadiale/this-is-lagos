@@ -1,3 +1,4 @@
+// THIS IS LAGOS v0.12 — road-aware city, markings and street lighting
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -65,6 +66,77 @@ for(let p=-980;p<=980;p+=70){
   block(8,.12,2100,asphaltMat,p,-.16,0);
   block(2100,.12,8,asphaltMat,0,-.16,p);
 }
+// Road-reservation system: every generated building must fit inside a plot.
+// Major avenues are 24m wide; local streets are 8m wide. A 5m setback keeps
+// walls, porches and building corners out of the carriageway.
+function roadHalfWidthAt(value){
+ const grid=Math.round(value/70)*70;
+ return Math.abs(grid%210)===0?12:4;
+}
+function clearBuildingPlot(x,z,w,d,extra=5){
+ const nx=Math.round(x/70)*70, nz=Math.round(z/70)*70;
+ const dx=Math.abs(x-nx), dz=Math.abs(z-nz);
+ if(dx < roadHalfWidthAt(nx)+w/2+extra) return false;
+ if(dz < roadHalfWidthAt(nz)+d/2+extra) return false;
+ return true;
+}
+
+// Realistic road paint: avenue centre lines, broken lane dividers, edge lines,
+// turn arrows and stop bars. All paint sits slightly above the asphalt.
+const paintWhite=new THREE.MeshBasicMaterial({color:0xf4f2df});
+const paintYellow=new THREE.MeshBasicMaterial({color:0xf1c84b});
+const paintArrow=new THREE.MeshBasicMaterial({color:0xf4f2df,side:THREE.DoubleSide});
+function roadPaint(w,d,x,z,material=paintWhite,y=.018){
+ const m=new THREE.Mesh(new THREE.BoxGeometry(w,.035,d),material);m.position.set(x,y,z);scene.add(m);return m;
+}
+// Main avenues: double yellow centre lines and broken white lane separators.
+for(let p=-900;p<=900;p+=210){
+ for(const offset of [-.42,.42]){
+  roadPaint(.22,2100,p+offset,-0,paintYellow,.012);
+  roadPaint(2100,.22,0,p+offset,paintYellow,.012);
+ }
+ for(let q=-990;q<990;q+=18){
+  roadPaint(.16,7,p-5.5,q,paintWhite,.02);roadPaint(.16,7,p+5.5,q,paintWhite,.02);
+  roadPaint(7,.16,q,p-5.5,paintWhite,.02);roadPaint(7,.16,q,p+5.5,paintWhite,.02);
+ }
+ // Kerb/edge lines on both sides of each main avenue.
+ for(const side of [-1,1]){
+  roadPaint(.18,2100,p+side*11.2,0,paintWhite,.014);
+  roadPaint(2100,.18,0,p+side*11.2,paintWhite,.014);
+ }
+}
+// Local streets receive short broken centre markings and painted junction bars.
+for(let p=-980;p<=980;p+=70){
+ if(Math.abs(p%210)<1) continue;
+ for(let q=-980;q<980;q+=28){
+  roadPaint(.12,4,p,q,paintWhite,.018);
+  roadPaint(4,.12,q,p,paintWhite,.018);
+ }
+}
+// Direction arrows at regular approach points.
+function addRoadArrow(x,z,rotation=0){
+ const shape=new THREE.Shape();shape.moveTo(0,3.2);shape.lineTo(-1.1,1.2);shape.lineTo(-.38,1.2);shape.lineTo(-.38,-2.2);shape.lineTo(.38,-2.2);shape.lineTo(.38,1.2);shape.lineTo(1.1,1.2);shape.closePath();
+ const mesh=new THREE.Mesh(new THREE.ShapeGeometry(shape),paintArrow);mesh.rotation.x=-Math.PI/2;mesh.rotation.z=rotation;mesh.position.set(x,.035,z);scene.add(mesh);
+}
+for(let p=-840;p<=840;p+=210){for(let q=-840;q<=840;q+=210){addRoadArrow(p-7,q-28,0);addRoadArrow(p+7,q+28,Math.PI);}}
+
+// Lagos-style streetlights: galvanized poles, outreach arms and warm LED heads.
+// The lamps are placed on verges, never in driving lanes or building plots.
+const poleMat=mat(0x59645e,.55), lampGlow=new THREE.MeshStandardMaterial({color:0xffe7ad,emissive:0xffc66b,emissiveIntensity:1.6,roughness:.3});
+function streetlight(x,z,rotation=0,scale=1){
+ const g=new THREE.Group();g.position.set(x,0,z);g.rotation.y=rotation;scene.add(g);
+ const pole=new THREE.Mesh(new THREE.CylinderGeometry(.13*scale,.2*scale,8*scale,9),poleMat);pole.position.y=4*scale;pole.castShadow=true;g.add(pole);
+ const arm=new THREE.Mesh(new THREE.CylinderGeometry(.075*scale,.09*scale,2.2*scale,8),poleMat);arm.rotation.z=Math.PI/2;arm.position.set(.88*scale,7.65*scale,0);g.add(arm);
+ const head=new THREE.Mesh(new THREE.BoxGeometry(1.25*scale,.22*scale,.48*scale),lampGlow);head.position.set(1.85*scale,7.55*scale,0);g.add(head);
+ const hood=new THREE.Mesh(new THREE.BoxGeometry(1.45*scale,.12*scale,.62*scale),poleMat);hood.position.set(1.85*scale,7.72*scale,0);g.add(hood);
+ return g;
+}
+for(let p=-900;p<=900;p+=210){
+ for(let q=-945;q<=945;q+=105){streetlight(p-15,q,0,.9);streetlight(q,p+15,Math.PI/2,.9);}
+}
+// A smaller number of lights on local streets, alternating sides to reduce clutter.
+for(let p=-980;p<=980;p+=140){if(Math.abs(p%210)<1)continue;for(let q=-910;q<=910;q+=210){streetlight(p-6,q,0,.68);streetlight(q,p+6,Math.PI/2,.68);}}
+
 // Intersections and zebra crossing bars at selected major junctions.
 for(let x=-840;x<=840;x+=210){
  for(let z=-840;z<=840;z+=210){
@@ -89,6 +161,7 @@ function addWaterTank(parent,x,y,z,scale=1){
  legs.position.set(x,y+.12*scale,z);parent.add(legs);
 }
 function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
+ if(!clearBuildingPlot(x,z,w,d,5)) return null;
  const wall=wallPalette[Math.abs(seed)%wallPalette.length];
  const obj=new THREE.Group();obj.position.set(x,0,z);scene.add(obj);
  const main=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),wall);main.position.y=h/2;main.castShadow=true;main.receiveShadow=true;obj.add(main);
@@ -191,6 +264,7 @@ function marketCluster(cx,cz,label='LOCAL MARKET'){
  signBoard(label,cx,cz-18,30,0x9a5b23);
 }
 function compound(cx,cz,kind='residential',seed=0){
+ if(!clearBuildingPlot(cx,cz,62,50,7)) return;
  // Walled family compounds with gate, small yard and several low-rise blocks.
  const wall=mat(0xb6ad9a),g=new THREE.Group();g.position.set(cx,0,cz);scene.add(g);
  for(const [x,z,w,d] of [[0,-25,62,.7],[0,25,62,.7],[-31,0,.7,50],[31,0,.7,50]]){
@@ -484,4 +558,4 @@ function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDel
 updateCamera();
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
-toast('Welcome to This Is Lagos — explore the city');
+toast('Lagos city update v0.12 loaded');
