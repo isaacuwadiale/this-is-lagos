@@ -73,9 +73,10 @@ function roadHalfWidthAt(value){
  const grid=Math.round(value/70)*70;
  return Math.abs(grid%210)===0?12:4;
 }
-function clearBuildingPlot(x,z,w,d,extra=5){
+function clearBuildingPlot(x,z,w,d,extra=1){
  const nx=Math.round(x/70)*70, nz=Math.round(z/70)*70;
  const dx=Math.abs(x-nx), dz=Math.abs(z-nz);
+ // A footprint is rejected only when its edge would enter a road or setback.
  if(dx < roadHalfWidthAt(nx)+w/2+extra) return false;
  if(dz < roadHalfWidthAt(nz)+d/2+extra) return false;
  return true;
@@ -264,18 +265,18 @@ function marketCluster(cx,cz,label='LOCAL MARKET'){
  signBoard(label,cx,cz-18,30,0x9a5b23);
 }
 function compound(cx,cz,kind='residential',seed=0){
- if(!clearBuildingPlot(cx,cz,62,50,7)) return;
+ if(!clearBuildingPlot(cx,cz,42,42,1)) return;
  // Walled family compounds with gate, small yard and several low-rise blocks.
  const wall=mat(0xb6ad9a),g=new THREE.Group();g.position.set(cx,0,cz);scene.add(g);
- for(const [x,z,w,d] of [[0,-25,62,.7],[0,25,62,.7],[-31,0,.7,50],[31,0,.7,50]]){
+ for(const [x,z,w,d] of [[0,-21,42,.7],[0,21,42,.7],[-21,0,.7,42],[21,0,.7,42]]){
   const m=new THREE.Mesh(new THREE.BoxGeometry(w,2.2,d),wall);m.position.set(x,1.1,z);g.add(m)
  }
- const gate=new THREE.Mesh(new THREE.BoxGeometry(8,2.4,.5),mat(0x354c40));gate.position.set(0,1.2,25);g.add(gate);
- const gateHeader=new THREE.Mesh(new THREE.BoxGeometry(10,.45,.8),trimMat);gateHeader.position.set(0,2.55,25);g.add(gateHeader);
+ const gate=new THREE.Mesh(new THREE.BoxGeometry(7,2.4,.5),mat(0x354c40));gate.position.set(0,1.2,21);g.add(gate);
+ const gateHeader=new THREE.Mesh(new THREE.BoxGeometry(9,.45,.8),trimMat);gateHeader.position.set(0,2.55,21);g.add(gateHeader);
  // Two low-rise buildings create the familiar shared-yard compound layout.
- makeBuilding(cx-12,cz-8,22,17,10,kind,seed);makeBuilding(cx+13,cz-7,18,16,8,kind,seed+1);
- const gen=new THREE.Mesh(new THREE.BoxGeometry(1.5,1.1,1.1),darkMetal);gen.position.set(cx+22,.55,cz+16);scene.add(gen);
- const yard=new THREE.Mesh(new THREE.BoxGeometry(20,.12,16),grass);yard.position.set(cx,0,cz+13);scene.add(yard);
+ makeBuilding(cx-9,cz-7,15,14,10,kind,seed);makeBuilding(cx+9,cz-7,14,13,8,kind,seed+1);
+ const gen=new THREE.Mesh(new THREE.BoxGeometry(1.5,1.1,1.1),darkMetal);gen.position.set(cx+15,.55,cz+14);scene.add(gen);
+ const yard=new THREE.Mesh(new THREE.BoxGeometry(14,.12,10),grass);yard.position.set(cx,0,cz+11);scene.add(yard);
 }
 function buildDistrict(name,cx,cz,type,seed){
  // arterial frontage, varied block fabric and a signature landmark per district.
