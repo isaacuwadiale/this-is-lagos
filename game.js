@@ -442,7 +442,7 @@ gltfLoader.load('./models/The_Miami_Dealer.glb',gltf=>{
 const rainGroup=new THREE.Group();scene.add(rainGroup);const drops=[];
 for(let i=0;i<500;i++){const d=new THREE.Mesh(new THREE.BoxGeometry(.025,.45,.025),new THREE.MeshBasicMaterial({color:0xd9efff,transparent:true,opacity:.55}));d.position.set((Math.random()-.5)*180,Math.random()*35,(Math.random()-.5)*180);rainGroup.add(d);drops.push(d)}
 rainGroup.visible=false;
-let cameraMode=0,weather='Clear',worldMinutes=12*60,daySpeed=3,lookAngle=0,lookPitch=.12,cameraDistance=157.5;
+let cameraMode=0,weather='Clear',worldMinutes=12*60,daySpeed=3,lookAngle=0,lookPitch=.12,cameraDistance=157.5;\nconst ZOOM_MIN=90, ZOOM_MAX=225, ZOOM_DEFAULT=157.5;\nfunction setZoomFromPercent(value){const pct=Math.max(0,Math.min(100,Number(value)));cameraDistance=ZOOM_MIN+(ZOOM_MAX-ZOOM_MIN)*(pct/100);const slider=document.querySelector('#zoomSlider');if(slider)slider.value=String(pct);const readout=document.querySelector('#zoomValue');if(readout)readout.textContent=Math.round(pct)+'%';updateCamera();}\nfunction changeZoom(delta){const slider=document.querySelector('#zoomSlider');const current=slider?Number(slider.value):50;setZoomFromPercent(current+delta);}\n
 const modes=['THIRD PERSON','FIRST PERSON','ISOMETRIC'];
 const keys={};let moving=false;
 function updateCamera(){
@@ -465,6 +465,16 @@ function modal(title,body,actions=[]){document.querySelector('#modalTitle').text
 function closeModal(){document.querySelector('#modalBackdrop').classList.add('hidden')}
 document.querySelector('#closeModal').onclick=closeModal;
 document.querySelector('#cameraBtn').onclick=()=>{cameraMode=(cameraMode+1)%3;document.querySelector('#cameraBtn small').textContent=modes[cameraMode];toast('Camera: '+modes[cameraMode].toLowerCase());updateCamera()};
+const zoomSlider=document.querySelector('#zoomSlider');
+document.querySelector('#zoomIn').addEventListener('click',()=>changeZoom(-5));
+document.querySelector('#zoomOut').addEventListener('click',()=>changeZoom(5));
+document.querySelector('#zoomReset').addEventListener('click',()=>setZoomFromPercent(50));
+zoomSlider.addEventListener('input',e=>setZoomFromPercent(e.target.value));
+function syncZoomControls(){const panel=document.querySelector('#zoomControls');panel.classList.toggle('zoom-disabled',cameraMode!==0);}
+const cameraButton=document.querySelector('#cameraBtn');
+cameraButton.addEventListener('click',()=>{setTimeout(syncZoomControls,0)});
+syncZoomControls();
+
 document.querySelector('#weatherBtn').onclick=()=>{weather=weather==='Clear'?'Rain':'Clear';rainGroup.visible=weather==='Rain';document.querySelector('#weatherLabel').textContent=weather==='Rain'?'🌧 Rain':'☀ Clear';toast('Weather changed to '+weather.toLowerCase())};
 document.querySelector('#activityBtn').onclick=()=>{document.querySelector('#activityPanel').classList.toggle('panel-open')};
 document.querySelector('#feedClose').onclick=()=>document.querySelector('#activityPanel').classList.remove('panel-open');
