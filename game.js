@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.20 — performance optimisation, spatial collision grid and root-motion fix
+// THIS IS LAGOS v0.21 — performance optimisation, spatial collision grid and root-motion fix
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -10,7 +10,7 @@ const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,.1,4200);
 camera.position.set(0,5,9);
 const renderer=new THREE.WebGLRenderer({antialias:false, powerPreference:'high-performance'});
 // Lower pixel ratio and disable realtime shadow maps to reduce GPU load on large scenes.
-renderer.setPixelRatio(Math.min(devicePixelRatio,1.0));renderer.setSize(innerWidth,innerHeight);
+let renderScale=0.85;const maxDevicePixelRatio=Math.min(devicePixelRatio||1,1.0);renderer.setPixelRatio(maxDevicePixelRatio*renderScale);renderer.setSize(innerWidth,innerHeight);
 renderer.shadowMap.enabled=false;
 renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;mount.appendChild(renderer.domElement);
 scene.add(new THREE.HemisphereLight(0xe7fff0,0x71856d,2));
@@ -628,12 +628,15 @@ function collidesWithBuilding(x,z){
  return false;
 }
 let uiUpdateElapsed=0;
-function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);worldMinutes=(worldMinutes+dt*daySpeed)%1440;uiUpdateElapsed+=dt;if(uiUpdateElapsed>=.25){uiUpdateElapsed=0;let h=Math.floor(worldMinutes/60),m=Math.floor(worldMinutes%60);const clockEl=document.querySelector('#clock');if(clockEl)clockEl.textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');const districtEl=document.querySelector('.stat-row b');if(districtEl){let nearest=districtDefs.reduce((best,d)=>{const dist=Math.hypot(player.position.x-d[1],player.position.z-d[2]);return dist<best.dist?{name:d[0],dist}:best},{name:'Lagos Mainland',dist:1e9});districtEl.textContent=nearest.dist<260?nearest.name:'Lagos';}setDay();}let forward=(keys.w||keys.arrowup||touchDirs.up?1:0)-(keys.s||keys.arrowdown||touchDirs.down?1:0);let side=(keys.d||keys.arrowright||touchDirs.right?1:0)-(keys.a||keys.arrowleft||touchDirs.left?1:0);moving=!!(forward||side);if(avatarMixer){const names=Object.keys(avatarActions);const desired=(moving?(names.find(n=>n.includes('walk'))||names.find(n=>n.includes('run'))):(names.find(n=>n.includes('idle'))))||names[0];const next=avatarActions[desired];if(next&&next!==activeAvatarAction){next.reset().fadeIn(.2).play();activeAvatarAction?.fadeOut(.2);activeAvatarAction=next;}avatarMixer.update(dt)}if(moving){let ix=Math.sin(lookAngle)*forward+Math.cos(lookAngle)*side;let iz=Math.cos(lookAngle)*forward-Math.sin(lookAngle)*side;const inputLength=Math.hypot(ix,iz)||1;ix/=inputLength;iz/=inputLength;const speed=dt*38;const dx=ix*speed,dz=iz*speed;const nextX=Math.max(-1010,Math.min(1010,player.position.x+dx));const nextZ=Math.max(-1010,Math.min(1010,player.position.z+dz));
+// Adaptive render resolution: if frame rate drops, lower pixel count without restarting.
+let fpsSampleTime=0,fpsFrames=0,slowSamples=0,fastSamples=0;
+function animate(){requestAnimationFrame(animate);if(document.hidden)return;const rawDt=clock.getDelta();const dt=Math.min(rawDt,.05);fpsSampleTime+=rawDt;fpsFrames++;if(fpsSampleTime>=2){const fps=fpsFrames/fpsSampleTime;fpsSampleTime=0;fpsFrames=0;if(fps<24){slowSamples++;fastSamples=0}else if(fps>42){fastSamples++;slowSamples=0}else{slowSamples=0;fastSamples=0}let nextScale=renderScale;if(slowSamples>=2)nextScale=Math.max(.5,renderScale-.15);else if(fastSamples>=4)nextScale=Math.min(.85,renderScale+.05);if(nextScale!==renderScale){renderScale=nextScale;renderer.setPixelRatio(maxDevicePixelRatio*renderScale);renderer.setSize(innerWidth,innerHeight);slowSamples=0;fastSamples=0;}}worldMinutes=(worldMinutes+dt*daySpeed)%1440;uiUpdateElapsed+=dt;if(uiUpdateElapsed>=.25){uiUpdateElapsed=0;let h=Math.floor(worldMinutes/60),m=Math.floor(worldMinutes%60);const clockEl=document.querySelector('#clock');if(clockEl)clockEl.textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');const districtEl=document.querySelector('.stat-row b');if(districtEl){let nearest=districtDefs.reduce((best,d)=>{const dist=Math.hypot(player.position.x-d[1],player.position.z-d[2]);return dist<best.dist?{name:d[0],dist}:best},{name:'Lagos Mainland',dist:1e9});districtEl.textContent=nearest.dist<260?nearest.name:'Lagos';}setDay();}let forward=(keys.w||keys.arrowup||touchDirs.up?1:0)-(keys.s||keys.arrowdown||touchDirs.down?1:0);let side=(keys.d||keys.arrowright||touchDirs.right?1:0)-(keys.a||keys.arrowleft||touchDirs.left?1:0);moving=!!(forward||side);if(avatarMixer){const names=Object.keys(avatarActions);const desired=(moving?(names.find(n=>n.includes('walk'))||names.find(n=>n.includes('run'))):(names.find(n=>n.includes('idle'))))||names[0];const next=avatarActions[desired];if(next&&next!==activeAvatarAction){next.reset().fadeIn(.2).play();activeAvatarAction?.fadeOut(.2);activeAvatarAction=next;}avatarMixer.update(dt)}if(moving){let ix=Math.sin(lookAngle)*forward+Math.cos(lookAngle)*side;let iz=Math.cos(lookAngle)*forward-Math.sin(lookAngle)*side;const inputLength=Math.hypot(ix,iz)||1;ix/=inputLength;iz/=inputLength;const speed=dt*38;const dx=ix*speed,dz=iz*speed;const nextX=Math.max(-1010,Math.min(1010,player.position.x+dx));const nextZ=Math.max(-1010,Math.min(1010,player.position.z+dz));
  // Axis-separated collision lets the player slide along building walls.
  if(!collidesWithBuilding(nextX,player.position.z))player.position.x=nextX;
  if(!collidesWithBuilding(player.position.x,nextZ))player.position.z=nextZ;
  player.rotation.y=Math.atan2(dx,dz);if(body)body.position.y=1.05+Math.sin(performance.now()*.012)*.045}if(weather==='Rain'){for(const d of drops){d.position.y-=dt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*180;d.position.z=player.position.z+(Math.random()-.5)*180}}}updateCamera();if((cullFrame++%3)===0)updateVisibleBuildings();renderer.render(scene,camera)}
 updateCamera();
 const clock=new THREE.Clock();animate();
-window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setPixelRatio(maxDevicePixelRatio*renderScale);renderer.setSize(innerWidth,innerHeight)});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)clock.getDelta()});
 toast('Lagos city update v0.12 loaded');
