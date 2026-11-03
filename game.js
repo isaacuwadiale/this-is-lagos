@@ -4,8 +4,8 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 const mount=document.querySelector('#game');
 const scene=new THREE.Scene();
 scene.background=new THREE.Color(0x9fc9d4);
-scene.fog=new THREE.Fog(0x9fc9d4,45,180);
-const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,.1,500);
+scene.fog=new THREE.Fog(0x9fc9d4,220,700);
+const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,.1,1200);
 camera.position.set(0,5,9);
 const renderer=new THREE.WebGLRenderer({antialias:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);
@@ -108,7 +108,7 @@ gltfLoader.load('./models/The_Miami_Dealer.glb',gltf=>{
 const rainGroup=new THREE.Group();scene.add(rainGroup);const drops=[];
 for(let i=0;i<500;i++){const d=new THREE.Mesh(new THREE.BoxGeometry(.025,.45,.025),new THREE.MeshBasicMaterial({color:0xd9efff,transparent:true,opacity:.55}));d.position.set((Math.random()-.5)*70,Math.random()*35,(Math.random()-.5)*70);rainGroup.add(d);drops.push(d)}
 rainGroup.visible=false;
-let cameraMode=0,weather='Clear',worldMinutes=12*60,daySpeed=3,lookAngle=0,lookPitch=.12,cameraDistance=10.5;
+let cameraMode=0,weather='Clear',worldMinutes=12*60,daySpeed=3,lookAngle=0,lookPitch=.12,cameraDistance=157.5;
 const modes=['THIRD PERSON','FIRST PERSON','ISOMETRIC'];
 const keys={};let moving=false;
 function updateCamera(){
@@ -225,7 +225,7 @@ window.addEventListener('blur',()=>stopCameraDrag());
 window.addEventListener('wheel',e=>{
   if(!document.querySelector('#game').contains(e.target)||cameraMode!==0)return;
   e.preventDefault();
-  cameraDistance=Math.max(6,Math.min(18,cameraDistance+Math.sign(e.deltaY)*.8));
+  cameraDistance=Math.max(90,Math.min(240,cameraDistance+Math.sign(e.deltaY)*5));
   updateCamera();
 },{passive:false});
 const touchDirs={};document.querySelectorAll('.mobile-pad button').forEach(b=>{const d=b.dataset.dir;b.addEventListener('pointerdown',e=>{e.preventDefault();touchDirs[d]=true});['pointerup','pointerleave','pointercancel'].forEach(ev=>b.addEventListener(ev,()=>touchDirs[d]=false))});
