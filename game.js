@@ -4,8 +4,8 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 const mount=document.querySelector('#game');
 const scene=new THREE.Scene();
 scene.background=new THREE.Color(0x9fc9d4);
-scene.fog=new THREE.Fog(0x9fc9d4,220,700);
-const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,.1,1200);
+scene.fog=new THREE.Fog(0x9fc9d4,520,2100);
+const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,.1,4200);
 camera.position.set(0,5,9);
 const renderer=new THREE.WebGLRenderer({antialias:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);
@@ -30,6 +30,192 @@ for(let i=0;i<34;i++){let x=(Math.random()-.5)*125,z=-100+Math.random()*180;if(M
 // palm trees
 function palm(x,z){const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.16,.28,5,7),mat(0x80613d));trunk.position.set(x,2.5,z);trunk.castShadow=true;scene.add(trunk);for(let i=0;i<7;i++){let a=i*Math.PI*2/7;const leaf=new THREE.Mesh(new THREE.ConeGeometry(.34,4,5),mat(0x237a43));leaf.position.set(x+Math.cos(a)*1.2,5.1,z+Math.sin(a)*1.2);leaf.rotation.z=-Math.cos(a)*.9;leaf.rotation.x=Math.sin(a)*.9;scene.add(leaf)}}
 for(let z=-65;z<80;z+=17){palm(-12,z);palm(12,z)}
+
+// -----------------------------------------------------------------------------
+// v0.10 EXPANDED LAGOS WORLD: approx. 2.1 km x 2.1 km playable city footprint.
+// The original compact prototype remains as the central starter district; this
+// generator adds connected Lagos-inspired districts, arterials, compounds,
+// markets, civic buildings, sports venues, waterfront and recognizable signage.
+// -----------------------------------------------------------------------------
+const CITY_HALF=1050;
+const cityGroundMat=mat(0x789b70), asphaltMat=mat(0x303735), laneMat=mat(0xe8dfc4),
+      curbMat=mat(0xbfc8b9), sandMat=mat(0xc7ad83), lagoonMat=new THREE.MeshStandardMaterial({color:0x3f8f9a,roughness:.35,metalness:.12}),
+      roofMat=mat(0x8e5140), concreteMat=mat(0xb9b7a9), marketMat=mat(0xd5b46e),
+      sportGreen=mat(0x287b43), sportBlue=mat(0x276a9a), sportRed=mat(0xb74b3b);
+block(2100,.35,2100,cityGroundMat,0,-.42,0);
+
+// Lagos-style lagoon/waterfront on the south-eastern edge with a sandy shore.
+block(690,.5,230,lagoonMat,610,-.28,930);
+block(720,.12,34,sandMat,590,-.12,805);
+for(let i=0;i<18;i++){
+  const x=280+i*38;
+  block(1.4,.22,22,mat(0x806d52),x,-.02,820);
+}
+// Dense connected road grid. Main avenues every 210m, secondary streets every 70m.
+for(let p=-900;p<=900;p+=210){
+  block(24,.18,2100,asphaltMat,p,-.12,0);
+  block(2100,.18,22,asphaltMat,0,-.12,p);
+  block(1,.025,1980,laneMat,p-5,.0,0);
+  block(1,.025,1980,laneMat,p+5,.0,0);
+  block(1980,.025,1,laneMat,0,.0,p-5);
+  block(1980,.025,1,laneMat,0,.0,p+5);
+}
+for(let p=-980;p<=980;p+=70){
+  if(Math.abs(p%210)<1) continue;
+  block(8,.12,2100,asphaltMat,p,-.16,0);
+  block(2100,.12,8,asphaltMat,0,-.16,p);
+}
+// Intersections and zebra crossing bars at selected major junctions.
+for(let x=-840;x<=840;x+=210){
+ for(let z=-840;z<=840;z+=210){
+  for(let n=-3;n<=3;n++){
+   block(1.2,.035,9,white,x+n*2.3,.025,z-17);
+   block(9,.035,1.2,white,x-17,.025,z+n*2.3);
+  }
+ }
+}
+
+// District palette and building families.
+const wallPalette=[0xd9d1bd,0xe2dfd1,0xc8d3c9,0xd6c3a8,0xbfc9c4,0xe8e2d2,0xc7b8a5,0xd7d9cf].map(c=>mat(c));
+const roofPalette=[0x9a5544,0x9c674b,0x6d7770,0x8b4e3f,0xb5a18a].map(c=>mat(c));
+const glassBlue=new THREE.MeshStandardMaterial({color:0x5e9295,roughness:.24,metalness:.25});
+function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
+ const wall=wallPalette[Math.abs(seed)%wallPalette.length];
+ const obj=new THREE.Group();obj.position.set(x,0,z);scene.add(obj);
+ const main=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),wall);main.position.y=h/2;main.castShadow=true;main.receiveShadow=true;obj.add(main);
+ const roof=new THREE.Mesh(new THREE.BoxGeometry(w+.35,.5,d+.35),roofPalette[Math.abs(seed+2)%roofPalette.length]);roof.position.y=h+.18;roof.castShadow=true;obj.add(roof);
+ // Lagos-inspired external stair cores, balconies and shaded window bands.
+ if(kind==='residential'||kind==='mixed'){
+  for(let floor=2.4;floor<h-1;floor+=2.8){
+   const balcony=new THREE.Mesh(new THREE.BoxGeometry(w+.35,.12,.75),concreteMat);balcony.position.set(0,floor,d/2+.35);obj.add(balcony);
+   for(let wx=-w/2+1.2;wx<w/2-.6;wx+=2.5){
+    const win=new THREE.Mesh(new THREE.BoxGeometry(1.05,1.15,.08),glassBlue);win.position.set(wx,floor+.45,d/2+.06);obj.add(win);
+   }
+  }
+ }
+ if(kind==='shop'||kind==='market'){
+  const awning=new THREE.Mesh(new THREE.BoxGeometry(w+.3,.35,d*.28),marketMat);awning.position.set(0,2.6,d/2+.35);obj.add(awning);
+  for(let wx=-w/2+1;wx<w/2;wx+=2.2){const shutter=new THREE.Mesh(new THREE.BoxGeometry(1.5,2,.08),mat(0x6e756d));shutter.position.set(wx,1.2,d/2+.08);obj.add(shutter)}
+ }
+ if(kind==='office'){
+  for(let floor=2.2;floor<h;floor+=2.4){const band=new THREE.Mesh(new THREE.BoxGeometry(w+.1,.85,d+.1),glassBlue);band.position.y=floor;obj.add(band)}
+ }
+ return obj;
+}
+function signBoard(text,x,z,width=22,color=0x176b43){
+ const canvas=document.createElement('canvas');canvas.width=512;canvas.height=128;
+ const ctx=canvas.getContext('2d');ctx.fillStyle='#'+color.toString(16).padStart(6,'0');ctx.fillRect(0,0,512,128);
+ ctx.fillStyle='#ffffff';ctx.font='bold 42px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,256,64,480);
+ const tex=new THREE.CanvasTexture(canvas);const mesh=new THREE.Mesh(new THREE.PlaneGeometry(width,5),new THREE.MeshBasicMaterial({map:tex,transparent:false,side:THREE.DoubleSide}));
+ mesh.position.set(x,7,z);scene.add(mesh);return mesh;
+}
+function palmTree(x,z,scale=1){
+ const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.22*scale,.34*scale,6*scale,7),mat(0x795b3b));trunk.position.set(x,3*scale,z);scene.add(trunk);
+ for(let k=0;k<8;k++){const a=k*Math.PI/4;const leaf=new THREE.Mesh(new THREE.ConeGeometry(.42*scale,5.2*scale,5),mat(0x287642));leaf.position.set(x+Math.cos(a)*1.5*scale,6*scale,z+Math.sin(a)*1.5*scale);leaf.rotation.z=-Math.cos(a)*.9;leaf.rotation.x=Math.sin(a)*.9;scene.add(leaf)}
+}
+function fencedPitch(cx,cz,name='FOOTBALL PITCH',surface=sportGreen){
+ const g=new THREE.Group();g.position.set(cx,0,cz);scene.add(g);
+ const field=new THREE.Mesh(new THREE.BoxGeometry(82,.22,48),surface);field.position.y=.04;g.add(field);
+ const lineMat=new THREE.MeshBasicMaterial({color:0xffffff});
+ function line(w,h,x,z){const m=new THREE.Mesh(new THREE.BoxGeometry(w,.035,h),lineMat);m.position.set(x,.17,z);g.add(m)}
+ line(78,.35,0,-23.5);line(78,.35,0,23.5);line(.35,47,-40,0);line(.35,47,40,0);line(.3,47,0,0);
+ const circle=new THREE.Mesh(new THREE.RingGeometry(7.6,7.9,48),lineMat);circle.rotation.x=-Math.PI/2;circle.position.y=.18;g.add(circle);
+ for(const x of [-40,40]){const goal=new THREE.Mesh(new THREE.BoxGeometry(.6,5,12),white);goal.position.set(x,2.5,0);g.add(goal)}
+ // Simple perimeter fence and floodlights.
+ const fenceMat=mat(0x87958b);
+ for(const x of [-44,44]){const f=new THREE.Mesh(new THREE.BoxGeometry(.25,3,58),fenceMat);f.position.set(x,1.5,0);g.add(f)}
+ for(const z of [-29,29]){const f=new THREE.Mesh(new THREE.BoxGeometry(92,3,.25),fenceMat);f.position.set(0,1.5,z);g.add(f)}
+ for(const x of [-48,48])for(const z of [-31,31]){const pole=new THREE.Mesh(new THREE.CylinderGeometry(.16,.22,13,8),dark);pole.position.set(x,6.5,z);g.add(pole);const lamp=new THREE.Mesh(new THREE.BoxGeometry(2,.4,1),white);lamp.position.set(x,13,z);g.add(lamp)}
+ signBoard(name,cx,cz-34,26,0x176b43);
+}
+function tennisCentre(cx,cz){
+ const g=new THREE.Group();g.position.set(cx,0,cz);scene.add(g);
+ for(let c=0;c<3;c++){const z=(c-1)*30;const court=new THREE.Mesh(new THREE.BoxGeometry(22,.2,12),sportBlue);court.position.set(0,.06,z);g.add(court);
+  const ln=new THREE.MeshBasicMaterial({color:0xffffff});
+  for(const x of [-10.5,10.5]){const m=new THREE.Mesh(new THREE.BoxGeometry(.18,.04,11),ln);m.position.set(x,.19,z);g.add(m)}
+  const net=new THREE.Mesh(new THREE.BoxGeometry(.15,1,12),mat(0xe8e8df));net.position.set(0,.65,z);g.add(net)}
+ signBoard('LAGOS TENNIS CENTRE',cx,cz-65,28,0x245f94);
+}
+function basketballCentre(cx,cz){
+ const court=new THREE.Mesh(new THREE.BoxGeometry(38,.2,23),sportRed);court.position.set(cx,.05,cz);scene.add(court);
+ const ring=new THREE.Mesh(new THREE.RingGeometry(5,5.3,32),new THREE.MeshBasicMaterial({color:0xffffff,side:THREE.DoubleSide}));ring.rotation.x=-Math.PI/2;ring.position.set(cx,.18,cz);scene.add(ring);
+ signBoard('COMMUNITY BASKETBALL COURT',cx,cz-22,25,0x9b4036);
+}
+function marketCluster(cx,cz,label='LOCAL MARKET'){
+ for(let i=0;i<7;i++){const x=cx+(i%4)*13-20,z=cz+Math.floor(i/4)*15;makeBuilding(x,z,10,10,4,'market',i);const canopy=new THREE.Mesh(new THREE.BoxGeometry(10,.35,10),marketMat);canopy.position.set(x,4.4,z);scene.add(canopy)}
+ signBoard(label,cx,cz-18,30,0x9a5b23);
+}
+function compound(cx,cz,kind='residential',seed=0){
+ // Walled family compounds with gate, small yard and several low-rise blocks.
+ const wall=mat(0xb6ad9a),g=new THREE.Group();g.position.set(cx,0,cz);scene.add(g);
+ for(const [x,z,w,d] of [[0,-25,62,.7],[0,25,62,.7],[-31,0,.7,50],[31,0,.7,50]]){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,2.2,d),wall);m.position.set(x,1.1,z);g.add(m)
+ }
+ const gate=new THREE.Mesh(new THREE.BoxGeometry(8,2.4,.5),mat(0x354c40));gate.position.set(0,1.2,25);g.add(gate);
+ makeBuilding(cx-12,cz-8,22,17,10,kind,seed);makeBuilding(cx+13,cz-7,18,16,8,kind,seed+1);
+ const yard=new THREE.Mesh(new THREE.BoxGeometry(20,.12,16),grass);yard.position.set(cx,0,cz+13);scene.add(yard);
+}
+function buildDistrict(name,cx,cz,type,seed){
+ // arterial frontage, varied block fabric and a signature landmark per district.
+ if(type==='island'){
+  for(let i=0;i<10;i++){makeBuilding(cx+(i%5)*34-68,cz+Math.floor(i/5)*45-18,24,25,24+(i%4)*13,'office',seed+i)}
+  makeBuilding(cx,cz+90,70,34,68,'office',seed+20);signBoard(name.toUpperCase(),cx,cz-80,34,0x145b3c);
+ }else if(type==='market'){
+  marketCluster(cx,cz,name.toUpperCase());
+  for(let i=0;i<12;i++)makeBuilding(cx+(i%4)*29-44,cz+70+Math.floor(i/4)*25,18,18,8+(i%3)*3,'shop',seed+i);
+ }else if(type==='sports'){
+  fencedPitch(cx,cz,name.toUpperCase()+' FOOTBALL ARENA');
+  tennisCentre(cx+135,cz+5);basketballCentre(cx-135,cz+8);
+  makeBuilding(cx,cz+110,55,32,12,'mixed',seed);signBoard('SPORTS & RECREATION COMPLEX',cx,cz+88,35,0x176b43);
+ }else if(type==='civic'){
+  makeBuilding(cx-35,cz,45,38,22,'office',seed);makeBuilding(cx+35,cz,42,36,18,'office',seed+1);
+  makeBuilding(cx,cz+58,88,28,8,'mixed',seed+2);signBoard(name.toUpperCase(),cx,cz-48,34,0x205c82);
+ }else{
+  for(let i=0;i<18;i++){const x=cx+(i%6)*28-70,z=cz+Math.floor(i/6)*34-35;compound(x,z,'residential',seed+i)}
+  for(let i=0;i<7;i++)makeBuilding(cx+(i%4)*36-54,cz-100+Math.floor(i/4)*28,24,18,5+(i%2)*2,'shop',seed+i);
+  signBoard(name.toUpperCase(),cx,cz-135,28,0x24613d);
+ }
+}
+// Districts distributed around the enlarged, connected city. Names are inspired
+// by real Lagos urban character; this is a stylised game map, not an exact survey.
+const districtDefs=[
+ ['VICTORIA ISLAND',0,-420,'island'],['IKOYI',420,-420,'island'],['LEKKI PHASE 1',760,-120,'residential'],
+ ['YABA',-420,-120,'civic'],['SURULERE',-700,260,'sports'],['IKEJA',-180,520,'civic'],
+ ['OSHODI MARKET',-780,-360,'market'],['MUSHIN',-470,650,'market'],['AJAH',720,520,'residential'],
+ ['EPE WATERFRONT',930,760,'civic'],['MAINLAND SPORTS PARK',-70,120,'sports'],['AGEGE',-880,20,'residential'],
+ ['FESTAC TOWN',-760,760,'residential'],['APAPA PORT',-980,520,'civic']
+];
+districtDefs.forEach((d,i)=>buildDistrict(d[0],d[1],d[2],d[3],i*13));
+
+// Additional dense mixed-use urban fabric in every remaining block to avoid
+// a sparse "island of buildings" effect, with yards, kiosks and roadside palms.
+let citySeed=0;
+for(let gx=-900;gx<=900;gx+=210){
+ for(let gz=-900;gz<=900;gz+=210){
+  const nearLandmark=districtDefs.some(d=>Math.hypot(gx-d[1],gz-d[2])<155);
+  if(nearLandmark)continue;
+  for(let n=0;n<5;n++){
+   const x=gx+(n%3)*48-48+(Math.random()-.5)*10;
+   const z=gz+Math.floor(n/3)*54-20+(Math.random()-.5)*10;
+   if(Math.abs(x)<35&&Math.abs(z)<35)continue;
+   const h=7+Math.random()*22;
+   makeBuilding(x,z,12+Math.random()*10,12+Math.random()*10,h,n%4===0?'shop':'residential',citySeed++);
+  }
+  if((Math.round((gx+900)/210)+Math.round((gz+900)/210))%3===0){
+   for(let t=0;t<3;t++)palmTree(gx-55+t*55,gz+65,0.8+Math.random()*.25);
+  }
+ }
+}
+// Industrial port yards, container stacks and cranes near Apapa.
+for(let i=0;i<24;i++){
+ const x=-930+(i%6)*32,z=570+Math.floor(i/6)*34;
+ const c=[0xb54e35,0x2f6788,0xd0a447,0x4c735c][i%4];
+ block(25,7,12,mat(c),x,0,z);
+}
+for(let i=0;i<3;i++){
+ const x=-1020+i*65;block(2,48,2,dark,x,0,650);block(46,2,2,mat(0x58645e),x,46,650);
+}
+
 // Customizable human avatar: varied skin tones, face, hair and clothing.
 const player=new THREE.Group();scene.add(player);
 let body;
@@ -106,7 +292,7 @@ gltfLoader.load('./models/The_Miami_Dealer.glb',gltf=>{
   console.warn('Detailed character could not load:',error);rebuildAvatar(avatarSettings);player.visible=true;avatarReady=true;loadingBadge.textContent='Using local character preview';setTimeout(()=>loadingBadge.remove(),2600);
 });
 const rainGroup=new THREE.Group();scene.add(rainGroup);const drops=[];
-for(let i=0;i<500;i++){const d=new THREE.Mesh(new THREE.BoxGeometry(.025,.45,.025),new THREE.MeshBasicMaterial({color:0xd9efff,transparent:true,opacity:.55}));d.position.set((Math.random()-.5)*70,Math.random()*35,(Math.random()-.5)*70);rainGroup.add(d);drops.push(d)}
+for(let i=0;i<500;i++){const d=new THREE.Mesh(new THREE.BoxGeometry(.025,.45,.025),new THREE.MeshBasicMaterial({color:0xd9efff,transparent:true,opacity:.55}));d.position.set((Math.random()-.5)*180,Math.random()*35,(Math.random()-.5)*180);rainGroup.add(d);drops.push(d)}
 rainGroup.visible=false;
 let cameraMode=0,weather='Clear',worldMinutes=12*60,daySpeed=3,lookAngle=0,lookPitch=.12,cameraDistance=157.5;
 const modes=['THIRD PERSON','FIRST PERSON','ISOMETRIC'];
@@ -229,7 +415,7 @@ window.addEventListener('wheel',e=>{
   updateCamera();
 },{passive:false});
 const touchDirs={};document.querySelectorAll('.mobile-pad button').forEach(b=>{const d=b.dataset.dir;b.addEventListener('pointerdown',e=>{e.preventDefault();touchDirs[d]=true});['pointerup','pointerleave','pointercancel'].forEach(ev=>b.addEventListener(ev,()=>touchDirs[d]=false))});
-function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);worldMinutes=(worldMinutes+dt*daySpeed)%1440;let h=Math.floor(worldMinutes/60),m=Math.floor(worldMinutes%60);document.querySelector('#clock').textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');setDay();let forward=(keys.w||keys.arrowup||touchDirs.up?1:0)-(keys.s||keys.arrowdown||touchDirs.down?1:0);let side=(keys.d||keys.arrowright||touchDirs.right?1:0)-(keys.a||keys.arrowleft||touchDirs.left?1:0);moving=!!(forward||side);if(avatarMixer){const desired=Object.keys(avatarActions).find(n=>moving?n.includes('walk-loop'):n.includes('idle'))||Object.keys(avatarActions)[0];const next=avatarActions[desired];if(next&&next!==activeAvatarAction){next.reset().fadeIn(.2).play();activeAvatarAction?.fadeOut(.2);activeAvatarAction=next;}avatarMixer.update(dt)}if(moving){const speed=dt*7;const dx=(Math.sin(lookAngle)*forward+Math.cos(lookAngle)*side)*speed;const dz=(Math.cos(lookAngle)*forward-Math.sin(lookAngle)*side)*speed;player.position.x+=dx;player.position.z+=dz;player.rotation.y=Math.atan2(dx,dz);player.position.x=Math.max(-8,Math.min(8,player.position.x));player.position.z=Math.max(-120,Math.min(120,player.position.z));if(body)body.position.y=1.05+Math.sin(performance.now()*.012)*.045}if(weather==='Rain'){for(const d of drops){d.position.y-=dt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*70;d.position.z=player.position.z+(Math.random()-.5)*70}}}updateCamera();renderer.render(scene,camera)}
+function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);worldMinutes=(worldMinutes+dt*daySpeed)%1440;let h=Math.floor(worldMinutes/60),m=Math.floor(worldMinutes%60);document.querySelector('#clock').textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');setDay();let forward=(keys.w||keys.arrowup||touchDirs.up?1:0)-(keys.s||keys.arrowdown||touchDirs.down?1:0);let side=(keys.d||keys.arrowright||touchDirs.right?1:0)-(keys.a||keys.arrowleft||touchDirs.left?1:0);moving=!!(forward||side);const districtEl=document.querySelector('.stat-row b');if(districtEl){let nearest=districtDefs.reduce((best,d)=>{const dist=Math.hypot(player.position.x-d[1],player.position.z-d[2]);return dist<best.dist?{name:d[0],dist}:best},{name:'Lagos Mainland',dist:1e9});districtEl.textContent=nearest.dist<260?nearest.name:'Lagos';}if(avatarMixer){const desired=Object.keys(avatarActions).find(n=>moving?n.includes('walk-loop'):n.includes('idle'))||Object.keys(avatarActions)[0];const next=avatarActions[desired];if(next&&next!==activeAvatarAction){next.reset().fadeIn(.2).play();activeAvatarAction?.fadeOut(.2);activeAvatarAction=next;}avatarMixer.update(dt)}if(moving){const speed=dt*13;const dx=(Math.sin(lookAngle)*forward+Math.cos(lookAngle)*side)*speed;const dz=(Math.cos(lookAngle)*forward-Math.sin(lookAngle)*side)*speed;player.position.x+=dx;player.position.z+=dz;player.rotation.y=Math.atan2(dx,dz);player.position.x=Math.max(-1010,Math.min(1010,player.position.x));player.position.z=Math.max(-1010,Math.min(1010,player.position.z));if(body)body.position.y=1.05+Math.sin(performance.now()*.012)*.045}if(weather==='Rain'){for(const d of drops){d.position.y-=dt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*180;d.position.z=player.position.z+(Math.random()-.5)*180}}}updateCamera();renderer.render(scene,camera)}
 updateCamera();
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
