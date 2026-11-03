@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.16 — view-based building visibility and lighter rendering
+// THIS IS LAGOS v0.19 — root-motion correction, building collision and road paint fixes
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -24,7 +24,8 @@ for(let x=-120;x<=120;x+=12){block(.12,.025,260,mat(0xe5e9df),x,.08,0)}
 // lane dashes
 for(let z=-125;z<130;z+=9)block(.18,.025,3,white,0,.09,z);
 const buildingMats=[0xe7e8d9,0xd7e2d9,0xd8d8cf,0xe8dfce,0xc7d9d0].map(c=>mat(c));
-function building(x,z,w,d,h,idx){const m=buildingMats[idx%buildingMats.length];block(w,h,d,m,x,0,z);block(w+.15,.3,d+.15,green,x,h-.15,z);for(let y=2;y<h-1;y+=2.6){for(let xx=-w/2+1;xx<w/2-.5;xx+=2){const win=new THREE.Mesh(new THREE.BoxGeometry(.85,1.15,.08),glassMat);win.position.set(x+xx,y,z+d/2+.045);scene.add(win);const win2=win.clone();win2.position.z=z-d/2-.045;scene.add(win2)}}}
+const buildingColliders=[];
+function building(x,z,w,d,h,idx){const m=buildingMats[idx%buildingMats.length];block(w,h,d,m,x,0,z);buildingColliders.push({minX:x-w/2-.8,maxX:x+w/2+.8,minZ:z-d/2-.8,maxZ:z+d/2+.8});block(w+.15,.3,d+.15,green,x,h-.15,z);for(let y=2;y<h-1;y+=2.6){for(let xx=-w/2+1;xx<w/2-.5;xx+=2){const win=new THREE.Mesh(new THREE.BoxGeometry(.85,1.15,.08),glassMat);win.position.set(x+xx,y,z+d/2+.045);scene.add(win);const win2=win.clone();win2.position.z=z-d/2-.045;scene.add(win2)}}}
 for(let i=0;i<9;i++){const z=-65+i*16;building(-20,z,8,10,12+(i%3)*5,i);building(20,z,9,11,16+(i%4)*6,i+1)}
 // farther skyline
 for(let i=0;i<34;i++){let x=(Math.random()-.5)*125,z=-100+Math.random()*180;if(Math.abs(x)<27)continue;building(x,z,7+Math.random()*8,7+Math.random()*8,8+Math.random()*28,i+2)}
@@ -142,8 +143,10 @@ for(let p=-980;p<=980;p+=140){if(Math.abs(p%210)<1)continue;for(let q=-910;q<=91
 for(let x=-840;x<=840;x+=210){
  for(let z=-840;z<=840;z+=210){
   for(let n=-3;n<=3;n++){
-   block(1.2,.035,9,white,x+n*2.3,.025,z-17);
-   block(9,.035,1.2,white,x-17,.025,z+n*2.3);
+   // Zebra bars are thin paint, lifted slightly above the road so they do not
+   // z-fight with the asphalt or appear embedded in the ground.
+   roadPaint(1.2,9,x+n*2.3,z-17,paintWhite,.045);
+   roadPaint(9,1.2,x-17,z+n*2.3,paintWhite,.045);
   }
  }
 }
@@ -169,6 +172,7 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
  // Keep the complete building in memory, but skip drawing it when outside the camera view.
  const visibilityRadius=Math.sqrt(w*w+d*d+h*h)*0.62;
  viewCulledBuildings.push({group:obj,sphere:new THREE.Sphere(new THREE.Vector3(x,h/2,z),visibilityRadius)});
+ buildingColliders.push({minX:x-w/2-.8,maxX:x+w/2+.8,minZ:z-d/2-.8,maxZ:z+d/2+.8});
  const main=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),wall);main.position.y=h/2;main.castShadow=false;main.receiveShadow=false;obj.add(main);
  const roof=new THREE.Mesh(new THREE.BoxGeometry(w+.35,.5,d+.35),roofPalette[Math.abs(seed+2)%roofPalette.length]);roof.position.y=h+.18;roof.castShadow=false;obj.add(roof);
  // Lagos residential facades: recessed-looking windows, balcony slabs,
@@ -438,7 +442,22 @@ gltfLoader.load('./models/The_Miami_Dealer.glb',gltf=>{
   const scaledBox=new THREE.Box3().setFromObject(avatarModel);avatarModel.position.y-=scaledBox.min.y;
   avatarModel.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true}});
   player.add(avatarModel);player.visible=true;avatarReady=true;
-  if(gltf.animations?.length){avatarMixer=new THREE.AnimationMixer(avatarModel);for(const clip of gltf.animations)avatarActions[clip.name.toLowerCase()]=avatarMixer.clipAction(clip);const idle=Object.keys(avatarActions).find(n=>n.includes('idle'))||Object.keys(avatarActions)[0];activeAvatarAction=avatarActions[idle];activeAvatarAction?.play();}
+  if(gltf.animations?.length){
+    // The game controller moves `player`; root translation inside a clip would
+    // move the rig a second time and can cause periodic backwards snapping.
+    let removedRootTracks=0;
+    const safeClips=gltf.animations.map(clip=>{
+      const before=clip.tracks.length;
+      clip.tracks=clip.tracks.filter(track=>!/^root\.position(?:\[.*\])?$/i.test(track.name));
+      removedRootTracks+=before-clip.tracks.length;
+      return clip;
+    });
+    if(removedRootTracks)console.info(`This Is Lagos: removed ${removedRootTracks} root-position animation track(s) to prevent root-motion conflicts.`);
+    avatarMixer=new THREE.AnimationMixer(avatarModel);
+    for(const clip of safeClips)avatarActions[clip.name.toLowerCase()]=avatarMixer.clipAction(clip);
+    const idle=Object.keys(avatarActions).find(n=>n.includes('idle'))||Object.keys(avatarActions)[0];
+    activeAvatarAction=avatarActions[idle];activeAvatarAction?.play();
+  }
   loadingBadge.remove();toast('Character loaded');
 },undefined,error=>{
   console.warn('Detailed character could not load:',error);rebuildAvatar(avatarSettings);player.visible=true;avatarReady=true;loadingBadge.textContent='Using local character preview';setTimeout(()=>loadingBadge.remove(),2600);
@@ -589,7 +608,15 @@ function updateVisibleBuildings(){
   item.group.visible=viewFrustum.intersectsSphere(item.sphere);
  }
 }
-function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);worldMinutes=(worldMinutes+dt*daySpeed)%1440;let h=Math.floor(worldMinutes/60),m=Math.floor(worldMinutes%60);document.querySelector('#clock').textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');setDay();let forward=(keys.w||keys.arrowup||touchDirs.up?1:0)-(keys.s||keys.arrowdown||touchDirs.down?1:0);let side=(keys.d||keys.arrowright||touchDirs.right?1:0)-(keys.a||keys.arrowleft||touchDirs.left?1:0);moving=!!(forward||side);const districtEl=document.querySelector('.stat-row b');if(districtEl){let nearest=districtDefs.reduce((best,d)=>{const dist=Math.hypot(player.position.x-d[1],player.position.z-d[2]);return dist<best.dist?{name:d[0],dist}:best},{name:'Lagos Mainland',dist:1e9});districtEl.textContent=nearest.dist<260?nearest.name:'Lagos';}if(avatarMixer){const desired=Object.keys(avatarActions).find(n=>moving?n.includes('walk-loop'):n.includes('idle'))||Object.keys(avatarActions)[0];const next=avatarActions[desired];if(next&&next!==activeAvatarAction){next.reset().fadeIn(.2).play();activeAvatarAction?.fadeOut(.2);activeAvatarAction=next;}avatarMixer.update(dt)}if(moving){const speed=dt*38;const dx=(Math.sin(lookAngle)*forward+Math.cos(lookAngle)*side)*speed;const dz=(Math.cos(lookAngle)*forward-Math.sin(lookAngle)*side)*speed;player.position.x+=dx;player.position.z+=dz;player.rotation.y=Math.atan2(dx,dz);player.position.x=Math.max(-1010,Math.min(1010,player.position.x));player.position.z=Math.max(-1010,Math.min(1010,player.position.z));if(body)body.position.y=1.05+Math.sin(performance.now()*.012)*.045}if(weather==='Rain'){for(const d of drops){d.position.y-=dt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*180;d.position.z=player.position.z+(Math.random()-.5)*180}}}updateCamera();if((cullFrame++%3)===0)updateVisibleBuildings();renderer.render(scene,camera)}
+function collidesWithBuilding(x,z){
+ for(const b of buildingColliders){if(x>b.minX&&x<b.maxX&&z>b.minZ&&z<b.maxZ)return true;}
+ return false;
+}
+function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);worldMinutes=(worldMinutes+dt*daySpeed)%1440;let h=Math.floor(worldMinutes/60),m=Math.floor(worldMinutes%60);document.querySelector('#clock').textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');setDay();let forward=(keys.w||keys.arrowup||touchDirs.up?1:0)-(keys.s||keys.arrowdown||touchDirs.down?1:0);let side=(keys.d||keys.arrowright||touchDirs.right?1:0)-(keys.a||keys.arrowleft||touchDirs.left?1:0);moving=!!(forward||side);const districtEl=document.querySelector('.stat-row b');if(districtEl){let nearest=districtDefs.reduce((best,d)=>{const dist=Math.hypot(player.position.x-d[1],player.position.z-d[2]);return dist<best.dist?{name:d[0],dist}:best},{name:'Lagos Mainland',dist:1e9});districtEl.textContent=nearest.dist<260?nearest.name:'Lagos';}if(avatarMixer){const names=Object.keys(avatarActions);const desired=(moving?(names.find(n=>n.includes('walk'))||names.find(n=>n.includes('run'))):(names.find(n=>n.includes('idle'))))||names[0];const next=avatarActions[desired];if(next&&next!==activeAvatarAction){next.reset().fadeIn(.2).play();activeAvatarAction?.fadeOut(.2);activeAvatarAction=next;}avatarMixer.update(dt)}if(moving){let ix=Math.sin(lookAngle)*forward+Math.cos(lookAngle)*side;let iz=Math.cos(lookAngle)*forward-Math.sin(lookAngle)*side;const inputLength=Math.hypot(ix,iz)||1;ix/=inputLength;iz/=inputLength;const speed=dt*38;const dx=ix*speed,dz=iz*speed;const nextX=Math.max(-1010,Math.min(1010,player.position.x+dx));const nextZ=Math.max(-1010,Math.min(1010,player.position.z+dz));
+ // Axis-separated collision lets the player slide along building walls.
+ if(!collidesWithBuilding(nextX,player.position.z))player.position.x=nextX;
+ if(!collidesWithBuilding(player.position.x,nextZ))player.position.z=nextZ;
+ player.rotation.y=Math.atan2(dx,dz);if(body)body.position.y=1.05+Math.sin(performance.now()*.012)*.045}if(weather==='Rain'){for(const d of drops){d.position.y-=dt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*180;d.position.z=player.position.z+(Math.random()-.5)*180}}}updateCamera();if((cullFrame++%3)===0)updateVisibleBuildings();renderer.render(scene,camera)}
 updateCamera();
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
