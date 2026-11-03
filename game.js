@@ -162,7 +162,7 @@ function addWaterTank(parent,x,y,z,scale=1){
  legs.position.set(x,y+.12*scale,z);parent.add(legs);
 }
 function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
- if(!clearBuildingPlot(x,z,w,d,5)) return null;
+ if(!clearBuildingPlot(x,z,w,d,1.5)) return null;
  const wall=wallPalette[Math.abs(seed)%wallPalette.length];
  const obj=new THREE.Group();obj.position.set(x,0,z);scene.add(obj);
  const main=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),wall);main.position.y=h/2;main.castShadow=true;main.receiveShadow=true;obj.add(main);
@@ -327,22 +327,30 @@ const districtDefs=[
 ];
 districtDefs.forEach((d,i)=>buildDistrict(d[0],d[1],d[2],d[3],i*13));
 
-// Additional dense mixed-use urban fabric in every remaining block to avoid
-// a sparse "island of buildings" effect, with yards, kiosks and roadside palms.
-let citySeed=0;
-for(let gx=-900;gx<=900;gx+=210){
- for(let gz=-900;gz<=900;gz+=210){
-  const nearLandmark=districtDefs.some(d=>Math.hypot(gx-d[1],gz-d[2])<155);
-  if(nearLandmark)continue;
-  for(let n=0;n<5;n++){
-   const x=gx+(n%3)*48-48+(Math.random()-.5)*10;
-   const z=gz+Math.floor(n/3)*54-20+(Math.random()-.5)*10;
-   if(Math.abs(x)<35&&Math.abs(z)<35)continue;
-   const h=7+Math.random()*22;
-   makeBuilding(x,z,12+Math.random()*10,12+Math.random()*10,h,n%4===0?'shop':'residential',citySeed++);
+// v0.14: dense Lagos housing infill.
+// Place houses in the centres of actual street blocks, not on road surfaces.
+// The 70m local grid leaves usable plots between the 8m streets; compact
+// footprints keep a generous clear corridor around every road and junction.
+let citySeed=1000;
+for(let gx=-945;gx<=945;gx+=70){
+ for(let gz=-945;gz<=945;gz+=70){
+  const nearLandmark=districtDefs.some(d=>Math.hypot(gx-d[1],gz-d[2])<125);
+  // Keep landmark footprints and the port/waterfront clear; ordinary blocks
+  // around them still receive housing on the surrounding street grid.
+  if(nearLandmark) continue;
+  if(gx>650 && gz>650) continue;
+  const blockIndex=Math.round((gx+945)/70)+Math.round((gz+945)/70);
+  // Two compact houses per local block, with a small shared setback.
+  for(let side of [-1,1]){
+   const x=gx+side*15;
+   const z=gz+((blockIndex%2===0)?-8:8);
+   const kind=(blockIndex%5===0)?'shop':(blockIndex%3===0?'tenement':'residential');
+   const height=kind==='shop'?5:8+(Math.abs(Math.round(x+z))%4)*2;
+   makeBuilding(x,z,15,17,height,kind,citySeed++);
   }
-  if((Math.round((gx+900)/210)+Math.round((gz+900)/210))%3===0){
-   for(let t=0;t<3;t++)palmTree(gx-55+t*55,gz+65,0.8+Math.random()*.25);
+  if(blockIndex%4===0){
+   const px=gx+(blockIndex%2===0?0:25), pz=gz+25;
+   palmTree(px,pz,.72);
   }
  }
 }
