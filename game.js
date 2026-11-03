@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.19 — root-motion correction, building collision and road paint fixes
+// THIS IS LAGOS v0.20 — performance optimisation, spatial collision grid and root-motion fix
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -8,12 +8,13 @@ scene.background=new THREE.Color(0x9fc9d4);
 scene.fog=new THREE.Fog(0x9fc9d4,520,2100);
 const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,.1,4200);
 camera.position.set(0,5,9);
-const renderer=new THREE.WebGLRenderer({antialias:true});
-renderer.setPixelRatio(Math.min(devicePixelRatio,1.25));renderer.setSize(innerWidth,innerHeight);
-renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFShadowMap;
+const renderer=new THREE.WebGLRenderer({antialias:false, powerPreference:'high-performance'});
+// Lower pixel ratio and disable realtime shadow maps to reduce GPU load on large scenes.
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.0));renderer.setSize(innerWidth,innerHeight);
+renderer.shadowMap.enabled=false;
 renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;mount.appendChild(renderer.domElement);
 scene.add(new THREE.HemisphereLight(0xe7fff0,0x71856d,2));
-const sun=new THREE.DirectionalLight(0xfff2d5,2.5);sun.position.set(-35,55,25);sun.castShadow=true;sun.shadow.mapSize.set(1024,1024);sun.shadow.camera.left=-70;sun.shadow.camera.right=70;sun.shadow.camera.top=70;sun.shadow.camera.bottom=-70;scene.add(sun);
+const sun=new THREE.DirectionalLight(0xfff2d5,2.5);sun.position.set(-35,55,25);sun.castShadow=false;scene.add(sun);
 const mat=(color,roughness=.85)=>new THREE.MeshStandardMaterial({color,roughness});
 const grass=mat(0x7eaa78),road=mat(0x343d3b),sidewalk=mat(0xc9d2c8),white=mat(0xf1f5e9),green=mat(0x18824a),glassMat=new THREE.MeshStandardMaterial({color:0x8eb8b4,roughness:.25,metalness:.15}),dark=mat(0x263a31);
 function block(w,h,d,m,x,y,z){const o=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m);o.position.set(x,y+h/2,z);o.castShadow=true;o.receiveShadow=true;scene.add(o);return o}
@@ -440,7 +441,7 @@ gltfLoader.load('./models/The_Miami_Dealer.glb',gltf=>{
   const box=new THREE.Box3().setFromObject(avatarModel);const size=box.getSize(new THREE.Vector3());
   const height=size.y||2.3;avatarModel.scale.setScalar(2.35/height);
   const scaledBox=new THREE.Box3().setFromObject(avatarModel);avatarModel.position.y-=scaledBox.min.y;
-  avatarModel.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true}});
+  avatarModel.traverse(o=>{if(o.isMesh){o.castShadow=false;o.receiveShadow=false}});
   player.add(avatarModel);player.visible=true;avatarReady=true;
   if(gltf.animations?.length){
     // The game controller moves `player`; root translation inside a clip would
@@ -608,11 +609,26 @@ function updateVisibleBuildings(){
   item.group.visible=viewFrustum.intersectsSphere(item.sphere);
  }
 }
+// Index building footprints into a spatial grid once. Movement checks now inspect
+// only the small set of buildings in the player's current grid cell, not the whole city.
+const COLLISION_CELL_SIZE=64;
+const collisionGrid=new Map();
+function collisionCellKey(cx,cz){return `${cx},${cz}`}
+for(const b of buildingColliders){
+ const minCX=Math.floor(b.minX/COLLISION_CELL_SIZE),maxCX=Math.floor(b.maxX/COLLISION_CELL_SIZE);
+ const minCZ=Math.floor(b.minZ/COLLISION_CELL_SIZE),maxCZ=Math.floor(b.maxZ/COLLISION_CELL_SIZE);
+ for(let cx=minCX;cx<=maxCX;cx++)for(let cz=minCZ;cz<=maxCZ;cz++){
+  const key=collisionCellKey(cx,cz);let list=collisionGrid.get(key);if(!list){list=[];collisionGrid.set(key,list)}list.push(b);
+ }
+}
 function collidesWithBuilding(x,z){
- for(const b of buildingColliders){if(x>b.minX&&x<b.maxX&&z>b.minZ&&z<b.maxZ)return true;}
+ const list=collisionGrid.get(collisionCellKey(Math.floor(x/COLLISION_CELL_SIZE),Math.floor(z/COLLISION_CELL_SIZE)));
+ if(!list)return false;
+ for(const b of list){if(x>b.minX&&x<b.maxX&&z>b.minZ&&z<b.maxZ)return true;}
  return false;
 }
-function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);worldMinutes=(worldMinutes+dt*daySpeed)%1440;let h=Math.floor(worldMinutes/60),m=Math.floor(worldMinutes%60);document.querySelector('#clock').textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');setDay();let forward=(keys.w||keys.arrowup||touchDirs.up?1:0)-(keys.s||keys.arrowdown||touchDirs.down?1:0);let side=(keys.d||keys.arrowright||touchDirs.right?1:0)-(keys.a||keys.arrowleft||touchDirs.left?1:0);moving=!!(forward||side);const districtEl=document.querySelector('.stat-row b');if(districtEl){let nearest=districtDefs.reduce((best,d)=>{const dist=Math.hypot(player.position.x-d[1],player.position.z-d[2]);return dist<best.dist?{name:d[0],dist}:best},{name:'Lagos Mainland',dist:1e9});districtEl.textContent=nearest.dist<260?nearest.name:'Lagos';}if(avatarMixer){const names=Object.keys(avatarActions);const desired=(moving?(names.find(n=>n.includes('walk'))||names.find(n=>n.includes('run'))):(names.find(n=>n.includes('idle'))))||names[0];const next=avatarActions[desired];if(next&&next!==activeAvatarAction){next.reset().fadeIn(.2).play();activeAvatarAction?.fadeOut(.2);activeAvatarAction=next;}avatarMixer.update(dt)}if(moving){let ix=Math.sin(lookAngle)*forward+Math.cos(lookAngle)*side;let iz=Math.cos(lookAngle)*forward-Math.sin(lookAngle)*side;const inputLength=Math.hypot(ix,iz)||1;ix/=inputLength;iz/=inputLength;const speed=dt*38;const dx=ix*speed,dz=iz*speed;const nextX=Math.max(-1010,Math.min(1010,player.position.x+dx));const nextZ=Math.max(-1010,Math.min(1010,player.position.z+dz));
+let uiUpdateElapsed=0;
+function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);worldMinutes=(worldMinutes+dt*daySpeed)%1440;uiUpdateElapsed+=dt;if(uiUpdateElapsed>=.25){uiUpdateElapsed=0;let h=Math.floor(worldMinutes/60),m=Math.floor(worldMinutes%60);const clockEl=document.querySelector('#clock');if(clockEl)clockEl.textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');const districtEl=document.querySelector('.stat-row b');if(districtEl){let nearest=districtDefs.reduce((best,d)=>{const dist=Math.hypot(player.position.x-d[1],player.position.z-d[2]);return dist<best.dist?{name:d[0],dist}:best},{name:'Lagos Mainland',dist:1e9});districtEl.textContent=nearest.dist<260?nearest.name:'Lagos';}setDay();}let forward=(keys.w||keys.arrowup||touchDirs.up?1:0)-(keys.s||keys.arrowdown||touchDirs.down?1:0);let side=(keys.d||keys.arrowright||touchDirs.right?1:0)-(keys.a||keys.arrowleft||touchDirs.left?1:0);moving=!!(forward||side);if(avatarMixer){const names=Object.keys(avatarActions);const desired=(moving?(names.find(n=>n.includes('walk'))||names.find(n=>n.includes('run'))):(names.find(n=>n.includes('idle'))))||names[0];const next=avatarActions[desired];if(next&&next!==activeAvatarAction){next.reset().fadeIn(.2).play();activeAvatarAction?.fadeOut(.2);activeAvatarAction=next;}avatarMixer.update(dt)}if(moving){let ix=Math.sin(lookAngle)*forward+Math.cos(lookAngle)*side;let iz=Math.cos(lookAngle)*forward-Math.sin(lookAngle)*side;const inputLength=Math.hypot(ix,iz)||1;ix/=inputLength;iz/=inputLength;const speed=dt*38;const dx=ix*speed,dz=iz*speed;const nextX=Math.max(-1010,Math.min(1010,player.position.x+dx));const nextZ=Math.max(-1010,Math.min(1010,player.position.z+dz));
  // Axis-separated collision lets the player slide along building walls.
  if(!collidesWithBuilding(nextX,player.position.z))player.position.x=nextX;
  if(!collidesWithBuilding(player.position.x,nextZ))player.position.z=nextZ;
