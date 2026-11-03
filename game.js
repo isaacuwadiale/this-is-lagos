@@ -563,9 +563,19 @@ window.addEventListener('blur',()=>stopCameraDrag());
 window.addEventListener('wheel',e=>{
   if(!document.querySelector('#game').contains(e.target)||cameraMode!==0)return;
   e.preventDefault();
-  cameraDistance=Math.max(90,Math.min(240,cameraDistance+Math.sign(e.deltaY)*5));
+  cameraDistance=Math.max(45,Math.min(260,cameraDistance+Math.sign(e.deltaY)*7));
   updateCamera();
 },{passive:false});
+const zoomSlider=document.querySelector('#zoomSlider');
+function setCameraZoom(value){
+ cameraDistance=45+(Number(value)/100)*215;
+ updateCamera();
+ if(zoomSlider)zoomSlider.value=String(value);
+}
+document.querySelector('#zoomInBtn')?.addEventListener('click',()=>setCameraZoom(Math.max(0,Number(zoomSlider?.value??52)-5)));
+document.querySelector('#zoomOutBtn')?.addEventListener('click',()=>setCameraZoom(Math.min(100,Number(zoomSlider?.value??52)+5)));
+document.querySelector('#zoomResetBtn')?.addEventListener('click',()=>setCameraZoom(52));
+zoomSlider?.addEventListener('input',e=>setCameraZoom(e.target.value));
 const touchDirs={};document.querySelectorAll('.mobile-pad button').forEach(b=>{const d=b.dataset.dir;b.addEventListener('pointerdown',e=>{e.preventDefault();touchDirs[d]=true});['pointerup','pointerleave','pointercancel'].forEach(ev=>b.addEventListener(ev,()=>touchDirs[d]=false))});
 const viewFrustum=new THREE.Frustum();
 const viewProjection=new THREE.Matrix4();
@@ -579,7 +589,7 @@ function updateVisibleBuildings(){
   item.group.visible=viewFrustum.intersectsSphere(item.sphere);
  }
 }
-function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);worldMinutes=(worldMinutes+dt*daySpeed)%1440;let h=Math.floor(worldMinutes/60),m=Math.floor(worldMinutes%60);document.querySelector('#clock').textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');setDay();let forward=(keys.w||keys.arrowup||touchDirs.up?1:0)-(keys.s||keys.arrowdown||touchDirs.down?1:0);let side=(keys.d||keys.arrowright||touchDirs.right?1:0)-(keys.a||keys.arrowleft||touchDirs.left?1:0);moving=!!(forward||side);const districtEl=document.querySelector('.stat-row b');if(districtEl){let nearest=districtDefs.reduce((best,d)=>{const dist=Math.hypot(player.position.x-d[1],player.position.z-d[2]);return dist<best.dist?{name:d[0],dist}:best},{name:'Lagos Mainland',dist:1e9});districtEl.textContent=nearest.dist<260?nearest.name:'Lagos';}if(avatarMixer){const desired=Object.keys(avatarActions).find(n=>moving?n.includes('walk-loop'):n.includes('idle'))||Object.keys(avatarActions)[0];const next=avatarActions[desired];if(next&&next!==activeAvatarAction){next.reset().fadeIn(.2).play();activeAvatarAction?.fadeOut(.2);activeAvatarAction=next;}avatarMixer.update(dt)}if(moving){const speed=dt*13;const dx=(Math.sin(lookAngle)*forward+Math.cos(lookAngle)*side)*speed;const dz=(Math.cos(lookAngle)*forward-Math.sin(lookAngle)*side)*speed;player.position.x+=dx;player.position.z+=dz;player.rotation.y=Math.atan2(dx,dz);player.position.x=Math.max(-1010,Math.min(1010,player.position.x));player.position.z=Math.max(-1010,Math.min(1010,player.position.z));if(body)body.position.y=1.05+Math.sin(performance.now()*.012)*.045}if(weather==='Rain'){for(const d of drops){d.position.y-=dt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*180;d.position.z=player.position.z+(Math.random()-.5)*180}}}updateCamera();if((cullFrame++%3)===0)updateVisibleBuildings();renderer.render(scene,camera)}
+function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);worldMinutes=(worldMinutes+dt*daySpeed)%1440;let h=Math.floor(worldMinutes/60),m=Math.floor(worldMinutes%60);document.querySelector('#clock').textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');setDay();let forward=(keys.w||keys.arrowup||touchDirs.up?1:0)-(keys.s||keys.arrowdown||touchDirs.down?1:0);let side=(keys.d||keys.arrowright||touchDirs.right?1:0)-(keys.a||keys.arrowleft||touchDirs.left?1:0);moving=!!(forward||side);const districtEl=document.querySelector('.stat-row b');if(districtEl){let nearest=districtDefs.reduce((best,d)=>{const dist=Math.hypot(player.position.x-d[1],player.position.z-d[2]);return dist<best.dist?{name:d[0],dist}:best},{name:'Lagos Mainland',dist:1e9});districtEl.textContent=nearest.dist<260?nearest.name:'Lagos';}if(avatarMixer){const desired=Object.keys(avatarActions).find(n=>moving?n.includes('walk-loop'):n.includes('idle'))||Object.keys(avatarActions)[0];const next=avatarActions[desired];if(next&&next!==activeAvatarAction){next.reset().fadeIn(.2).play();activeAvatarAction?.fadeOut(.2);activeAvatarAction=next;}avatarMixer.update(dt)}if(moving){const speed=dt*38;const dx=(Math.sin(lookAngle)*forward+Math.cos(lookAngle)*side)*speed;const dz=(Math.cos(lookAngle)*forward-Math.sin(lookAngle)*side)*speed;player.position.x+=dx;player.position.z+=dz;player.rotation.y=Math.atan2(dx,dz);player.position.x=Math.max(-1010,Math.min(1010,player.position.x));player.position.z=Math.max(-1010,Math.min(1010,player.position.z));if(body)body.position.y=1.05+Math.sin(performance.now()*.012)*.045}if(weather==='Rain'){for(const d of drops){d.position.y-=dt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*180;d.position.z=player.position.z+(Math.random()-.5)*180}}}updateCamera();if((cullFrame++%3)===0)updateVisibleBuildings();renderer.render(scene,camera)}
 updateCamera();
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});

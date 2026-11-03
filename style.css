@@ -27,3 +27,19 @@
 .left-panel .muted,.left-panel .stat-row,.left-panel .stat-row b{color:#d4e7d9!important}
 .control,.bottom-hint,.mobile-pad button{background:rgba(12,42,27,.62)!important;color:#f4fff6!important;border-color:rgba(255,255,255,.24)!important;backdrop-filter:blur(16px)}
 .modal-body,.modal h2{color:#f0fff4}
+
+/* v0.17: lightweight 90%-transparent interface */
+.glass,.topbar,.control,.bottom-hint,.zoom-panel,.mobile-pad,
+.activity-panel,.modal,.feed-card,.feed-links {
+ background-color:rgba(8,25,17,.10)!important;
+ background-image:none!important;
+ border-color:rgba(255,255,255,.24)!important;
+ box-shadow:0 5px 18px rgba(0,0,0,.08)!important;
+ backdrop-filter:blur(7px);
+ -webkit-backdrop-filter:blur(7px);
+}
+.topbar{background:rgba(8,25,17,.10)!important}
+.zoom-panel{position:fixed;right:24px;bottom:78px;z-index:20;display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid rgba(255,255,255,.25);border-radius:13px;color:#fff}
+.zoom-panel button{width:30px;height:30px;border:1px solid rgba(255,255,255,.28);border-radius:8px;background:rgba(8,25,17,.12);color:inherit;font-size:19px;cursor:pointer}
+.zoom-panel input{width:105px;accent-color:#20b765}
+@media(max-width:650px){.zoom-panel{right:12px;bottom:70px}.zoom-panel input{width:75px}}
