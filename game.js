@@ -5,7 +5,7 @@ const mount=document.querySelector('#game');
 const scene=new THREE.Scene();
 scene.background=new THREE.Color(0x9fc9d4);
 scene.fog=new THREE.Fog(0x9fc9d4,45,180);
-const camera=new THREE.PerspectiveCamera(60,innerWidth/innerHeight,.1,500);
+const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,.1,500);
 camera.position.set(0,5,9);
 const renderer=new THREE.WebGLRenderer({antialias:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);
@@ -108,10 +108,23 @@ gltfLoader.load('./models/The_Miami_Dealer.glb',gltf=>{
 const rainGroup=new THREE.Group();scene.add(rainGroup);const drops=[];
 for(let i=0;i<500;i++){const d=new THREE.Mesh(new THREE.BoxGeometry(.025,.45,.025),new THREE.MeshBasicMaterial({color:0xd9efff,transparent:true,opacity:.55}));d.position.set((Math.random()-.5)*70,Math.random()*35,(Math.random()-.5)*70);rainGroup.add(d);drops.push(d)}
 rainGroup.visible=false;
-let cameraMode=0,weather='Clear',worldMinutes=12*60,daySpeed=3,lookAngle=0,lookPitch=.18;
+let cameraMode=0,weather='Clear',worldMinutes=12*60,daySpeed=3,lookAngle=0,lookPitch=.16,cameraDistance=6.5;
 const modes=['THIRD PERSON','FIRST PERSON','ISOMETRIC'];
 const keys={};let moving=false;
-function updateCamera(){if(cameraMode===0){const dist=7;camera.position.set(player.position.x+Math.sin(lookAngle)*dist,player.position.y+3+lookPitch*5,player.position.z+Math.cos(lookAngle)*dist);camera.lookAt(player.position.x,player.position.y+1.2,player.position.z)}else if(cameraMode===1){camera.position.set(player.position.x,player.position.y+1.7,player.position.z);camera.rotation.set(0,lookAngle+Math.PI,0);camera.rotateX(-lookPitch)}else{camera.position.set(player.position.x+13,player.position.y+17,player.position.z+13);camera.lookAt(player.position.x,0,player.position.z)}}
+function updateCamera(){
+  const targetY=player.position.y+(cameraMode===1?1.68:1.12);
+  if(cameraMode===0){
+    const horizontal=Math.cos(lookPitch)*cameraDistance;
+    camera.position.set(player.position.x+Math.sin(lookAngle)*horizontal,player.position.y+1.12+Math.sin(lookPitch)*cameraDistance,player.position.z+Math.cos(lookAngle)*horizontal);
+    camera.lookAt(player.position.x,targetY,player.position.z);
+  }else if(cameraMode===1){
+    camera.position.set(player.position.x,player.position.y+1.68,player.position.z);
+    camera.rotation.set(0,lookAngle+Math.PI,0);camera.rotateX(-lookPitch);
+  }else{
+    camera.position.set(player.position.x+12,player.position.y+15,player.position.z+12);
+    camera.lookAt(player.position.x,player.position.y+0.8,player.position.z);
+  }
+}
 function setDay(){let hour=worldMinutes/60;let daylight=Math.max(0,Math.sin((hour-6)/12*Math.PI));let night=1-daylight;let sky=new THREE.Color().lerpColors(new THREE.Color(0x101d37),new THREE.Color(0x9fc9d4),daylight);if(hour>17||hour<6)sky.lerp(new THREE.Color(0x25324c),.3);scene.background=sky;scene.fog.color.copy(sky);sun.intensity=.25+daylight*2.3;sun.color.setHex(daylight>.3?0xffe7c2:0x9bb8ed);renderer.toneMappingExposure=.55+daylight*.55;document.querySelector('#worldTime').textContent=hour<6||hour>=19?'Night':hour<12?'Morning':hour<17?'Afternoon':'Evening';}
 function toast(s){const t=document.querySelector('#toast');t.textContent=s;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1800)}
 function modal(title,body,actions=[]){document.querySelector('#modalTitle').textContent=title;document.querySelector('#modalBody').innerHTML=body;const a=document.querySelector('#modalActions');a.innerHTML='';actions.forEach(([label,fn,secondary])=>{const b=document.createElement('button');b.textContent=label;if(secondary)b.className='secondary';b.onclick=()=>{closeModal();fn?.()};a.appendChild(b)});document.querySelector('#modalBackdrop').classList.remove('hidden')}
@@ -181,7 +194,13 @@ document.querySelector('#profileBtn').onclick=()=>{
 };
 document.querySelector('#menuBtn').onclick=()=>modal('THIS IS LAGOS','<p>Welcome to the Lagos city prototype.</p><p><b>Prototype controls</b><br>WASD / arrow keys: move<br>Drag: look around<br>C: switch camera<br>Weather button: clear / rain</p><p>This v0.5 build is a local interface prototype. Online accounts, live multiplayer, real-money wallet payments, police services and vehicle ownership records still require a secure online backend.</p>',[['Continue',null]]);
 window.addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;if(e.key.toLowerCase()==='c')document.querySelector('#cameraBtn').click()});window.addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
-let pointer=null;renderer.domElement.addEventListener('pointerdown',e=>{pointer={x:e.clientX,y:e.clientY,id:e.pointerId};renderer.domElement.setPointerCapture(e.pointerId)});renderer.domElement.addEventListener('pointermove',e=>{if(pointer&&pointer.id===e.pointerId){lookAngle+=(e.clientX-pointer.x)*.005;lookPitch=Math.max(-.35,Math.min(.7,lookPitch+(e.clientY-pointer.y)*.003));pointer.x=e.clientX;pointer.y=e.clientY}});renderer.domElement.addEventListener('pointerup',()=>pointer=null);renderer.domElement.addEventListener('pointercancel',()=>pointer=null);
+// Mouse/touch camera orbit: start dragging on the 3D world, then track on window so movement stays reliable.
+let pointer=null;renderer.domElement.style.touchAction='none';renderer.domElement.style.cursor='grab';
+renderer.domElement.addEventListener('pointerdown',e=>{if(e.button!==undefined&&e.button!==0)return;pointer={x:e.clientX,y:e.clientY,id:e.pointerId};renderer.domElement.style.cursor='grabbing';e.preventDefault()});
+window.addEventListener('pointermove',e=>{if(pointer&&pointer.id===e.pointerId){const dx=e.clientX-pointer.x,dy=e.clientY-pointer.y;lookAngle-=dx*.006;lookPitch=Math.max(-.12,Math.min(.82,lookPitch+dy*.004));pointer.x=e.clientX;pointer.y=e.clientY}});
+function stopCameraDrag(e){if(pointer&&(!e||e.pointerId===undefined||pointer.id===e.pointerId)){pointer=null;renderer.domElement.style.cursor='grab'}}
+window.addEventListener('pointerup',stopCameraDrag);window.addEventListener('pointercancel',stopCameraDrag);window.addEventListener('blur',()=>stopCameraDrag());
+renderer.domElement.addEventListener('wheel',e=>{if(cameraMode!==0)return;e.preventDefault();cameraDistance=Math.max(3.6,Math.min(12,cameraDistance+Math.sign(e.deltaY)*.55));updateCamera()},{passive:false});
 const touchDirs={};document.querySelectorAll('.mobile-pad button').forEach(b=>{const d=b.dataset.dir;b.addEventListener('pointerdown',e=>{e.preventDefault();touchDirs[d]=true});['pointerup','pointerleave','pointercancel'].forEach(ev=>b.addEventListener(ev,()=>touchDirs[d]=false))});
 function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);worldMinutes=(worldMinutes+dt*daySpeed)%1440;let h=Math.floor(worldMinutes/60),m=Math.floor(worldMinutes%60);document.querySelector('#clock').textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');setDay();let forward=(keys.w||keys.arrowup||touchDirs.up?1:0)-(keys.s||keys.arrowdown||touchDirs.down?1:0);let side=(keys.d||keys.arrowright||touchDirs.right?1:0)-(keys.a||keys.arrowleft||touchDirs.left?1:0);moving=!!(forward||side);if(avatarMixer){const desired=Object.keys(avatarActions).find(n=>moving?n.includes('walk-loop'):n.includes('idle'))||Object.keys(avatarActions)[0];const next=avatarActions[desired];if(next&&next!==activeAvatarAction){next.reset().fadeIn(.2).play();activeAvatarAction?.fadeOut(.2);activeAvatarAction=next;}avatarMixer.update(dt)}if(moving){const speed=dt*7;const dx=(Math.sin(lookAngle)*forward+Math.cos(lookAngle)*side)*speed;const dz=(Math.cos(lookAngle)*forward-Math.sin(lookAngle)*side)*speed;player.position.x+=dx;player.position.z+=dz;player.rotation.y=Math.atan2(dx,dz);player.position.x=Math.max(-8,Math.min(8,player.position.x));player.position.z=Math.max(-120,Math.min(120,player.position.z));if(body)body.position.y=1.05+Math.sin(performance.now()*.012)*.045}if(weather==='Rain'){for(const d of drops){d.position.y-=dt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*70;d.position.z=player.position.z+(Math.random()-.5)*70}}}updateCamera();renderer.render(scene,camera)}
 const clock=new THREE.Clock();animate();

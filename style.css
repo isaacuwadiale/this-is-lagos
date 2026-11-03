@@ -14,3 +14,8 @@
 #modelLoading{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:20;background:#123d29e8;color:white;padding:12px 17px;border-radius:12px;font-size:12px;box-shadow:0 8px 28px #0003;pointer-events:none}
 .fare-quote{margin-top:14px;padding:13px;background:#e9f5ec;border-radius:10px;color:#155a34;font-size:17px;font-weight:800}.recipient-label{display:flex;flex-direction:column;gap:6px;margin-top:12px;color:#476452;font-weight:700}.recipient-label input{padding:10px;border:1px solid #d8e6da;border-radius:9px;font:inherit}
 @media(max-width:700px){.activity-panel{right:9px;top:78px;width:min(290px,calc(100vw - 18px));max-height:70vh}.right-controls{top:78px}.right-controls .control{height:53px}.activity-panel.panel-open{z-index:8}.feed-card{padding:9px}}
+
+/* v0.6 camera interaction refinements */
+#game, #game canvas{touch-action:none}
+#game canvas{cursor:grab}
+#game canvas:active{cursor:grabbing}
