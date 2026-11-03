@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.12 — road-aware city, markings and street lighting
+// THIS IS LAGOS v0.16 — view-based building visibility and lighter rendering
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -9,11 +9,11 @@ scene.fog=new THREE.Fog(0x9fc9d4,520,2100);
 const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,.1,4200);
 camera.position.set(0,5,9);
 const renderer=new THREE.WebGLRenderer({antialias:true});
-renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);
-renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.25));renderer.setSize(innerWidth,innerHeight);
+renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFShadowMap;
 renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;mount.appendChild(renderer.domElement);
 scene.add(new THREE.HemisphereLight(0xe7fff0,0x71856d,2));
-const sun=new THREE.DirectionalLight(0xfff2d5,2.5);sun.position.set(-35,55,25);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);sun.shadow.camera.left=-70;sun.shadow.camera.right=70;sun.shadow.camera.top=70;sun.shadow.camera.bottom=-70;scene.add(sun);
+const sun=new THREE.DirectionalLight(0xfff2d5,2.5);sun.position.set(-35,55,25);sun.castShadow=true;sun.shadow.mapSize.set(1024,1024);sun.shadow.camera.left=-70;sun.shadow.camera.right=70;sun.shadow.camera.top=70;sun.shadow.camera.bottom=-70;scene.add(sun);
 const mat=(color,roughness=.85)=>new THREE.MeshStandardMaterial({color,roughness});
 const grass=mat(0x7eaa78),road=mat(0x343d3b),sidewalk=mat(0xc9d2c8),white=mat(0xf1f5e9),green=mat(0x18824a),glassMat=new THREE.MeshStandardMaterial({color:0x8eb8b4,roughness:.25,metalness:.15}),dark=mat(0x263a31);
 function block(w,h,d,m,x,y,z){const o=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m);o.position.set(x,y+h/2,z);o.castShadow=true;o.receiveShadow=true;scene.add(o);return o}
@@ -161,12 +161,16 @@ function addWaterTank(parent,x,y,z,scale=1){
  const legs=new THREE.Mesh(new THREE.BoxGeometry(1.8*scale,.16*scale,1.8*scale),darkMetal);
  legs.position.set(x,y+.12*scale,z);parent.add(legs);
 }
+const viewCulledBuildings=[];
 function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
  if(!clearBuildingPlot(x,z,w,d,1.5)) return null;
  const wall=wallPalette[Math.abs(seed)%wallPalette.length];
  const obj=new THREE.Group();obj.position.set(x,0,z);scene.add(obj);
- const main=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),wall);main.position.y=h/2;main.castShadow=true;main.receiveShadow=true;obj.add(main);
- const roof=new THREE.Mesh(new THREE.BoxGeometry(w+.35,.5,d+.35),roofPalette[Math.abs(seed+2)%roofPalette.length]);roof.position.y=h+.18;roof.castShadow=true;obj.add(roof);
+ // Keep the complete building in memory, but skip drawing it when outside the camera view.
+ const visibilityRadius=Math.sqrt(w*w+d*d+h*h)*0.62;
+ viewCulledBuildings.push({group:obj,sphere:new THREE.Sphere(new THREE.Vector3(x,h/2,z),visibilityRadius)});
+ const main=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),wall);main.position.y=h/2;main.castShadow=false;main.receiveShadow=false;obj.add(main);
+ const roof=new THREE.Mesh(new THREE.BoxGeometry(w+.35,.5,d+.35),roofPalette[Math.abs(seed+2)%roofPalette.length]);roof.position.y=h+.18;roof.castShadow=false;obj.add(roof);
  // Lagos residential facades: recessed-looking windows, balcony slabs,
  // painted fascia bands, security grilles and rooftop water storage.
  if(kind==='residential'||kind==='mixed'||kind==='tenement'||kind==='bungalow'||kind==='duplex'){
@@ -563,7 +567,19 @@ window.addEventListener('wheel',e=>{
   updateCamera();
 },{passive:false});
 const touchDirs={};document.querySelectorAll('.mobile-pad button').forEach(b=>{const d=b.dataset.dir;b.addEventListener('pointerdown',e=>{e.preventDefault();touchDirs[d]=true});['pointerup','pointerleave','pointercancel'].forEach(ev=>b.addEventListener(ev,()=>touchDirs[d]=false))});
-function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);worldMinutes=(worldMinutes+dt*daySpeed)%1440;let h=Math.floor(worldMinutes/60),m=Math.floor(worldMinutes%60);document.querySelector('#clock').textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');setDay();let forward=(keys.w||keys.arrowup||touchDirs.up?1:0)-(keys.s||keys.arrowdown||touchDirs.down?1:0);let side=(keys.d||keys.arrowright||touchDirs.right?1:0)-(keys.a||keys.arrowleft||touchDirs.left?1:0);moving=!!(forward||side);const districtEl=document.querySelector('.stat-row b');if(districtEl){let nearest=districtDefs.reduce((best,d)=>{const dist=Math.hypot(player.position.x-d[1],player.position.z-d[2]);return dist<best.dist?{name:d[0],dist}:best},{name:'Lagos Mainland',dist:1e9});districtEl.textContent=nearest.dist<260?nearest.name:'Lagos';}if(avatarMixer){const desired=Object.keys(avatarActions).find(n=>moving?n.includes('walk-loop'):n.includes('idle'))||Object.keys(avatarActions)[0];const next=avatarActions[desired];if(next&&next!==activeAvatarAction){next.reset().fadeIn(.2).play();activeAvatarAction?.fadeOut(.2);activeAvatarAction=next;}avatarMixer.update(dt)}if(moving){const speed=dt*13;const dx=(Math.sin(lookAngle)*forward+Math.cos(lookAngle)*side)*speed;const dz=(Math.cos(lookAngle)*forward-Math.sin(lookAngle)*side)*speed;player.position.x+=dx;player.position.z+=dz;player.rotation.y=Math.atan2(dx,dz);player.position.x=Math.max(-1010,Math.min(1010,player.position.x));player.position.z=Math.max(-1010,Math.min(1010,player.position.z));if(body)body.position.y=1.05+Math.sin(performance.now()*.012)*.045}if(weather==='Rain'){for(const d of drops){d.position.y-=dt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*180;d.position.z=player.position.z+(Math.random()-.5)*180}}}updateCamera();renderer.render(scene,camera)}
+const viewFrustum=new THREE.Frustum();
+const viewProjection=new THREE.Matrix4();
+let cullFrame=0;
+function updateVisibleBuildings(){
+ camera.updateMatrixWorld();
+ viewProjection.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);
+ viewFrustum.setFromProjectionMatrix(viewProjection);
+ for(const item of viewCulledBuildings){
+  item.sphere.center.set(item.group.position.x,item.group.position.y+item.sphere.radius*.0+item.sphere.center.y-item.group.position.y,item.group.position.z);
+  item.group.visible=viewFrustum.intersectsSphere(item.sphere);
+ }
+}
+function animate(){requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05);worldMinutes=(worldMinutes+dt*daySpeed)%1440;let h=Math.floor(worldMinutes/60),m=Math.floor(worldMinutes%60);document.querySelector('#clock').textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');setDay();let forward=(keys.w||keys.arrowup||touchDirs.up?1:0)-(keys.s||keys.arrowdown||touchDirs.down?1:0);let side=(keys.d||keys.arrowright||touchDirs.right?1:0)-(keys.a||keys.arrowleft||touchDirs.left?1:0);moving=!!(forward||side);const districtEl=document.querySelector('.stat-row b');if(districtEl){let nearest=districtDefs.reduce((best,d)=>{const dist=Math.hypot(player.position.x-d[1],player.position.z-d[2]);return dist<best.dist?{name:d[0],dist}:best},{name:'Lagos Mainland',dist:1e9});districtEl.textContent=nearest.dist<260?nearest.name:'Lagos';}if(avatarMixer){const desired=Object.keys(avatarActions).find(n=>moving?n.includes('walk-loop'):n.includes('idle'))||Object.keys(avatarActions)[0];const next=avatarActions[desired];if(next&&next!==activeAvatarAction){next.reset().fadeIn(.2).play();activeAvatarAction?.fadeOut(.2);activeAvatarAction=next;}avatarMixer.update(dt)}if(moving){const speed=dt*13;const dx=(Math.sin(lookAngle)*forward+Math.cos(lookAngle)*side)*speed;const dz=(Math.cos(lookAngle)*forward-Math.sin(lookAngle)*side)*speed;player.position.x+=dx;player.position.z+=dz;player.rotation.y=Math.atan2(dx,dz);player.position.x=Math.max(-1010,Math.min(1010,player.position.x));player.position.z=Math.max(-1010,Math.min(1010,player.position.z));if(body)body.position.y=1.05+Math.sin(performance.now()*.012)*.045}if(weather==='Rain'){for(const d of drops){d.position.y-=dt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*180;d.position.z=player.position.z+(Math.random()-.5)*180}}}updateCamera();if((cullFrame++%3)===0)updateVisibleBuildings();renderer.render(scene,camera)}
 updateCamera();
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
