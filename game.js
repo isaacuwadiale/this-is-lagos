@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.34 — restored dense building generation with 4x architecture
+// THIS IS LAGOS v0.35 — denser city, 60% tall towers, continuous sidewalks, 4x architecture
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -324,9 +324,9 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
  w*=sizeFactor;d*=sizeFactor;
  // v0.33: every building and its architectural details are enlarged exactly 4x.
  const scaledW=w*BUILDING_SCALE,scaledD=d*BUILDING_SCALE;
- const towerFloors=[10,15,20];
+ const towerFloors=[20,25,30,35,40];
  if(kind==='office') h=towerFloors[Math.abs(seed)%towerFloors.length]*3.2;
- else if(kind==='apartment') h=([10,12,15,20][Math.abs(seed)%4])*3.2;
+ else if(kind==='apartment') h=([25,30,35,40][Math.abs(seed)%4])*3.2;
  else if(kind==='residential'||kind==='mixed') h=([5,7,10,12][Math.abs(seed)%4])*3.1;
  else if(kind==='tenement') h=([3,4,5][Math.abs(seed)%3])*3.0;
  else if(kind==='shop'||kind==='market') h=([1,2][Math.abs(seed)%2])*3.0;
@@ -524,35 +524,31 @@ const districtDefs=[
 ];
 districtDefs.forEach((d,i)=>buildDistrict(d[0],d[1],d[2],d[3],i*13));
 
-// v0.14: dense Lagos housing infill.
-// Place houses in the centres of actual street blocks, not on road surfaces.
-// The 70m local grid leaves usable plots between the 8m streets; compact
-// footprints keep a generous clear corridor around every road and junction.
+// v0.35: denser city infill with a 60% tall-building target.
+// One substantial building is placed near the centre of each available block;
+// the placement routine retains full road/pavement and overlap protection.
 let citySeed=1000;
 for(let gx=-945;gx<=945;gx+=70){
  for(let gz=-945;gz<=945;gz+=70){
-  const nearLandmark=districtDefs.some(d=>Math.hypot(gx-d[1],gz-d[2])<125);
-  // Keep landmark footprints and the port/waterfront clear; ordinary blocks
-  // around them still receive housing on the surrounding street grid.
+  const nearLandmark=districtDefs.some(d=>Math.hypot(gx-d[1],gz-d[2])<105);
   if(nearLandmark) continue;
   if(gx>650 && gz>650) continue;
   const blockIndex=Math.round((gx+945)/70)+Math.round((gz+945)/70);
-  // Two compact houses per local block, with a small shared setback.
-  for(let side of [-1,1]){
-   const x=gx+side*15;
-   const z=gz+((blockIndex%2===0)?-8:8);
-   if(side===1 && blockIndex%11===0){
-    // Selected neighbourhood blocks get proper 10-20 floor apartment towers.
-    makeBuilding(x,z,22,25,40,'apartment',citySeed++);
-   }else{
-    const kind=(blockIndex%5===0)?'shop':(blockIndex%3===0?'tenement':'residential');
-    const height=kind==='shop'?5:8+(Math.abs(Math.round(x+z))%4)*2;
-    makeBuilding(x,z,15,17,height,kind,citySeed++);
-   }
+  // Deterministic 3-in-5 distribution: 60% towers, remaining plots varied.
+  const isTall=(blockIndex%5)<3;
+  if(isTall){
+   const kind=(blockIndex%4===0)?'office':'apartment';
+   makeBuilding(gx,gz,10,12,40,kind,citySeed++);
+  }else{
+   const variant=Math.abs(blockIndex)%4;
+   const kind=variant===0?'mixed':(variant===1?'residential':(variant===2?'tenement':'shop'));
+   const width=kind==='shop'?8:9,depth=kind==='shop'?9:11;
+   const floors=kind==='shop'?4:(kind==='tenement'?5:12);
+   makeBuilding(gx,gz,width,depth,floors,kind,citySeed++);
   }
-  if(blockIndex%4===0){
-   const px=gx+(blockIndex%2===0?0:25), pz=gz+25;
-   palmTree(px,pz,.72);
+  if(blockIndex%3===0){
+   // Keep greenery on the pedestrian side, not in the carriageway.
+   palmTree(gx+24,gz+24,.72);
   }
  }
 }
