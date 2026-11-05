@@ -328,16 +328,18 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
    ];
    for(const [bw,bh,bx,by] of bars){const bar=new THREE.Mesh(new THREE.BoxGeometry(bw,bh,.08),darkMetal);bar.position.set(bx,by,frameZ);obj.add(bar)}
   }
-  for(let floor=3.2;floor<h-1.2;floor+=3.0){
+  for(let floor=3.2;floor<h-1.2;floor+=3.2){
    const balcony=new THREE.Mesh(new THREE.BoxGeometry(w+.35,.16,.9),concreteMat);
    balcony.position.set(0,floor,d/2+.42);obj.add(balcony);
    const rail=new THREE.Mesh(new THREE.BoxGeometry(w*.82,.72,.10),darkMetal);
    rail.position.set(0,floor+.43,d/2+.82);obj.add(rail);
    for(let wx=-w/2+1.25;wx<w/2-.55;wx+=2.85){
-    const win=new THREE.Mesh(new THREE.BoxGeometry(1.45,1.75,.07),glassBlue);
-    win.position.set(wx,floor+1.05,d/2+.07);obj.add(win);
-    const fz=d/2+.125, fy=floor+1.05, ft=.08;
-    for(const [bw,bh,bx,by] of [[ft,1.83,wx-.765,fy],[ft,1.83,wx+.765,fy],[1.61,ft,wx,fy+.915],[1.61,ft,wx,fy-.915]]){
+    const upperWindowHeight=2.35, upperWindowWidth=1.65;
+    const win=new THREE.Mesh(new THREE.BoxGeometry(upperWindowWidth,upperWindowHeight,.07),glassBlue);
+    const windowCenterY=floor+upperWindowHeight/2;
+    win.position.set(wx,windowCenterY,d/2+.07);obj.add(win);
+    const fz=d/2+.125, fy=windowCenterY, ft=.08, halfW=upperWindowWidth/2;
+    for(const [bw,bh,bx,by] of [[ft,upperWindowHeight+.16,wx-halfW-ft/2,fy],[ft,upperWindowHeight+.16,wx+halfW+ft/2,fy],[upperWindowWidth+ft*2,ft,wx,fy+upperWindowHeight/2+ft/2],[upperWindowWidth+ft*2,ft,wx,fy-upperWindowHeight/2-ft/2]]){
      const frame=new THREE.Mesh(new THREE.BoxGeometry(bw,bh,.07),darkMetal);frame.position.set(bx,by,fz);obj.add(frame);
     }
    }
@@ -376,7 +378,7 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
   for(let wx=-w/2+1;wx<w/2;wx+=2.2){const shutter=new THREE.Mesh(new THREE.BoxGeometry(1.5,2,.08),mat(0x6e756d));shutter.position.set(wx,1.2,d/2+.08);obj.add(shutter)}
  }
  if(kind==='office'){
-  for(let floor=2.2;floor<h;floor+=2.4){const band=new THREE.Mesh(new THREE.BoxGeometry(w+.1,.85,d+.1),glassBlue);band.position.y=floor;obj.add(band)}
+  for(let floor=1.6;floor<h-1.2;floor+=3.2){const band=new THREE.Mesh(new THREE.BoxGeometry(w+.1,2.35,d+.1),glassBlue);band.position.y=floor+1.175;obj.add(band)}
  }
  // Keep the main shell and roof as the far-distance representation;
  // facade pieces are switched off at a distance to reduce draw work.
