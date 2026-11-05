@@ -289,6 +289,17 @@ function addWaterTank(parent,x,y,z,scale=1){
 }
 const viewCulledBuildings=[];
 function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
+ // Larger footprints and realistic floor-count families. Heights use an
+ // approximately 3.2m floor-to-floor scale so the avatar remains proportionate.
+ const sizeFactor=kind==='office'?1.22:(kind==='apartment'?1.20:(kind==='residential'||kind==='mixed'||kind==='tenement'?1.14:(kind==='shop'||kind==='market'?1.10:1.08)));
+ w*=sizeFactor;d*=sizeFactor;
+ const towerFloors=[10,15,20];
+ if(kind==='office') h=towerFloors[Math.abs(seed)%towerFloors.length]*3.2;
+ else if(kind==='apartment') h=([10,12,15,20][Math.abs(seed)%4])*3.2;
+ else if(kind==='residential'||kind==='mixed') h=([5,7,10,12][Math.abs(seed)%4])*3.1;
+ else if(kind==='tenement') h=([3,4,5][Math.abs(seed)%3])*3.0;
+ else if(kind==='shop'||kind==='market') h=([1,2][Math.abs(seed)%2])*3.0;
+ else if(kind==='duplex') h=([2,3][Math.abs(seed)%2])*3.1;
  if(!clearBuildingPlot(x,z,w,d,1.5)) return null;
  const wall=wallPalette[Math.abs(seed)%wallPalette.length];
  const obj=new THREE.Group();obj.position.set(x,0,z);scene.add(obj);
@@ -300,7 +311,7 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
  const roof=new THREE.Mesh(new THREE.BoxGeometry(w+.35,.5,d+.35),roofPalette[Math.abs(seed+2)%roofPalette.length]);roof.position.y=h+.18;roof.castShadow=false;obj.add(roof);
  // Lagos residential facades: recessed-looking windows, balcony slabs,
  // painted fascia bands, security grilles and rooftop water storage.
- if(kind==='residential'||kind==='mixed'||kind==='tenement'||kind==='bungalow'||kind==='duplex'){
+ if(kind==='residential'||kind==='mixed'||kind==='tenement'||kind==='apartment'||kind==='bungalow'||kind==='duplex'){
   const floors = Math.max(1,Math.floor(h/3));
   for(let floor=2.0;floor<h-1.2;floor+=2.8){
    const balcony=new THREE.Mesh(new THREE.BoxGeometry(w+.35,.16,.9),concreteMat);
@@ -318,7 +329,7 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
   fascia.position.y=Math.min(h-1.2,3.0);obj.add(fascia);
   if(h>7) addWaterTank(obj,w*.24,h+.35,-d*.18,Math.min(1.25,Math.max(.7,w/18)));
   // External stair/service core on one side, common in walk-up blocks.
-  if(kind==='tenement'||kind==='residential'){
+  if(kind==='tenement'||kind==='residential'||kind==='apartment'){
    const stair=new THREE.Mesh(new THREE.BoxGeometry(1.5,Math.min(h,10),d*.58),concreteMat);
    stair.position.set(-w*.36,Math.min(h,10)/2,d*.18);obj.add(stair);
   }
@@ -416,8 +427,8 @@ function compound(cx,cz,kind='residential',seed=0){
 function buildDistrict(name,cx,cz,type,seed){
  // arterial frontage, varied block fabric and a signature landmark per district.
  if(type==='island'){
-  for(let i=0;i<10;i++){makeBuilding(cx+(i%5)*34-68,cz+Math.floor(i/5)*45-18,24,25,24+(i%4)*13,'office',seed+i)}
-  makeBuilding(cx,cz+90,70,34,68,'office',seed+20);signBoard(name.toUpperCase(),cx,cz-80,34,0x145b3c);
+  for(let i=0;i<10;i++){makeBuilding(cx+(i%5)*34-68,cz+Math.floor(i/5)*45-18,27,29,32,'office',seed+i)}
+  makeBuilding(cx,cz+90,76,40,64,'office',seed+20);signBoard(name.toUpperCase(),cx,cz-80,34,0x145b3c);
  }else if(type==='market'){
   marketCluster(cx,cz,name.toUpperCase());
   for(let i=0;i<12;i++)makeBuilding(cx+(i%4)*29-44,cz+70+Math.floor(i/4)*25,18,18,8+(i%3)*3,'shop',seed+i);
@@ -480,9 +491,14 @@ for(let gx=-945;gx<=945;gx+=70){
   for(let side of [-1,1]){
    const x=gx+side*15;
    const z=gz+((blockIndex%2===0)?-8:8);
-   const kind=(blockIndex%5===0)?'shop':(blockIndex%3===0?'tenement':'residential');
-   const height=kind==='shop'?5:8+(Math.abs(Math.round(x+z))%4)*2;
-   makeBuilding(x,z,15,17,height,kind,citySeed++);
+   if(side===1 && blockIndex%11===0){
+    // Selected neighbourhood blocks get proper 10-20 floor apartment towers.
+    makeBuilding(x,z,22,25,40,'apartment',citySeed++);
+   }else{
+    const kind=(blockIndex%5===0)?'shop':(blockIndex%3===0?'tenement':'residential');
+    const height=kind==='shop'?5:8+(Math.abs(Math.round(x+z))%4)*2;
+    makeBuilding(x,z,15,17,height,kind,citySeed++);
+   }
   }
   if(blockIndex%4===0){
    const px=gx+(blockIndex%2===0?0:25), pz=gz+25;
