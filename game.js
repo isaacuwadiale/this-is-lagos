@@ -656,18 +656,18 @@ function addGardenPark(x,z,large=false){
 }
 function addBusStop(x,z,rotation=0){
   const g=new THREE.Group();g.position.set(x,0,z);g.rotation.y=rotation;scene.add(g);
-  // Shelter and passenger waiting area are placed inside the reserved plot,
-  // not on the carriageway or zebra crossing.
-  amenityBox(g,10,.16,4,amenityMats.paving,0,.08,0);
-  for(const px of [-4.5,4.5]){
-    amenityBox(g,.18,3,.18,amenityMats.dark,px,.16,-1.6);
-    amenityBox(g,.18,3,.18,amenityMats.dark,px,.16,1.6);
+  // v0.38: shelter is 6x taller and 3x wider than the previous design.
+  // The larger waiting canopy remains on its reserved plot, away from roads.
+  amenityBox(g,30,.16,4,amenityMats.paving,0,.08,0);
+  for(const px of [-13.5,13.5]){
+    amenityBox(g,.54,18,.54,amenityMats.dark,px,.16,-1.6);
+    amenityBox(g,.54,18,.54,amenityMats.dark,px,.16,1.6);
   }
-  amenityBox(g,9,.18,3.6,amenityMats.blue,0,3.15,0);
-  amenityBox(g,8,1.1,.12,amenityMats.glass,0,1.25,-1.55);
-  amenityBox(g,8,.16,.35,mat(0x5b5146),0,.8,1.25);
-  signBoard('BUS STOP',x,z-3.2,8,0x1769a6);
-  reserveAmenity(x,z,15,10);
+  amenityBox(g,27,.18,3.6,amenityMats.blue,0,18.15,0);
+  amenityBox(g,24,6.6,.12,amenityMats.glass,0,7.5,-1.55);
+  amenityBox(g,24,.16,.35,mat(0x5b5146),0,4.8,1.25);
+  signBoard('BUS STOP',x,z-3.2,24,0x1769a6);
+  reserveAmenity(x,z,36,25);
 }
 function addAmenityInfill(){
   let placedCount=0;
@@ -710,7 +710,7 @@ function addAmenityInfill(){
   return placedCount;
 }
 const v037AmenityCount=addAmenityInfill();
-console.info('This Is Lagos v0.37: added vacant-plot amenities',v037AmenityCount);
+console.info('This Is Lagos v0.38: enlarged bus shelters; vacant-plot amenities',v037AmenityCount);
 // -----------------------------------------------------------------------------
 
 // Industrial port yards, container stacks and cranes near Apapa.
