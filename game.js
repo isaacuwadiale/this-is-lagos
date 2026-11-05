@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.36 — facade orientation refinement, dense city, 60% tall towers, sidewalks, 4x architecture
+// THIS IS LAGOS v0.37 — vacant-plot amenities, bus stops, fuel stations, supermarkets, parks, courts, shops
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -562,6 +562,155 @@ for(let gx=-945;gx<=945;gx+=70){
   }
  }
 }
+
+// -----------------------------------------------------------------------------
+// v0.37 COMMUNITY AMENITY INFILL
+// Preserve every existing building. Add useful destinations only on vacant,
+// road-safe plots, using the same city collision reservations as buildings.
+// -----------------------------------------------------------------------------
+const amenityMats={
+  paving:mat(0xc8cec5), grass:mat(0x5f985b), dark:mat(0x263a31),
+  glass:mat(0x75aeb9,.35), blue:mat(0x1769a6), red:mat(0xb64b38),
+  yellow:mat(0xe8c34b), white:mat(0xf3f1e6), roof:mat(0x344d43)
+};
+const amenityColliders=[];
+function amenityPlotFree(x,z,w,d){
+  if(!clearBuildingPlot(x,z,w,d,3)) return false;
+  const overlaps=buildingColliders.some(c=>x+w/2+3>c.minX&&x-w/2-3<c.maxX&&z+d/2+3>c.minZ&&z-d/2-3<c.maxZ);
+  if(overlaps)return false;
+  return !amenityColliders.some(c=>x+w/2+3>c.minX&&x-w/2-3<c.maxX&&z+d/2+3>c.minZ&&z-d/2-3<c.maxZ);
+}
+function reserveAmenity(x,z,w,d){
+  amenityColliders.push({minX:x-w/2-2,maxX:x+w/2+2,minZ:z-d/2-2,maxZ:z+d/2+2});
+}
+function amenityBox(parent,w,h,d,material,x,y,z){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),material);
+  m.position.set(x,y+h/2,z);m.castShadow=false;m.receiveShadow=false;parent.add(m);return m;
+}
+function addShopfront(x,z,label='SHOP',accent=0x176b43){
+  const g=new THREE.Group();g.position.set(x,0,z);scene.add(g);
+  amenityBox(g,22,6,13,mat(0xd9d9cf),0,0,0);
+  amenityBox(g,22.5,.55,13.5,mat(0x7b5140),0,6,0);
+  for(let i=0;i<4;i++){
+    amenityBox(g,4.2,2.8,.12,amenityMats.glass,-8.1+i*5.4,1.1,6.62);
+    amenityBox(g,4.5,.35,.55,mat(accent),-8.1+i*5.4,4.15,6.9);
+  }
+  signBoard(label,x,z-7,15,accent);reserveAmenity(x,z,25,17);
+}
+function addSupermarket(x,z){
+  const g=new THREE.Group();g.position.set(x,0,z);scene.add(g);
+  amenityBox(g,30,7,22,mat(0xe3e5df),0,0,0);
+  amenityBox(g,31,.6,23,amenityMats.roof,0,7,0);
+  amenityBox(g,27,3.6,.15,amenityMats.glass,0,1.2,11.1);
+  amenityBox(g,29,.8,.6,mat(0x16844b),0,6.3,11.7);
+  signBoard('SUPERMARKET',x,z-12,22,0x16844b);
+  reserveAmenity(x,z,34,26);
+}
+function addFuelStation(x,z){
+  const g=new THREE.Group();g.position.set(x,0,z);scene.add(g);
+  amenityBox(g,28,.35,20,mat(0xbfc8c2),0,.1,0);
+  amenityBox(g,23,.5,15,mat(0xe5e5dc),0,5,0);
+  for(const px of [-10.5,10.5])for(const pz of [-7,7]){
+    const post=new THREE.Mesh(new THREE.CylinderGeometry(.18,.22,5,8),amenityMats.white);
+    post.position.set(px,2.5,pz);g.add(post);
+  }
+  amenityBox(g,27,.8,19,mat(0xd52f32),0,5.6,0);
+  for(const px of [-7,0,7]){
+    amenityBox(g,1.2,1.7,1.2,mat(0xe9e9e4),px,.35,2);
+    amenityBox(g,.45,.25,.25,mat(0x252525),px,1.8,2.55);
+  }
+  signBoard('FUEL STATION',x,z-14,20,0xd52f32);
+  reserveAmenity(x,z,36,29);
+}
+function addTennisCourt(x,z){
+  const g=new THREE.Group();g.position.set(x,0,z);scene.add(g);
+  amenityBox(g,30,.18,19,sportBlue,0,.05,0);
+  const line=new THREE.MeshBasicMaterial({color:0xffffff});
+  for(const px of [-14.5,14.5]){
+    const m=new THREE.Mesh(new THREE.BoxGeometry(.18,.04,18),line);m.position.set(px,.17,0);g.add(m);
+  }
+  for(const pz of [-9,9]){
+    const m=new THREE.Mesh(new THREE.BoxGeometry(29,.04,.18),line);m.position.set(0,.17,pz);g.add(m);
+  }
+  const net=new THREE.Mesh(new THREE.BoxGeometry(.18,1,18),amenityMats.white);net.position.set(0,.7,0);g.add(net);
+  signBoard('COMMUNITY TENNIS',x,z-12,20,0x245f94);reserveAmenity(x,z,34,25);
+}
+function addGardenPark(x,z,large=false){
+  const w=large?38:27,d=large?32:23;
+  const g=new THREE.Group();g.position.set(x,0,z);scene.add(g);
+  amenityBox(g,w,.12,d,amenityMats.grass,0,.02,0);
+  for(let i=0;i<6;i++){
+    const a=i*Math.PI/3,px=Math.cos(a)*w*.29,pz=Math.sin(a)*d*.29;
+    palmTree(x+px,z+pz,.48);
+  }
+  for(const bx of [-w*.22,w*.22]){
+    const bench=amenityBox(g,4,.35,.8,mat(0x76513a),bx,.2,0);
+    const back=amenityBox(g,4,1.1,.25,mat(0x76513a),bx,.5,-.48);
+  }
+  if(large){
+    const fountain=new THREE.Mesh(new THREE.CylinderGeometry(3.2,3.8,.5,20),amenityMats.blue);
+    fountain.position.set(0,.38,0);g.add(fountain);
+    signBoard('COMMUNITY PARK',x,z-d/2-2,20,0x176b43);
+  }else signBoard('GARDEN',x,z-d/2-2,13,0x176b43);
+  reserveAmenity(x,z,w+3,d+3);
+}
+function addBusStop(x,z,rotation=0){
+  const g=new THREE.Group();g.position.set(x,0,z);g.rotation.y=rotation;scene.add(g);
+  // Shelter and passenger waiting area are placed inside the reserved plot,
+  // not on the carriageway or zebra crossing.
+  amenityBox(g,10,.16,4,amenityMats.paving,0,.08,0);
+  for(const px of [-4.5,4.5]){
+    amenityBox(g,.18,3,.18,amenityMats.dark,px,.16,-1.6);
+    amenityBox(g,.18,3,.18,amenityMats.dark,px,.16,1.6);
+  }
+  amenityBox(g,9,.18,3.6,amenityMats.blue,0,3.15,0);
+  amenityBox(g,8,1.1,.12,amenityMats.glass,0,1.25,-1.55);
+  amenityBox(g,8,.16,.35,mat(0x5b5146),0,.8,1.25);
+  signBoard('BUS STOP',x,z-3.2,8,0x1769a6);
+  reserveAmenity(x,z,15,10);
+}
+function addAmenityInfill(){
+  let placedCount=0;
+  const plots=[];
+  for(let gx=-945;gx<=945;gx+=70){
+    for(let gz=-945;gz<=945;gz+=70){
+      // Keep the waterfront and port work yards free for their own facilities.
+      if(gx>650&&gz>650)continue;
+      plots.push([gx,gz]);
+    }
+  }
+  // Stable ordering and distribution: no random movement of existing buildings.
+  for(let i=0;i<plots.length;i++){
+    const [baseX,baseZ]=plots[i];
+    const kindIndex=(Math.floor((baseX+945)/70)*3+Math.floor((baseZ+945)/70)*5+17)%12;
+    // Leave most already-developed blocks untouched; fill only genuinely vacant plots.
+    const candidates=[[0,0],[12,10],[-12,-10],[10,-12],[-10,12]];
+    const type=kindIndex;
+    const dims=(type===0||type===1)?[36,29]:(type===2||type===3)?[34,25]:[27,22];
+    let spot=null;
+    for(const [ox,oz] of candidates){
+      const x=baseX+ox,z=baseZ+oz;
+      if(amenityPlotFree(x,z,dims[0],dims[1])){spot=[x,z];break;}
+    }
+    if(!spot)continue;
+    const [x,z]=spot;
+    if(type===0)addFuelStation(x,z);
+    else if(type===1)addSupermarket(x,z);
+    else if(type===2)addTennisCourt(x,z);
+    else if(type===3)addGardenPark(x,z,true);
+    else if(type===4)addBusStop(x,z,(i%2)?Math.PI/2:0);
+    else if(type===5||type===6)addShopfront(x,z,type===5?'PHARMACY':'LOCAL SHOPS',type===5?0x16844b:0x176b43);
+    else if(type===7)addGardenPark(x,z,false);
+    else if(type===8)addBusStop(x,z,(i%2)?Math.PI/2:0);
+    else continue;
+    placedCount++;
+  }
+  return placedCount;
+}
+const v037AmenityCount=addAmenityInfill();
+console.info('This Is Lagos v0.37: added vacant-plot amenities',v037AmenityCount);
+// -----------------------------------------------------------------------------
+
 // Industrial port yards, container stacks and cranes near Apapa.
 for(let i=0;i<24;i++){
  const x=-930+(i%6)*32,z=570+Math.floor(i/6)*34;
