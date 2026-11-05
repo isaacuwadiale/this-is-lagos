@@ -28,6 +28,8 @@ for(let x=-120;x<=120;x+=12){block(.12,.025,260,mat(0xe5e9df),x,.08,0)}
 for(let z=-125;z<130;z+=9)block(.18,.025,3,white,0,.09,z);
 const buildingMats=[0xe7e8d9,0xd7e2d9,0xd8d8cf,0xe8dfce,0xc7d9d0].map(c=>mat(c));
 const buildingColliders=[];
+// Road reservations include the asphalt, kerbs and full pedestrian pavement.
+const ROAD_EDGE_CLEARANCE=4.8;
 // Check the expanded 70m road grid and the original starter-district roads
 // before creating legacy starter buildings or skyline blocks.
 function legacyBuildingPlotClear(x,z,w,d,extra=1){
@@ -36,17 +38,17 @@ function legacyBuildingPlotClear(x,z,w,d,extra=1){
  const minGX=Math.floor((x-halfW)/70)-1, maxGX=Math.ceil((x+halfW)/70)+1;
  for(let k=minGX;k<=maxGX;k++){
   const roadX=k*70, roadHalf=(k%3===0)?12:4;
-  if(Math.abs(x-roadX)<halfW+roadHalf) return false;
+  if(Math.abs(x-roadX)<halfW+roadHalf+ROAD_EDGE_CLEARANCE) return false;
  }
  // Horizontal streets on the same grid.
  const minGZ=Math.floor((z-halfD)/70)-1, maxGZ=Math.ceil((z+halfD)/70)+1;
  for(let k=minGZ;k<=maxGZ;k++){
   const roadZ=k*70, roadHalf=(k%3===0)?11:4;
-  if(Math.abs(z-roadZ)<halfD+roadHalf) return false;
+  if(Math.abs(z-roadZ)<halfD+roadHalf+ROAD_EDGE_CLEARANCE) return false;
  }
  // The original compact starter area has an additional north-south road
  // at x=0 and an east-west road centred at z=-22.
- if(Math.abs(x)<halfW+9 || Math.abs(z+22)<halfD+7.5) return false;
+ if(Math.abs(x)<halfW+11.5 || (Math.abs(x)<130+halfW && Math.abs(z+22)<halfD+8.75)) return false;
  return true;
 }
 function building(x,z,w,d,h,idx){
@@ -101,19 +103,22 @@ function roadHalfWidthAt(value){
  return Math.abs(grid%210)===0?12:4;
 }
 function clearBuildingPlot(x,z,w,d,extra=1){
- // Test the complete footprint against every road line it could touch.
- // This also catches large buildings that span more than one street block.
+ // Reserve the complete footprint plus kerbs and pavements, not just asphalt.
  const halfW=w/2+extra, halfD=d/2+extra;
  const minGX=Math.floor((x-halfW)/70)-1, maxGX=Math.ceil((x+halfW)/70)+1;
  for(let k=minGX;k<=maxGX;k++){
   const roadX=k*70, roadHalf=(k%3===0)?12:4;
-  if(Math.abs(x-roadX)<halfW+roadHalf) return false;
+  if(Math.abs(x-roadX)<halfW+roadHalf+ROAD_EDGE_CLEARANCE) return false;
  }
  const minGZ=Math.floor((z-halfD)/70)-1, maxGZ=Math.ceil((z+halfD)/70)+1;
  for(let k=minGZ;k<=maxGZ;k++){
-  const roadZ=k*70, roadHalf=(k%3===0)?12:4;
-  if(Math.abs(z-roadZ)<halfD+roadHalf) return false;
+  const roadZ=k*70, roadHalf=(k%3===0)?11:4;
+  if(Math.abs(z-roadZ)<halfD+roadHalf+ROAD_EDGE_CLEARANCE) return false;
  }
+ // The original starter district also has a short cross-street at z=-22,
+ // with pavements, which is not part of the expanded 70m grid.
+ const overlapsStarterRoadLength=(x-halfW)<130 && (x+halfW)>-130;
+ if(overlapsStarterRoadLength && Math.abs(z+22)<halfD+8.75) return false;
  return true;
 }
 
@@ -233,18 +238,26 @@ for(let p=-980;p<=980;p+=140){if(Math.abs(p%210)<1)continue;for(let q=-910;q<=91
 
 // Zebra crossings on all four arms of every major junction. Each stripe spans
 // the asphalt road width; the seven bars run perpendicular to the traffic flow.
+function addZebraCrossing(direction,centerX,centerZ,approachSide){
+ // direction is the vehicle travel axis. Zebra bars are always perpendicular.
+ for(let stripe=-3;stripe<=3;stripe++){
+  const offset=approachSide*17+stripe*2.15;
+  if(direction==='north-south'){
+   // Traffic travels along Z: each stripe spans the road along X.
+   roadPaint(18,1.15,centerX,centerZ+offset,paintWhite,.085);
+  }else{
+   // Traffic travels along X: each stripe spans the road along Z.
+   roadPaint(1.15,18,centerX+offset,centerZ,paintWhite,.085);
+  }
+ }
+ if(direction==='north-south') roadPaint(18,.45,centerX,centerZ+approachSide*26,paintWhite,.085);
+ else roadPaint(.45,18,centerX+approachSide*26,centerZ,paintWhite,.085);
+}
 for(let x=-840;x<=840;x+=210){
  for(let z=-840;z<=840;z+=210){
   for(const side of [-1,1]){
-   for(let n=-3;n<=3;n++){
-    // North/south avenue: bars run across X, spaced along Z.
-    roadPaint(18,1.15,x,z+side*17+n*2.15,paintWhite,.085);
-    // East/west avenue: bars run across Z, spaced along X.
-    roadPaint(1.15,18,x+side*17+n*2.15,z,paintWhite,.085);
-   }
-   // Stop lines sit just before each crossing, on the approach side.
-   roadPaint(18,.45,x,z+side*26,paintWhite,.085);
-   roadPaint(.45,18,x+side*26,z,paintWhite,.085);
+   addZebraCrossing('north-south',x,z,side);
+   addZebraCrossing('east-west',x,z,side);
   }
  }
 }
@@ -383,7 +396,7 @@ function basketballCentre(cx,cz){
  signBoard('COMMUNITY BASKETBALL COURT',cx,cz-22,25,0x9b4036);
 }
 function marketCluster(cx,cz,label='LOCAL MARKET'){
- for(let i=0;i<7;i++){const x=cx+(i%4)*13-20,z=cz+Math.floor(i/4)*15;makeBuilding(x,z,10,10,4,'market',i);const canopy=new THREE.Mesh(new THREE.BoxGeometry(10,.35,10),marketMat);canopy.position.set(x,4.4,z);scene.add(canopy)}
+ for(let i=0;i<7;i++){const x=cx+(i%4)*13-20,z=cz+Math.floor(i/4)*15;const shop=makeBuilding(x,z,10,10,4,'market',i);if(shop){const canopy=new THREE.Mesh(new THREE.BoxGeometry(10,.35,10),marketMat);canopy.position.set(x,4.4,z);scene.add(canopy)}}
  signBoard(label,cx,cz-18,30,0x9a5b23);
 }
 function compound(cx,cz,kind='residential',seed=0){
@@ -427,6 +440,7 @@ function buildDistrict(name,cx,cz,type,seed){
     if(i%3===0)makeBuilding(x+4,z+30,18,12,12,'tenement',seed+i+30);
    }else if(isLuxury){
     // Larger gated plots with detached duplexes and landscaped setbacks.
+    if(!clearBuildingPlot(x,z,42,42,1)) continue;
     const yard=new THREE.Mesh(new THREE.BoxGeometry(34,.12,30),grass);yard.position.set(x,.02,z);scene.add(yard);
     compound(x,z,'duplex',seed+i);
     for(const sx of [-12,12]){
