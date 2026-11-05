@@ -291,7 +291,7 @@ const viewCulledBuildings=[];
 function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
  // Larger footprints and realistic floor-count families. Heights use an
  // approximately 3.2m floor-to-floor scale so the avatar remains proportionate.
- const sizeFactor=kind==='office'?1.22:(kind==='apartment'?1.20:(kind==='residential'||kind==='mixed'||kind==='tenement'?1.14:(kind==='shop'||kind==='market'?1.10:1.08)));
+ const sizeFactor=kind==='office'?1.48:(kind==='apartment'?1.45:(kind==='residential'||kind==='mixed'||kind==='tenement'?1.38:(kind==='shop'||kind==='market'?1.25:1.30)));
  w*=sizeFactor;d*=sizeFactor;
  const towerFloors=[10,15,20];
  if(kind==='office') h=towerFloors[Math.abs(seed)%towerFloors.length]*3.2;
@@ -312,21 +312,29 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
  // Lagos residential facades: recessed-looking windows, balcony slabs,
  // painted fascia bands, security grilles and rooftop water storage.
  if(kind==='residential'||kind==='mixed'||kind==='tenement'||kind==='apartment'||kind==='bungalow'||kind==='duplex'){
-  const floors = Math.max(1,Math.floor(h/3));
-  for(let floor=2.0;floor<h-1.2;floor+=2.8){
+  // Ground-floor windows are exactly avatar-height (2.35 units).
+  // Upper-floor windows are larger too, with balconies above the ground storey.
+  const groundWindowHeight=2.35;
+  for(let wx=-w/2+1.25;wx<w/2-.55;wx+=2.85){
+   const groundWin=new THREE.Mesh(new THREE.BoxGeometry(1.65,groundWindowHeight,.12),glassBlue);
+   groundWin.position.set(wx,groundWindowHeight/2,d/2+.07);obj.add(groundWin);
+   const groundFrame=new THREE.Mesh(new THREE.BoxGeometry(1.78,groundWindowHeight+.12,.08),darkMetal);
+   groundFrame.position.set(wx,groundWindowHeight/2,d/2+.13);obj.add(groundFrame);
+  }
+  for(let floor=3.2;floor<h-1.2;floor+=3.0){
    const balcony=new THREE.Mesh(new THREE.BoxGeometry(w+.35,.16,.9),concreteMat);
    balcony.position.set(0,floor,d/2+.42);obj.add(balcony);
    const rail=new THREE.Mesh(new THREE.BoxGeometry(w*.82,.72,.10),darkMetal);
    rail.position.set(0,floor+.43,d/2+.82);obj.add(rail);
-   for(let wx=-w/2+1.25;wx<w/2-.55;wx+=2.55){
-    const win=new THREE.Mesh(new THREE.BoxGeometry(1.12,1.28,.10),glassBlue);
-    win.position.set(wx,floor+.62,d/2+.07);obj.add(win);
-    const grille=new THREE.Mesh(new THREE.BoxGeometry(1.22,1.38,.07),darkMetal);
-    grille.position.set(wx,floor+.62,d/2+.13);obj.add(grille);
+   for(let wx=-w/2+1.25;wx<w/2-.55;wx+=2.85){
+    const win=new THREE.Mesh(new THREE.BoxGeometry(1.45,1.75,.12),glassBlue);
+    win.position.set(wx,floor+1.05,d/2+.07);obj.add(win);
+    const grille=new THREE.Mesh(new THREE.BoxGeometry(1.58,1.87,.08),darkMetal);
+    grille.position.set(wx,floor+1.05,d/2+.13);obj.add(grille);
    }
   }
   const fascia=new THREE.Mesh(new THREE.BoxGeometry(w+.22,.28,d+.22),trimMat);
-  fascia.position.y=Math.min(h-1.2,3.0);obj.add(fascia);
+  fascia.position.y=.28;obj.add(fascia);
   if(h>7) addWaterTank(obj,w*.24,h+.35,-d*.18,Math.min(1.25,Math.max(.7,w/18)));
   // External stair/service core on one side, common in walk-up blocks.
   if(kind==='tenement'||kind==='residential'||kind==='apartment'){
