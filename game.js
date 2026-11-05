@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.37 — fixed vacant-land scan for amenities, bus stops, fuel stations, supermarkets, parks, courts and shops
+// THIS IS LAGOS v0.39 — denser vacant-land infill for amenities, bus stops, fuel stations, supermarkets, parks, courts and shops
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -656,18 +656,23 @@ function addGardenPark(x,z,large=false){
 }
 function addBusStop(x,z,rotation=0){
   const g=new THREE.Group();g.position.set(x,0,z);g.rotation.y=rotation;scene.add(g);
-  // v0.38: shelter is 6x taller and 3x wider than the previous design.
-  // The larger waiting canopy remains on its reserved plot, away from roads.
-  amenityBox(g,30,.16,4,amenityMats.paving,0,.08,0);
+  // Preserve the requested tall shelter and double its breadth from 4 to 8 units.
+  // The 30-unit front remains parallel to the road.
+  amenityBox(g,30,.16,8,amenityMats.paving,0,.08,0);
   for(const px of [-13.5,13.5]){
-    amenityBox(g,.54,18,.54,amenityMats.dark,px,.16,-1.6);
-    amenityBox(g,.54,18,.54,amenityMats.dark,px,.16,1.6);
+    for(const pz of [-3.25,3.25]){
+      amenityBox(g,.54,18,.54,amenityMats.dark,px,.16,pz);
+    }
   }
-  amenityBox(g,27,.18,3.6,amenityMats.blue,0,18.15,0);
-  amenityBox(g,24,6.6,.12,amenityMats.glass,0,7.5,-1.55);
-  amenityBox(g,24,.16,.35,mat(0x5b5146),0,4.8,1.25);
-  signBoard('BUS STOP',x,z-3.2,24,0x1769a6);
-  reserveAmenity(x,z,36,25);
+  amenityBox(g,27,.18,7.6,amenityMats.blue,0,18.15,0);
+  // Transparent long-side screen and passenger bench.
+  amenityBox(g,24,6.6,.12,amenityMats.glass,0,7.5,-3.55);
+  amenityBox(g,24,.16,.35,mat(0x5b5146),0,4.8,3.1);
+  const frontX=x+Math.sin(rotation)*-4.2;
+  const frontZ=z-Math.cos(rotation)*4.2;
+  signBoard('BUS STOP',frontX,frontZ,24,0x1769a6);
+  const alongRoad=Math.abs(Math.sin(rotation))>.5;
+  reserveAmenity(x,z,alongRoad?14:36,alongRoad?36:14);
 }
 function addAmenityInfill(){
   let placedCount=0;
@@ -679,7 +684,7 @@ function addAmenityInfill(){
     {kind:'tennis',w:34,d:25},
     {kind:'park',w:41,d:35},
     {kind:'shop',w:25,d:17},
-    {kind:'bus',w:15,d:10},
+    {kind:'bus',w:36,d:14},
     {kind:'garden',w:27,d:23},
     {kind:'pharmacy',w:25,d:17}
   ];
@@ -693,16 +698,30 @@ function addAmenityInfill(){
   }
   // Deterministic shuffle-like ordering spreads facilities throughout the map.
   candidates.sort((a,b)=>(((a[0]*17+a[1]*31)%997)-((b[0]*17+b[1]*31)%997)));
-  for(let i=0;i<candidates.length&&placedCount<110;i++){
+  for(let i=0;i<candidates.length&&placedCount<220;i++){
     const [x,z]=candidates[i];
     const type=types[(i*7+Math.floor(Math.abs(x+z)/14))%types.length];
-    if(!amenityPlotFree(x,z,type.w,type.d))continue;
+    let busRotation=0, plotW=type.w, plotD=type.d;
+    if(type.kind==='bus'){
+      // Shelter's long side follows the nearest street; its open/front side
+      // faces toward that street rather than across the carriageway.
+      const roadX=Math.round(x/70)*70, roadZ=Math.round(z/70)*70;
+      const dx=Math.abs(x-roadX), dz=Math.abs(z-roadZ);
+      if(dx<=dz){
+        busRotation=x>roadX?Math.PI/2:-Math.PI/2;
+        plotW=14;plotD=36;
+      }else{
+        busRotation=z>roadZ?0:Math.PI;
+        plotW=36;plotD=14;
+      }
+    }
+    if(!amenityPlotFree(x,z,plotW,plotD))continue;
     if(type.kind==='fuel')addFuelStation(x,z);
     else if(type.kind==='supermarket')addSupermarket(x,z);
     else if(type.kind==='tennis')addTennisCourt(x,z);
     else if(type.kind==='park')addGardenPark(x,z,true);
     else if(type.kind==='shop')addShopfront(x,z,'LOCAL SHOPS',0x176b43);
-    else if(type.kind==='bus')addBusStop(x,z,((i%2)?Math.PI/2:0));
+    else if(type.kind==='bus')addBusStop(x,z,busRotation);
     else if(type.kind==='garden')addGardenPark(x,z,false);
     else if(type.kind==='pharmacy')addShopfront(x,z,'PHARMACY',0x16844b);
     placedCount++;
@@ -710,7 +729,7 @@ function addAmenityInfill(){
   return placedCount;
 }
 const v037AmenityCount=addAmenityInfill();
-console.info('This Is Lagos v0.38: enlarged bus shelters; vacant-plot amenities',v037AmenityCount);
+console.info('This Is Lagos v0.39: wider road-aligned bus shelters; denser vacant-plot amenities',v037AmenityCount);
 // -----------------------------------------------------------------------------
 
 // Industrial port yards, container stacks and cranes near Apapa.
