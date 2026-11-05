@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.23 — balanced sharpness/performance, spatial collision grid and root-motion fix
+// THIS IS LAGOS v0.24 — balanced sharpness/performance, spatial collision grid and root-motion fix
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -174,7 +174,7 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
  const obj=new THREE.Group();obj.position.set(x,0,z);scene.add(obj);
  // Keep the complete building in memory, but skip drawing it when outside the camera view.
  const visibilityRadius=Math.sqrt(w*w+d*d+h*h)*0.62;
- viewCulledBuildings.push({group:obj,sphere:new THREE.Sphere(new THREE.Vector3(x,h/2,z),visibilityRadius)});
+ viewCulledBuildings.push({group:obj,sphere:new THREE.Sphere(new THREE.Vector3(x,h/2,z),visibilityRadius),detailChildren:null,detailDistance:320,maxDistance:1150});
  buildingColliders.push({minX:x-w/2-.8,maxX:x+w/2+.8,minZ:z-d/2-.8,maxZ:z+d/2+.8});
  const main=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),wall);main.position.y=h/2;main.castShadow=false;main.receiveShadow=false;obj.add(main);
  const roof=new THREE.Mesh(new THREE.BoxGeometry(w+.35,.5,d+.35),roofPalette[Math.abs(seed+2)%roofPalette.length]);roof.position.y=h+.18;roof.castShadow=false;obj.add(roof);
@@ -230,6 +230,10 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
  if(kind==='office'){
   for(let floor=2.2;floor<h;floor+=2.4){const band=new THREE.Mesh(new THREE.BoxGeometry(w+.1,.85,d+.1),glassBlue);band.position.y=floor;obj.add(band)}
  }
+ // Keep the main shell and roof as the far-distance representation;
+ // facade pieces are switched off at a distance to reduce draw work.
+ const cullRecord=viewCulledBuildings[viewCulledBuildings.length-1];
+ if(cullRecord && cullRecord.group===obj) cullRecord.detailChildren=obj.children.slice(2);
  return obj;
 }
 function signBoard(text,x,z,width=22,color=0x176b43){
@@ -606,9 +610,17 @@ function updateVisibleBuildings(){
  camera.updateMatrixWorld();
  viewProjection.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);
  viewFrustum.setFromProjectionMatrix(viewProjection);
+ const px=player.position.x,pz=player.position.z;
  for(const item of viewCulledBuildings){
-  item.sphere.center.set(item.group.position.x,item.group.position.y+item.sphere.radius*.0+item.sphere.center.y-item.group.position.y,item.group.position.z);
-  item.group.visible=viewFrustum.intersectsSphere(item.sphere);
+  item.sphere.center.set(item.group.position.x,item.sphere.center.y,item.group.position.z);
+  const dx=item.group.position.x-px,dz=item.group.position.z-pz;
+  const distanceSq=dx*dx+dz*dz;
+  const inView=viewFrustum.intersectsSphere(item.sphere);
+  item.group.visible=inView && distanceSq<=item.maxDistance*item.maxDistance;
+  const showFacade=distanceSq<=item.detailDistance*item.detailDistance;
+  if(item.detailChildren){
+   for(const child of item.detailChildren) child.visible=showFacade;
+  }
  }
 }
 // Index building footprints into a spatial grid once. Movement checks now inspect
@@ -641,4 +653,4 @@ updateCamera();
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setPixelRatio(maxDevicePixelRatio*renderScale);renderer.setSize(innerWidth,innerHeight)});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)clock.getDelta()});
-toast('Lagos city update v0.12 loaded');
+toast('Lagos city update v0.24 loaded');
