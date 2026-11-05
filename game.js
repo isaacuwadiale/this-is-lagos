@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.27 — character speed and road clearance, based on v0.26
+// THIS IS LAGOS v0.33 — 4x building scale with road-safe dense placement
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -52,8 +52,13 @@ function legacyBuildingPlotClear(x,z,w,d,extra=1){
  return true;
 }
 function building(x,z,w,d,h,idx){
- if(!legacyBuildingPlotClear(x,z,w,d,1.5)) return;
- const m=buildingMats[idx%buildingMats.length];block(w,h,d,m,x,0,z);buildingColliders.push({minX:x-w/2-.8,maxX:x+w/2+.8,minZ:z-d/2-.8,maxZ:z+d/2+.8});block(w+.15,.3,d+.15,green,x,h-.15,z);for(let y=2;y<h-1;y+=2.6){for(let xx=-w/2+1;xx<w/2-.5;xx+=2){const win=new THREE.Mesh(new THREE.BoxGeometry(.85,1.15,.08),glassMat);win.position.set(x+xx,y,z+d/2+.045);scene.add(win);const win2=win.clone();win2.position.z=z-d/2-.045;scene.add(win2)}}}
+ const scale=4,sw=w*scale,sd=d*scale,sh=h*scale;
+ if(!legacyBuildingPlotClear(x,z,sw,sd,2)) return;
+ const g=new THREE.Group();g.position.set(x,0,z);g.scale.setScalar(scale);scene.add(g);
+ const m=buildingMats[idx%buildingMats.length];const body=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m);body.position.y=h/2;g.add(body);const cap=new THREE.Mesh(new THREE.BoxGeometry(w+.15,.3,d+.15),green);cap.position.y=h-.15;g.add(cap);
+ for(let y=2;y<h-1;y+=2.6){for(let xx=-w/2+1;xx<w/2-.5;xx+=2){const win=new THREE.Mesh(new THREE.BoxGeometry(.85,1.15,.08),glassMat);win.position.set(xx,y,d/2+.045);g.add(win);const win2=win.clone();win2.position.z=-d/2-.045;g.add(win2)}}
+ buildingColliders.push({minX:x-sw/2-1,maxX:x+sw/2+1,minZ:z-sd/2-1,maxZ:z+sd/2+1});
+}
 for(let i=0;i<9;i++){const z=-65+i*16;building(-20,z,8,10,12+(i%3)*5,i);building(20,z,9,11,16+(i%4)*6,i+1)}
 // farther skyline
 for(let i=0;i<34;i++){let x=(Math.random()-.5)*125,z=-100+Math.random()*180;if(Math.abs(x)<27)continue;building(x,z,7+Math.random()*8,7+Math.random()*8,8+Math.random()*28,i+2)}
@@ -288,11 +293,22 @@ function addWaterTank(parent,x,y,z,scale=1){
  legs.position.set(x,y+.12*scale,z);parent.add(legs);
 }
 const viewCulledBuildings=[];
+const BUILDING_SCALE=4;
+function findBuildingPosition(x,z,w,d){
+ const offsets=[[0,0]];
+ for(let r=12;r<=180;r+=12){for(let a=0;a<Math.PI*2;a+=Math.PI/4)offsets.push([Math.cos(a)*r,Math.sin(a)*r]);}
+ for(const [ox,oz] of offsets){const px=x+ox,pz=z+oz;if(!clearBuildingPlot(px,pz,w,d,2))continue;
+  const overlap=buildingColliders.some(c=>px+w/2+2>c.minX&&px-w/2-2<c.maxX&&pz+d/2+2>c.minZ&&pz-d/2-2<c.maxZ);
+  if(!overlap)return {x:px,z:pz};}
+ return null;
+}
 function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
  // Larger footprints and realistic floor-count families. Heights use an
  // approximately 3.2m floor-to-floor scale so the avatar remains proportionate.
  const sizeFactor=kind==='office'?1.22:(kind==='apartment'?1.20:(kind==='residential'||kind==='mixed'||kind==='tenement'?1.14:(kind==='shop'||kind==='market'?1.10:1.08))); // v0.29 footprint sizes restore density and keep road plots clear
  w*=sizeFactor;d*=sizeFactor;
+ // v0.33: every building and its architectural details are enlarged exactly 4x.
+ const scaledW=w*BUILDING_SCALE,scaledD=d*BUILDING_SCALE;
  const towerFloors=[10,15,20];
  if(kind==='office') h=towerFloors[Math.abs(seed)%towerFloors.length]*3.2;
  else if(kind==='apartment') h=([10,12,15,20][Math.abs(seed)%4])*3.2;
@@ -300,13 +316,13 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
  else if(kind==='tenement') h=([3,4,5][Math.abs(seed)%3])*3.0;
  else if(kind==='shop'||kind==='market') h=([1,2][Math.abs(seed)%2])*3.0;
  else if(kind==='duplex') h=([2,3][Math.abs(seed)%2])*3.1;
- if(!clearBuildingPlot(x,z,w,d,1.5)) return null;
+ const placed=findBuildingPosition(x,z,scaledW,scaledD);if(!placed)return null;x=placed.x;z=placed.z;
  const wall=wallPalette[Math.abs(seed)%wallPalette.length];
- const obj=new THREE.Group();obj.position.set(x,0,z);scene.add(obj);
+ const obj=new THREE.Group();obj.position.set(x,0,z);obj.scale.setScalar(BUILDING_SCALE);scene.add(obj);
  // Keep the complete building in memory, but skip drawing it when outside the camera view.
- const visibilityRadius=Math.sqrt(w*w+d*d+h*h)*0.62;
+ const visibilityRadius=Math.sqrt(scaledW*scaledW+scaledD*scaledD+(h*BUILDING_SCALE)*(h*BUILDING_SCALE))*0.62;
  viewCulledBuildings.push({group:obj,sphere:new THREE.Sphere(new THREE.Vector3(x,h/2,z),visibilityRadius),detailChildren:null,detailDistance:320,maxDistance:1150});
- buildingColliders.push({minX:x-w/2-.8,maxX:x+w/2+.8,minZ:z-d/2-.8,maxZ:z+d/2+.8});
+ buildingColliders.push({minX:x-scaledW/2-1,maxX:x+scaledW/2+1,minZ:z-scaledD/2-1,maxZ:z+scaledD/2+1});
  const main=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),wall);main.position.y=h/2;main.castShadow=false;main.receiveShadow=false;obj.add(main);
  const roof=new THREE.Mesh(new THREE.BoxGeometry(w+.35,.5,d+.35),roofPalette[Math.abs(seed+2)%roofPalette.length]);roof.position.y=h+.18;roof.castShadow=false;obj.add(roof);
  // Lagos residential facades: recessed-looking windows, balcony slabs,
