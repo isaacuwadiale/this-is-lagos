@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.35 — denser city, 60% tall towers, continuous sidewalks, 4x architecture
+// THIS IS LAGOS v0.36 — facade orientation refinement, dense city, 60% tall towers, sidewalks, 4x architecture
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -409,7 +409,17 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
   for(let wx=-w/2+1;wx<w/2;wx+=2.2){const shutter=new THREE.Mesh(new THREE.BoxGeometry(1.5,2,.08),mat(0x6e756d));shutter.position.set(wx,1.2,d/2+.08);obj.add(shutter)}
  }
  if(kind==='office'){
-  for(let floor=1.6;floor<h-1.2;floor+=3.2){const band=new THREE.Mesh(new THREE.BoxGeometry(w+.1,2.35,d+.1),glassBlue);band.position.y=floor+1.175;obj.add(band)}
+  // Office glazing belongs on the designated front facade only.
+  // Keep the rear and side walls solid rather than wrapping glass around the whole shell.
+  const officeWindowHeight=2.35;
+  const officeWindowWidth=Math.max(1.4,Math.min(3.2,w*.22));
+  const officeFrontZ=d/2+.075;
+  for(let floor=1.6;floor<h-1.2;floor+=3.2){
+   for(let wx=-w/2+officeWindowWidth*.7;wx<w/2-officeWindowWidth*.45;wx+=officeWindowWidth*1.35){
+    const pane=new THREE.Mesh(new THREE.BoxGeometry(officeWindowWidth,officeWindowHeight,.08),glassBlue);
+    pane.position.set(wx,floor+officeWindowHeight/2,officeFrontZ);obj.add(pane);
+   }
+  }
  }
  // Keep the main shell and roof as the far-distance representation;
  // facade pieces are switched off at a distance to reduce draw work.
