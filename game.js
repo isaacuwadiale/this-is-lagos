@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.26 — Lagos road system upgrade, based on v0.25
+// THIS IS LAGOS v0.27 — character speed and road clearance, based on v0.26
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -28,7 +28,30 @@ for(let x=-120;x<=120;x+=12){block(.12,.025,260,mat(0xe5e9df),x,.08,0)}
 for(let z=-125;z<130;z+=9)block(.18,.025,3,white,0,.09,z);
 const buildingMats=[0xe7e8d9,0xd7e2d9,0xd8d8cf,0xe8dfce,0xc7d9d0].map(c=>mat(c));
 const buildingColliders=[];
-function building(x,z,w,d,h,idx){const m=buildingMats[idx%buildingMats.length];block(w,h,d,m,x,0,z);buildingColliders.push({minX:x-w/2-.8,maxX:x+w/2+.8,minZ:z-d/2-.8,maxZ:z+d/2+.8});block(w+.15,.3,d+.15,green,x,h-.15,z);for(let y=2;y<h-1;y+=2.6){for(let xx=-w/2+1;xx<w/2-.5;xx+=2){const win=new THREE.Mesh(new THREE.BoxGeometry(.85,1.15,.08),glassMat);win.position.set(x+xx,y,z+d/2+.045);scene.add(win);const win2=win.clone();win2.position.z=z-d/2-.045;scene.add(win2)}}}
+// Check the expanded 70m road grid and the original starter-district roads
+// before creating legacy starter buildings or skyline blocks.
+function legacyBuildingPlotClear(x,z,w,d,extra=1){
+ const halfW=w/2+extra, halfD=d/2+extra;
+ // Vertical streets: 24m avenues every 210m and 8m local roads every 70m.
+ const minGX=Math.floor((x-halfW)/70)-1, maxGX=Math.ceil((x+halfW)/70)+1;
+ for(let k=minGX;k<=maxGX;k++){
+  const roadX=k*70, roadHalf=(k%3===0)?12:4;
+  if(Math.abs(x-roadX)<halfW+roadHalf) return false;
+ }
+ // Horizontal streets on the same grid.
+ const minGZ=Math.floor((z-halfD)/70)-1, maxGZ=Math.ceil((z+halfD)/70)+1;
+ for(let k=minGZ;k<=maxGZ;k++){
+  const roadZ=k*70, roadHalf=(k%3===0)?11:4;
+  if(Math.abs(z-roadZ)<halfD+roadHalf) return false;
+ }
+ // The original compact starter area has an additional north-south road
+ // at x=0 and an east-west road centred at z=-22.
+ if(Math.abs(x)<halfW+9 || Math.abs(z+22)<halfD+7.5) return false;
+ return true;
+}
+function building(x,z,w,d,h,idx){
+ if(!legacyBuildingPlotClear(x,z,w,d,1.5)) return;
+ const m=buildingMats[idx%buildingMats.length];block(w,h,d,m,x,0,z);buildingColliders.push({minX:x-w/2-.8,maxX:x+w/2+.8,minZ:z-d/2-.8,maxZ:z+d/2+.8});block(w+.15,.3,d+.15,green,x,h-.15,z);for(let y=2;y<h-1;y+=2.6){for(let xx=-w/2+1;xx<w/2-.5;xx+=2){const win=new THREE.Mesh(new THREE.BoxGeometry(.85,1.15,.08),glassMat);win.position.set(x+xx,y,z+d/2+.045);scene.add(win);const win2=win.clone();win2.position.z=z-d/2-.045;scene.add(win2)}}}
 for(let i=0;i<9;i++){const z=-65+i*16;building(-20,z,8,10,12+(i%3)*5,i);building(20,z,9,11,16+(i%4)*6,i+1)}
 // farther skyline
 for(let i=0;i<34;i++){let x=(Math.random()-.5)*125,z=-100+Math.random()*180;if(Math.abs(x)<27)continue;building(x,z,7+Math.random()*8,7+Math.random()*8,8+Math.random()*28,i+2)}
@@ -78,11 +101,19 @@ function roadHalfWidthAt(value){
  return Math.abs(grid%210)===0?12:4;
 }
 function clearBuildingPlot(x,z,w,d,extra=1){
- const nx=Math.round(x/70)*70, nz=Math.round(z/70)*70;
- const dx=Math.abs(x-nx), dz=Math.abs(z-nz);
- // A footprint is rejected only when its edge would enter a road or setback.
- if(dx < roadHalfWidthAt(nx)+w/2+extra) return false;
- if(dz < roadHalfWidthAt(nz)+d/2+extra) return false;
+ // Test the complete footprint against every road line it could touch.
+ // This also catches large buildings that span more than one street block.
+ const halfW=w/2+extra, halfD=d/2+extra;
+ const minGX=Math.floor((x-halfW)/70)-1, maxGX=Math.ceil((x+halfW)/70)+1;
+ for(let k=minGX;k<=maxGX;k++){
+  const roadX=k*70, roadHalf=(k%3===0)?12:4;
+  if(Math.abs(x-roadX)<halfW+roadHalf) return false;
+ }
+ const minGZ=Math.floor((z-halfD)/70)-1, maxGZ=Math.ceil((z+halfD)/70)+1;
+ for(let k=minGZ;k<=maxGZ;k++){
+  const roadZ=k*70, roadHalf=(k%3===0)?12:4;
+  if(Math.abs(z-roadZ)<halfD+roadHalf) return false;
+ }
  return true;
 }
 
@@ -765,7 +796,7 @@ function animate(){
   let ix=Math.sin(lookAngle)*forward+Math.cos(lookAngle)*side;
   let iz=Math.cos(lookAngle)*forward-Math.sin(lookAngle)*side;
   const inputLength=Math.hypot(ix,iz)||1;ix/=inputLength;iz/=inputLength;
-  const unitsPerSecond=running?4.4:1.8;
+  const unitsPerSecond=running?5.0:2.3;
   const distance=unitsPerSecond*frameDt;
   const dx=ix*distance,dz=iz*distance;
   // Substeps keep wall collisions reliable even when the frame rate dips.
@@ -787,4 +818,4 @@ updateCamera();
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setPixelRatio(maxDevicePixelRatio*renderScale);renderer.setSize(innerWidth,innerHeight)});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)clock.getDelta()});
-toast('Lagos city update v0.25 loaded');
+toast('Lagos city update v0.27 loaded');
