@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.33 — 4x building scale with road-safe dense placement
+// THIS IS LAGOS v0.34 — restored dense building generation with 4x architecture
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -295,11 +295,26 @@ function addWaterTank(parent,x,y,z,scale=1){
 const viewCulledBuildings=[];
 const BUILDING_SCALE=4;
 function findBuildingPosition(x,z,w,d){
- const offsets=[[0,0]];
- for(let r=12;r<=180;r+=12){for(let a=0;a<Math.PI*2;a+=Math.PI/4)offsets.push([Math.cos(a)*r,Math.sin(a)*r]);}
- for(const [ox,oz] of offsets){const px=x+ox,pz=z+oz;if(!clearBuildingPlot(px,pz,w,d,2))continue;
-  const overlap=buildingColliders.some(c=>px+w/2+2>c.minX&&px-w/2-2<c.maxX&&pz+d/2+2>c.minZ&&pz-d/2-2<c.maxZ);
-  if(!overlap)return {x:px,z:pz};}
+ // Try the full 4x footprint first. If a plot is too small, step down the
+ // building template size (never the 4x architectural multiplier) so the
+ // city can remain dense without pushing buildings onto roads.
+ const fitFactors=[1,.85,.7,.58,.48,.38,.30,.24];
+ const candidates=[[x,z]];
+ // Search the surrounding city in 35m increments, then progressively wider rings.
+ for(let r=35;r<=980;r+=35){
+  for(let a=0;a<8;a++){
+   const ang=a*Math.PI/4;
+   candidates.push([x+Math.cos(ang)*r,z+Math.sin(ang)*r]);
+  }
+ }
+ for(const factor of fitFactors){
+  const fw=w*factor,fd=d*factor;
+  for(const [px,pz] of candidates){
+   if(!clearBuildingPlot(px,pz,fw,fd,2))continue;
+   const overlap=buildingColliders.some(c=>px+fw/2+2>c.minX&&px-fw/2-2<c.maxX&&pz+fd/2+2>c.minZ&&pz-fd/2-2<c.maxZ);
+   if(!overlap)return {x:px,z:pz,fit:factor};
+  }
+ }
  return null;
 }
 function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
@@ -316,7 +331,7 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
  else if(kind==='tenement') h=([3,4,5][Math.abs(seed)%3])*3.0;
  else if(kind==='shop'||kind==='market') h=([1,2][Math.abs(seed)%2])*3.0;
  else if(kind==='duplex') h=([2,3][Math.abs(seed)%2])*3.1;
- const placed=findBuildingPosition(x,z,scaledW,scaledD);if(!placed)return null;x=placed.x;z=placed.z;
+ const placed=findBuildingPosition(x,z,scaledW,scaledD);if(!placed)return null;x=placed.x;z=placed.z;w*=placed.fit;d*=placed.fit;
  const wall=wallPalette[Math.abs(seed)%wallPalette.length];
  const obj=new THREE.Group();obj.position.set(x,0,z);obj.scale.setScalar(BUILDING_SCALE);scene.add(obj);
  // Keep the complete building in memory, but skip drawing it when outside the camera view.
