@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.24 — balanced sharpness/performance, spatial collision grid and root-motion fix
+// THIS IS LAGOS v0.26 — Lagos road system upgrade, based on v0.25
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -57,7 +57,7 @@ for(let i=0;i<18;i++){
   block(1.4,.22,22,mat(0x806d52),x,-.02,820);
 }
 // Dense connected road grid. Main avenues every 210m, secondary streets every 70m.
-for(let p=-900;p<=900;p+=210){
+for(let p=-840;p<=840;p+=210){
   block(24,.18,2100,asphaltMat,p,-.12,0);
   block(2100,.18,22,asphaltMat,0,-.12,p);
   block(1,.025,1980,laneMat,p-5,.0,0);
@@ -86,28 +86,75 @@ function clearBuildingPlot(x,z,w,d,extra=1){
  return true;
 }
 
+// Build continuous pedestrian pavements between junctions. Instancing keeps
+// thousands of short pavement/kerb segments to just two draw calls.
+const pavementMat=mat(0xcbd1c7), kerbEdgeMat=mat(0xaeb8ad);
+function addRoadsideInstances(records,material){
+ if(!records.length)return;
+ const mesh=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),material,records.length);
+ const dummy=new THREE.Object3D();
+ records.forEach((r,i)=>{
+  dummy.position.set(r.x,r.y,r.z);dummy.scale.set(r.w,r.h,r.d);dummy.rotation.set(0,0,0);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix);
+ });
+ mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;scene.add(mesh);
+}
+function buildSidewalkNetwork(){
+ const pavements=[],kerbs=[];
+ const grid=[];for(let v=-980;v<=980;v+=70)grid.push(v);
+ for(const p of grid){
+  const roadHalf=roadHalfWidthAt(p);
+  for(let i=0;i<grid.length-1;i++){
+   const a=grid[i],b=grid[i+1];
+   const start=a+roadHalfWidthAt(a)+.55,end=b-roadHalfWidthAt(b)-.55,len=end-start;
+   if(len<5)continue;
+   const mid=(start+end)/2;
+   for(const side of [-1,1]){
+    const offset=side*(roadHalf+.12);
+    // North-south street: kerb beside asphalt, pavement behind it.
+    kerbs.push({x:p+offset,y:.05,z:mid,w:.24,h:.18,d:len});
+    pavements.push({x:p+side*(roadHalf+.24+1.25),y:.02,z:mid,w:2.5,h:.12,d:len});
+    // East-west street: same layout rotated by 90 degrees.
+    kerbs.push({x:mid,y:.05,z:p+offset,w:len,h:.18,d:.24});
+    pavements.push({x:mid,y:.02,z:p+side*(roadHalf+.24+1.25),w:len,h:.12,d:2.5});
+   }
+  }
+ }
+ addRoadsideInstances(pavements,pavementMat);addRoadsideInstances(kerbs,kerbEdgeMat);
+}
+buildSidewalkNetwork();
+
 // Realistic road paint: avenue centre lines, broken lane dividers, edge lines,
 // turn arrows and stop bars. All paint sits slightly above the asphalt.
 const paintWhite=new THREE.MeshBasicMaterial({color:0xf4f2df});
 const paintYellow=new THREE.MeshBasicMaterial({color:0xf1c84b});
 const paintArrow=new THREE.MeshBasicMaterial({color:0xf4f2df,side:THREE.DoubleSide});
+const roadPaintBatches=new Map(),roadArrowRecords=[];
 function roadPaint(w,d,x,z,material=paintWhite,y=.018){
- const m=new THREE.Mesh(new THREE.BoxGeometry(w,.035,d),material);m.position.set(x,y,z);scene.add(m);return m;
+ let batch=roadPaintBatches.get(material);if(!batch){batch=[];roadPaintBatches.set(material,batch)}
+ batch.push({w,d,x,z,y});
+}
+function flushRoadPaint(){
+ for(const [material,records] of roadPaintBatches){
+  const mesh=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),material,records.length);
+  const dummy=new THREE.Object3D();
+  records.forEach((r,i)=>{dummy.position.set(r.x,r.y,r.z);dummy.scale.set(r.w,.035,r.d);dummy.rotation.set(0,0,0);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix)});
+  mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;scene.add(mesh);
+ }
 }
 // Main avenues: double yellow centre lines and broken white lane separators.
-for(let p=-900;p<=900;p+=210){
+for(let p=-840;p<=840;p+=210){
  for(const offset of [-.42,.42]){
-  roadPaint(.22,2100,p+offset,-0,paintYellow,.012);
-  roadPaint(2100,.22,0,p+offset,paintYellow,.012);
+  roadPaint(.22,2100,p+offset,0,paintYellow,.08);
+  roadPaint(2100,.22,0,p+offset,paintYellow,.08);
  }
  for(let q=-990;q<990;q+=18){
-  roadPaint(.16,7,p-5.5,q,paintWhite,.02);roadPaint(.16,7,p+5.5,q,paintWhite,.02);
-  roadPaint(7,.16,q,p-5.5,paintWhite,.02);roadPaint(7,.16,q,p+5.5,paintWhite,.02);
+  roadPaint(.16,7,p-5.5,q,paintWhite,.08);roadPaint(.16,7,p+5.5,q,paintWhite,.08);
+  roadPaint(7,.16,q,p-5.5,paintWhite,.08);roadPaint(7,.16,q,p+5.5,paintWhite,.08);
  }
  // Kerb/edge lines on both sides of each main avenue.
  for(const side of [-1,1]){
-  roadPaint(.18,2100,p+side*11.2,0,paintWhite,.014);
-  roadPaint(2100,.18,0,p+side*11.2,paintWhite,.014);
+  roadPaint(.18,2100,p+side*11.2,0,paintWhite,.08);
+  roadPaint(2100,.18,0,p+side*11.2,paintWhite,.08);
  }
 }
 // Local streets receive short broken centre markings and painted junction bars.
@@ -119,14 +166,25 @@ for(let p=-980;p<=980;p+=70){
  }
 }
 // Direction arrows at regular approach points.
-function addRoadArrow(x,z,rotation=0){
+function addRoadArrow(x,z,rotation=0){roadArrowRecords.push({x,z,rotation});}
+function flushRoadArrows(){
+ if(!roadArrowRecords.length)return;
  const shape=new THREE.Shape();shape.moveTo(0,3.2);shape.lineTo(-1.1,1.2);shape.lineTo(-.38,1.2);shape.lineTo(-.38,-2.2);shape.lineTo(.38,-2.2);shape.lineTo(.38,1.2);shape.lineTo(1.1,1.2);shape.closePath();
- const mesh=new THREE.Mesh(new THREE.ShapeGeometry(shape),paintArrow);mesh.rotation.x=-Math.PI/2;mesh.rotation.z=rotation;mesh.position.set(x,.035,z);scene.add(mesh);
+ const mesh=new THREE.InstancedMesh(new THREE.ShapeGeometry(shape),paintArrow,roadArrowRecords.length);
+ const dummy=new THREE.Object3D();
+ roadArrowRecords.forEach((r,i)=>{dummy.position.set(r.x,.085,r.z);dummy.rotation.set(-Math.PI/2,r.rotation,0);dummy.scale.set(1,1,1);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix)});
+ mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;scene.add(mesh);
 }
-for(let p=-840;p<=840;p+=210){for(let q=-840;q<=840;q+=210){addRoadArrow(p-7,q-28,0);addRoadArrow(p+7,q+28,Math.PI);}}
+// Add clear directional arrows on the four approaches to every major junction.
+for(let p=-840;p<=840;p+=210){for(let q=-840;q<=840;q+=210){
+ addRoadArrow(p-6,q-32,Math.PI);      // approach from the north, travel south-to-north
+ addRoadArrow(p+6,q+32,0);            // approach from the south, travel north-to-south
+ addRoadArrow(p-32,q+6,-Math.PI/2);   // approach from the west, travel west-to-east
+ addRoadArrow(p+32,q-6,Math.PI/2);    // approach from the east, travel east-to-west
+}}
 
 // Lagos-style streetlights: galvanized poles, outreach arms and warm LED heads.
-// The lamps are placed on verges, never in driving lanes or building plots.
+// The lamps are placed on the outer verge, clear of the carriageway.
 const poleMat=mat(0x59645e,.55), lampGlow=new THREE.MeshStandardMaterial({color:0xffe7ad,emissive:0xffc66b,emissiveIntensity:1.6,roughness:.3});
 function streetlight(x,z,rotation=0,scale=1){
  const g=new THREE.Group();g.position.set(x,0,z);g.rotation.y=rotation;scene.add(g);
@@ -136,23 +194,41 @@ function streetlight(x,z,rotation=0,scale=1){
  const hood=new THREE.Mesh(new THREE.BoxGeometry(1.45*scale,.12*scale,.62*scale),poleMat);hood.position.set(1.85*scale,7.72*scale,0);g.add(hood);
  return g;
 }
-for(let p=-900;p<=900;p+=210){
+for(let p=-840;p<=840;p+=210){
  for(let q=-945;q<=945;q+=105){streetlight(p-15,q,0,.9);streetlight(q,p+15,Math.PI/2,.9);}
 }
-// A smaller number of lights on local streets, alternating sides to reduce clutter.
-for(let p=-980;p<=980;p+=140){if(Math.abs(p%210)<1)continue;for(let q=-910;q<=910;q+=210){streetlight(p-6,q,0,.68);streetlight(q,p+6,Math.PI/2,.68);}}
+// Local-street lights are shifted to the outer edge of the new pavement.
+for(let p=-980;p<=980;p+=140){if(Math.abs(p%210)<1)continue;for(let q=-910;q<=910;q+=210){streetlight(p-7.2,q,0,.68);streetlight(q,p+7.2,Math.PI/2,.68);}}
 
-// Intersections and zebra crossing bars at selected major junctions.
+// Zebra crossings on all four arms of every major junction. Each stripe spans
+// the asphalt road width; the seven bars run perpendicular to the traffic flow.
 for(let x=-840;x<=840;x+=210){
  for(let z=-840;z<=840;z+=210){
-  for(let n=-3;n<=3;n++){
-   // Zebra bars are thin paint, lifted slightly above the road so they do not
-   // z-fight with the asphalt or appear embedded in the ground.
-   roadPaint(1.2,9,x+n*2.3,z-17,paintWhite,.045);
-   roadPaint(9,1.2,x-17,z+n*2.3,paintWhite,.045);
+  for(const side of [-1,1]){
+   for(let n=-3;n<=3;n++){
+    // North/south avenue: bars run across X, spaced along Z.
+    roadPaint(18,1.15,x,z+side*17+n*2.15,paintWhite,.085);
+    // East/west avenue: bars run across Z, spaced along X.
+    roadPaint(1.15,18,x+side*17+n*2.15,z,paintWhite,.085);
+   }
+   // Stop lines sit just before each crossing, on the approach side.
+   roadPaint(18,.45,x,z+side*26,paintWhite,.085);
+   roadPaint(.45,18,x+side*26,z,paintWhite,.085);
   }
  }
 }
+// Local streets yield at major avenues: short stop bars stay inside the 8m roads.
+for(let major=-840;major<=840;major+=210){
+ for(let local=-980;local<=980;local+=70){
+  if(Math.abs(local%210)<1)continue;
+  roadPaint(.35,6.4,major-15,local,paintWhite,.0);
+  roadPaint(.35,6.4,major+15,local,paintWhite,.0);
+  roadPaint(6.4,.35,local,major-15,paintWhite,.0);
+  roadPaint(6.4,.35,local,major+15,paintWhite,.0);
+ }
+}
+// Submit all flat road paint and arrows as instanced batches to limit draw calls.
+flushRoadPaint();flushRoadArrows();
 
 // District palette and building families.
 const wallPalette=[0xd9d1bd,0xe2dfd1,0xc8d3c9,0xd6c3a8,0xbfc9c4,0xe8e2d2,0xc7b8a5,0xd7d9cf].map(c=>mat(c));
