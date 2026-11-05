@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.37 — vacant-plot amenities, bus stops, fuel stations, supermarkets, parks, courts, shops
+// THIS IS LAGOS v0.37 — fixed vacant-land scan for amenities, bus stops, fuel stations, supermarkets, parks, courts and shops
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -671,38 +671,40 @@ function addBusStop(x,z,rotation=0){
 }
 function addAmenityInfill(){
   let placedCount=0;
-  const plots=[];
-  for(let gx=-945;gx<=945;gx+=70){
-    for(let gz=-945;gz<=945;gz+=70){
-      // Keep the waterfront and port work yards free for their own facilities.
-      if(gx>650&&gz>650)continue;
-      plots.push([gx,gz]);
+  // Scan the actual open land between streets instead of testing only block
+  // centres. This finds usable corners and gaps around existing buildings.
+  const types=[
+    {kind:'fuel',w:36,d:29},
+    {kind:'supermarket',w:34,d:26},
+    {kind:'tennis',w:34,d:25},
+    {kind:'park',w:41,d:35},
+    {kind:'shop',w:25,d:17},
+    {kind:'bus',w:15,d:10},
+    {kind:'garden',w:27,d:23},
+    {kind:'pharmacy',w:25,d:17}
+  ];
+  const candidates=[];
+  // 14m spacing gives a broad search while avoiding a huge per-frame cost.
+  for(let x=-980;x<=980;x+=14){
+    for(let z=-980;z<=980;z+=14){
+      if(x>650&&z>650)continue; // keep the waterfront/port zone reserved
+      candidates.push([x,z]);
     }
   }
-  // Stable ordering and distribution: no random movement of existing buildings.
-  for(let i=0;i<plots.length;i++){
-    const [baseX,baseZ]=plots[i];
-    const kindIndex=(Math.floor((baseX+945)/70)*3+Math.floor((baseZ+945)/70)*5+17)%12;
-    // Leave most already-developed blocks untouched; fill only genuinely vacant plots.
-    const candidates=[[0,0],[12,10],[-12,-10],[10,-12],[-10,12]];
-    const type=kindIndex;
-    const dims=(type===0||type===1)?[36,29]:(type===2||type===3)?[34,25]:[27,22];
-    let spot=null;
-    for(const [ox,oz] of candidates){
-      const x=baseX+ox,z=baseZ+oz;
-      if(amenityPlotFree(x,z,dims[0],dims[1])){spot=[x,z];break;}
-    }
-    if(!spot)continue;
-    const [x,z]=spot;
-    if(type===0)addFuelStation(x,z);
-    else if(type===1)addSupermarket(x,z);
-    else if(type===2)addTennisCourt(x,z);
-    else if(type===3)addGardenPark(x,z,true);
-    else if(type===4)addBusStop(x,z,(i%2)?Math.PI/2:0);
-    else if(type===5||type===6)addShopfront(x,z,type===5?'PHARMACY':'LOCAL SHOPS',type===5?0x16844b:0x176b43);
-    else if(type===7)addGardenPark(x,z,false);
-    else if(type===8)addBusStop(x,z,(i%2)?Math.PI/2:0);
-    else continue;
+  // Deterministic shuffle-like ordering spreads facilities throughout the map.
+  candidates.sort((a,b)=>(((a[0]*17+a[1]*31)%997)-((b[0]*17+b[1]*31)%997)));
+  for(let i=0;i<candidates.length&&placedCount<110;i++){
+    const [x,z]=candidates[i];
+    const type=types[(i*7+Math.floor(Math.abs(x+z)/14))%types.length];
+    if(!amenityPlotFree(x,z,type.w,type.d))continue;
+    if(type.kind==='fuel')addFuelStation(x,z);
+    else if(type.kind==='supermarket')addSupermarket(x,z);
+    else if(type.kind==='tennis')addTennisCourt(x,z);
+    else if(type.kind==='park')addGardenPark(x,z,true);
+    else if(type.kind==='shop')addShopfront(x,z,'LOCAL SHOPS',0x176b43);
+    else if(type.kind==='bus')addBusStop(x,z,((i%2)?Math.PI/2:0));
+    else if(type.kind==='garden')addGardenPark(x,z,false);
+    else if(type.kind==='pharmacy')addShopfront(x,z,'PHARMACY',0x16844b);
     placedCount++;
   }
   return placedCount;
