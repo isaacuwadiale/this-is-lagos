@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.39 — denser vacant-land infill for amenities, bus stops, fuel stations, supermarkets, parks, courts and shops
+// THIS IS LAGOS v0.41 — enlarged pharmacies and preserved road-aligned bus shelters
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -597,6 +597,22 @@ function addShopfront(x,z,label='SHOP',accent=0x176b43){
   }
   signBoard(label,x,z-7,15,accent);reserveAmenity(x,z,25,17);
 }
+function addPharmacy(x,z){
+  // Pharmacy dimensions are scaled from the original shopfront: H x3, W x2, L x2.
+  // Original shell: 22 wide x 6 high x 13 deep; new shell: 44 x 18 x 26.
+  const g=new THREE.Group();g.position.set(x,0,z);scene.add(g);
+  amenityBox(g,44,18,26,mat(0xd9d9cf),0,0,0);
+  amenityBox(g,45,1.1,27,mat(0x7b5140),0,18,0);
+  for(let i=0;i<4;i++){
+    const px=-16.2+i*10.8;
+    amenityBox(g,8.4,8.4,.24,amenityMats.glass,px,3.3,13.12);
+    amenityBox(g,9,.7,1.1,mat(0x16844b),px,12.45,13.8);
+  }
+  const sign=signBoard('PHARMACY',x,z-15,44,0x16844b);
+  sign.position.y=19;
+  // Reserve the full enlarged footprint plus clearance from roads and neighbours.
+  reserveAmenity(x,z,50,32);
+}
 function addSupermarket(x,z){
   const g=new THREE.Group();g.position.set(x,0,z);scene.add(g);
   amenityBox(g,30,7,22,mat(0xe3e5df),0,0,0);
@@ -686,7 +702,7 @@ function addAmenityInfill(){
     {kind:'shop',w:25,d:17},
     {kind:'bus',w:36,d:14},
     {kind:'garden',w:27,d:23},
-    {kind:'pharmacy',w:25,d:17}
+    {kind:'pharmacy',w:50,d:32}
   ];
   const candidates=[];
   // 14m spacing gives a broad search while avoiding a huge per-frame cost.
@@ -703,8 +719,8 @@ function addAmenityInfill(){
     const type=types[(i*7+Math.floor(Math.abs(x+z)/14))%types.length];
     let busRotation=0, plotW=type.w, plotD=type.d;
     if(type.kind==='bus'){
-      // Shelter's long side follows the nearest street; its open/front side
-      // faces toward that street rather than across the carriageway.
+      // The shelter's 30-unit front runs parallel to the nearest road.
+      // Its open side faces the road; reserve the full rotated 36 x 14 plot.
       const roadX=Math.round(x/70)*70, roadZ=Math.round(z/70)*70;
       const dx=Math.abs(x-roadX), dz=Math.abs(z-roadZ);
       if(dx<=dz){
@@ -723,13 +739,36 @@ function addAmenityInfill(){
     else if(type.kind==='shop')addShopfront(x,z,'LOCAL SHOPS',0x176b43);
     else if(type.kind==='bus')addBusStop(x,z,busRotation);
     else if(type.kind==='garden')addGardenPark(x,z,false);
-    else if(type.kind==='pharmacy')addShopfront(x,z,'PHARMACY',0x16844b);
+    else if(type.kind==='pharmacy')addPharmacy(x,z);
     placedCount++;
   }
-  return placedCount;
+
+  // Dedicated second pass actively places additional bus shelters even when the
+  // mixed-use infill pass happens to select few or none of the bus candidates.
+  // A shelter is 30 x 8; its reserved site is 36 x 14, rotated to the road.
+  let extraShelters=0;
+  const shelterTarget=16;
+  for(let i=0;i<candidates.length&&extraShelters<shelterTarget;i++){
+    const [x,z]=candidates[i];
+    const roadX=Math.round(x/70)*70, roadZ=Math.round(z/70)*70;
+    const dx=Math.abs(x-roadX), dz=Math.abs(z-roadZ);
+    let rotation,plotW,plotD;
+    if(dx<=dz){
+      rotation=x>roadX?Math.PI/2:-Math.PI/2;
+      plotW=14;plotD=36;
+    }else{
+      rotation=z>roadZ?0:Math.PI;
+      plotW=36;plotD=14;
+    }
+    if(!amenityPlotFree(x,z,plotW,plotD))continue;
+    addBusStop(x,z,rotation);
+    extraShelters++;
+    placedCount++;
+  }
+  return {placedCount,extraShelters};
 }
-const v037AmenityCount=addAmenityInfill();
-console.info('This Is Lagos v0.39: wider road-aligned bus shelters; denser vacant-plot amenities',v037AmenityCount);
+const v037AmenityResult=addAmenityInfill();
+console.info('This Is Lagos v0.41: pharmacies H x3, W x2, L x2; road-aligned 8-unit-wide bus shelters; denser vacant-plot amenities',v037AmenityResult);
 // -----------------------------------------------------------------------------
 
 // Industrial port yards, container stacks and cranes near Apapa.
