@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.41 — enlarged pharmacies and preserved road-aligned bus shelters
+// THIS IS LAGOS v0.42 — protected sports courts, restored bus shelters and supported table-tennis tables
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -28,6 +28,8 @@ for(let x=-120;x<=120;x+=12){block(.12,.025,260,mat(0xe5e9df),x,.08,0)}
 for(let z=-125;z<130;z+=9)block(.18,.025,3,white,0,.09,z);
 const buildingMats=[0xe7e8d9,0xd7e2d9,0xd8d8cf,0xe8dfce,0xc7d9d0].map(c=>mat(c));
 const buildingColliders=[];
+// Shared reserved footprints prevent later buildings from occupying sports courts or amenities.
+const amenityColliders=[];
 // Road reservations include the asphalt, kerbs and full pedestrian pavement.
 const ROAD_EDGE_CLEARANCE=4.8;
 // Check the expanded 70m road grid and the original starter-district roads
@@ -311,8 +313,9 @@ function findBuildingPosition(x,z,w,d){
   const fw=w*factor,fd=d*factor;
   for(const [px,pz] of candidates){
    if(!clearBuildingPlot(px,pz,fw,fd,2))continue;
-   const overlap=buildingColliders.some(c=>px+fw/2+2>c.minX&&px-fw/2-2<c.maxX&&pz+fd/2+2>c.minZ&&pz-fd/2-2<c.maxZ);
-   if(!overlap)return {x:px,z:pz,fit:factor};
+   const overlapsBuilding=buildingColliders.some(c=>px+fw/2+2>c.minX&&px-fw/2-2<c.maxX&&pz+fd/2+2>c.minZ&&pz-fd/2-2<c.maxZ);
+   const overlapsReservedAmenity=amenityColliders.some(c=>px+fw/2+2>c.minX&&px-fw/2-2<c.maxX&&pz+fd/2+2>c.minZ&&pz-fd/2-2<c.maxZ);
+   if(!overlapsBuilding&&!overlapsReservedAmenity)return {x:px,z:pz,fit:factor};
   }
  }
  return null;
@@ -532,6 +535,18 @@ const districtDefs=[
  ['EPE WATERFRONT',930,760,'civic'],['MAINLAND SPORTS PARK',-70,120,'sports'],['AGEGE',-880,20,'residential'],
  ['FESTAC TOWN',-760,760,'residential'],['APAPA PORT',-980,520,'civic']
 ];
+// Reserve every fixed sports venue BEFORE any district buildings are generated.
+// This prevents buildings in earlier or later districts from landing on courts.
+for(const d of districtDefs){
+ if(d[3]!=='sports')continue;
+ const cx=d[1],cz=d[2];
+ // Three adjacent tennis courts (22 x 12 each, spaced 18 units apart).
+ amenityColliders.push({minX:cx+135-17,maxX:cx+135+17,minZ:cz+5-42,maxZ:cz+5+42});
+ // Basketball court plus run-off area.
+ amenityColliders.push({minX:cx-135-27,maxX:cx-135+27,minZ:cz+8-18,maxZ:cz+8+18});
+ // Football pitch and safety perimeter.
+ amenityColliders.push({minX:cx-52,maxX:cx+52,minZ:cz-38,maxZ:cz+38});
+}
 districtDefs.forEach((d,i)=>buildDistrict(d[0],d[1],d[2],d[3],i*13));
 
 // v0.35: denser city infill with a 60% tall-building target.
@@ -573,7 +588,6 @@ const amenityMats={
   glass:mat(0x75aeb9,.35), blue:mat(0x1769a6), red:mat(0xb64b38),
   yellow:mat(0xe8c34b), white:mat(0xf3f1e6), roof:mat(0x344d43)
 };
-const amenityColliders=[];
 function amenityPlotFree(x,z,w,d){
   if(!clearBuildingPlot(x,z,w,d,3)) return false;
   const overlaps=buildingColliders.some(c=>x+w/2+3>c.minX&&x-w/2-3<c.maxX&&z+d/2+3>c.minZ&&z-d/2-3<c.maxZ);
@@ -670,6 +684,25 @@ function addGardenPark(x,z,large=false){
   }else signBoard('GARDEN',x,z-d/2-2,13,0x176b43);
   reserveAmenity(x,z,w+3,d+3);
 }
+function addTableTennis(x,z){
+  const g=new THREE.Group();g.position.set(x,0,z);scene.add(g);
+  // Full table with four visible legs, a supporting underframe and a centre net.
+  amenityBox(g,8.4,.22,4.6,mat(0x176b43),0,1.55,0);
+  amenityBox(g,8.5,.12,4.7,amenityMats.white,0,1.77,0);
+  amenityBox(g,8.1,.045,4.3,mat(0x176b43),0,1.84,0);
+  for(const px of [-3.65,3.65])for(const pz of [-1.75,1.75]){
+    amenityBox(g,.22,1.55,.22,amenityMats.dark,px,0,pz);
+    amenityBox(g,.5,.12,.5,amenityMats.dark,px,.08,pz);
+  }
+  // Longitudinal and cross braces keep the tabletop visibly supported.
+  amenityBox(g,7.5,.16,.18,amenityMats.dark,0,1.18,0);
+  amenityBox(g,.18,.16,3.7,amenityMats.dark,0,1.18,0);
+  amenityBox(g,.08,.08,4.45,amenityMats.white,0,1.9,0);
+  amenityBox(g,.12,.48,.12,amenityMats.white,0,2.12,-2.22);
+  amenityBox(g,.12,.48,.12,amenityMats.white,0,2.12,2.22);
+  signBoard('TABLE TENNIS',x,z-6,14,0x176b43);
+  reserveAmenity(x,z,14,11);
+}
 function addBusStop(x,z,rotation=0){
   const g=new THREE.Group();g.position.set(x,0,z);g.rotation.y=rotation;scene.add(g);
   // Preserve the requested tall shelter and double its breadth from 4 to 8 units.
@@ -690,6 +723,26 @@ function addBusStop(x,z,rotation=0){
   const alongRoad=Math.abs(Math.sin(rotation))>.5;
   reserveAmenity(x,z,alongRoad?14:36,alongRoad?36:14);
 }
+function shelterSiteFree(x,z,plotW,plotD,roadAxis,roadCoord){
+  // Unlike buildings, shelters intentionally sit beside a road. Check the
+  // rotated shelter footprint against every road except its parallel frontage.
+  const halfW=plotW/2+1,halfD=plotD/2+1;
+  const minGX=Math.floor((x-halfW)/70)-1,maxGX=Math.ceil((x+halfW)/70)+1;
+  for(let k=minGX;k<=maxGX;k++){
+    const rx=k*70,half=(k%3===0)?12:4;
+    if(roadAxis==='x'&&Math.abs(rx-roadCoord)<.01)continue;
+    if(Math.abs(x-rx)<halfW+half+1)return false;
+  }
+  const minGZ=Math.floor((z-halfD)/70)-1,maxGZ=Math.ceil((z+halfD)/70)+1;
+  for(let k=minGZ;k<=maxGZ;k++){
+    const rz=k*70,half=(k%3===0)?11:4;
+    if(roadAxis==='z'&&Math.abs(rz-roadCoord)<.01)continue;
+    if(Math.abs(z-rz)<halfD+half+1)return false;
+  }
+  const overlapsBuildings=buildingColliders.some(c=>x+halfW>c.minX&&x-halfW<c.maxX&&z+halfD>c.minZ&&z-halfD<c.maxZ);
+  if(overlapsBuildings)return false;
+  return !amenityColliders.some(c=>x+halfW>c.minX&&x-halfW<c.maxX&&z+halfD>c.minZ&&z-halfD<c.maxZ);
+}
 function addAmenityInfill(){
   let placedCount=0;
   // Scan the actual open land between streets instead of testing only block
@@ -698,6 +751,7 @@ function addAmenityInfill(){
     {kind:'fuel',w:36,d:29},
     {kind:'supermarket',w:34,d:26},
     {kind:'tennis',w:34,d:25},
+    {kind:'tabletennis',w:14,d:11},
     {kind:'park',w:41,d:35},
     {kind:'shop',w:25,d:17},
     {kind:'bus',w:36,d:14},
@@ -735,6 +789,7 @@ function addAmenityInfill(){
     if(type.kind==='fuel')addFuelStation(x,z);
     else if(type.kind==='supermarket')addSupermarket(x,z);
     else if(type.kind==='tennis')addTennisCourt(x,z);
+    else if(type.kind==='tabletennis')addTableTennis(x,z);
     else if(type.kind==='park')addGardenPark(x,z,true);
     else if(type.kind==='shop')addShopfront(x,z,'LOCAL SHOPS',0x176b43);
     else if(type.kind==='bus')addBusStop(x,z,busRotation);
@@ -743,24 +798,31 @@ function addAmenityInfill(){
     placedCount++;
   }
 
-  // Dedicated second pass actively places additional bus shelters even when the
-  // mixed-use infill pass happens to select few or none of the bus candidates.
-  // A shelter is 30 x 8; its reserved site is 36 x 14, rotated to the road.
+  // Dedicated roadside pass: shelter centres are deliberately offset from
+  // the road edge, rather than sent through the building-only road setback test.
   let extraShelters=0;
   const shelterTarget=16;
   for(let i=0;i<candidates.length&&extraShelters<shelterTarget;i++){
-    const [x,z]=candidates[i];
-    const roadX=Math.round(x/70)*70, roadZ=Math.round(z/70)*70;
-    const dx=Math.abs(x-roadX), dz=Math.abs(z-roadZ);
-    let rotation,plotW,plotD;
+    const [cx,cz]=candidates[i];
+    const roadX=Math.round(cx/70)*70,roadZ=Math.round(cz/70)*70;
+    const dx=Math.abs(cx-roadX),dz=Math.abs(cz-roadZ);
+    let x,z,rotation,plotW,plotD,roadAxis,roadCoord;
     if(dx<=dz){
-      rotation=x>roadX?Math.PI/2:-Math.PI/2;
-      plotW=14;plotD=36;
+      // Shelter's 30-unit long side runs along a north-south road.
+      const side=cx>=roadX?1:-1;
+      const roadHalf=(Math.abs(roadX%210)<1)?12:4;
+      x=roadX+side*(roadHalf+8);z=Math.round(cz/14)*14;
+      rotation=side>0?Math.PI/2:-Math.PI/2;
+      plotW=14;plotD=36;roadAxis='x';roadCoord=roadX;
     }else{
-      rotation=z>roadZ?0:Math.PI;
-      plotW=36;plotD=14;
+      // Shelter's 30-unit long side runs along an east-west road.
+      const side=cz>=roadZ?1:-1;
+      const roadHalf=(Math.abs(roadZ%210)<1)?11:4;
+      z=roadZ+side*(roadHalf+8);x=Math.round(cx/14)*14;
+      rotation=side>0?0:Math.PI;
+      plotW=36;plotD=14;roadAxis='z';roadCoord=roadZ;
     }
-    if(!amenityPlotFree(x,z,plotW,plotD))continue;
+    if(!shelterSiteFree(x,z,plotW,plotD,roadAxis,roadCoord))continue;
     addBusStop(x,z,rotation);
     extraShelters++;
     placedCount++;
@@ -768,7 +830,7 @@ function addAmenityInfill(){
   return {placedCount,extraShelters};
 }
 const v037AmenityResult=addAmenityInfill();
-console.info('This Is Lagos v0.41: pharmacies H x3, W x2, L x2; road-aligned 8-unit-wide bus shelters; denser vacant-plot amenities',v037AmenityResult);
+console.info('This Is Lagos v0.42: protected sports courts, supported table-tennis tables, restored roadside shelters; pharmacy H x3, W x2, L x2',v037AmenityResult);
 // -----------------------------------------------------------------------------
 
 // Industrial port yards, container stacks and cranes near Apapa.
