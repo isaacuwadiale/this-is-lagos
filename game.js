@@ -716,7 +716,7 @@ function addBusStop(x,z,rotation=0){
   amenityBox(g,27,.18,7.6,amenityMats.blue,0,18.15,0);
   // Transparent long-side screen and passenger bench.
   amenityBox(g,24,6.6,.12,amenityMats.glass,0,7.5,-3.55);
-  amenityBox(g,24,.16,.35,mat(0x5b5146),0,4.8,3.1);
+  // Removed the obstructing horizontal bar completely; keep the entrance open.
   // Replace the large rectangular BUS STOP board with a standard circular
   // blue bus-stop symbol mounted on a slim roadside pole. The sign is part
   // of the shelter group, so it follows the shelter's road-facing direction.
@@ -877,7 +877,7 @@ function addAmenityInfill(){
   return {placedCount,extraShelters};
 }
 const v037AmenityResult=addAmenityInfill();
-console.info('This Is Lagos v0.48: roof-height circular pole bus-stop signs; 40-target bus shelters on double-lane avenues only, fronts facing roads; protected courts and supported table-tennis; pharmacy H x3, W x2, L x2',v037AmenityResult);
+console.info('This Is Lagos v0.50: roof-height circular pole bus-stop signs; 40-target bus shelters on double-lane avenues only, fronts facing roads; protected courts and supported table-tennis; pharmacy H x3, W x2, L x2',v037AmenityResult);
 // -----------------------------------------------------------------------------
 
 // Industrial port yards, container stacks and cranes near Apapa.
