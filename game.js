@@ -717,11 +717,34 @@ function addBusStop(x,z,rotation=0){
   // Transparent long-side screen and passenger bench.
   amenityBox(g,24,6.6,.12,amenityMats.glass,0,7.5,-3.55);
   amenityBox(g,24,.16,.35,mat(0x5b5146),0,4.8,3.1);
-  // The open passenger side is local +Z. Put the stop sign on that side,
-  // and reserve the actual shelter footprint plus a modest clearance.
-  const frontX=x+Math.sin(rotation)*4.2;
-  const frontZ=z+Math.cos(rotation)*4.2;
-  signBoard('BUS STOP',frontX,frontZ,24,0x1769a6);
+  // Replace the large rectangular BUS STOP board with a standard circular
+  // blue bus-stop symbol mounted on a slim roadside pole. The sign is part
+  // of the shelter group, so it follows the shelter's road-facing direction.
+  const signPole=new THREE.Mesh(
+    new THREE.CylinderGeometry(.09,.12,17.2,10),amenityMats.dark
+  );
+  // Stand the sign independently just outside the shelter's roadside edge;
+  // the pole reaches approximately to roof level.
+  signPole.position.set(0,8.6,5.55);g.add(signPole);
+  const signCanvas=document.createElement('canvas');
+  signCanvas.width=256;signCanvas.height=256;
+  const signCtx=signCanvas.getContext('2d');
+  signCtx.fillStyle='#1769a6';signCtx.beginPath();
+  signCtx.arc(128,128,120,0,Math.PI*2);signCtx.fill();
+  // Simple white front-view bus pictogram.
+  signCtx.fillStyle='#ffffff';
+  signCtx.beginPath();signCtx.roundRect(73,55,110,132,20);signCtx.fill();
+  signCtx.fillStyle='#1769a6';
+  signCtx.fillRect(86,70,84,43);
+  signCtx.fillRect(86,121,36,28);signCtx.fillRect(134,121,36,28);
+  signCtx.fillStyle='#ffffff';
+  signCtx.beginPath();signCtx.arc(94,183,10,0,Math.PI*2);signCtx.arc(162,183,10,0,Math.PI*2);signCtx.fill();
+  const signTexture=new THREE.CanvasTexture(signCanvas);
+  const circularSign=new THREE.Mesh(
+    new THREE.CircleGeometry(1.2,32),
+    new THREE.MeshBasicMaterial({map:signTexture,side:THREE.DoubleSide})
+  );
+  circularSign.position.set(0,17.35,5.55);g.add(circularSign);
   const alongRoad=Math.abs(Math.sin(rotation))>.5;
   reserveAmenity(x,z,alongRoad?10:32,alongRoad?32:10);
 }
@@ -774,7 +797,7 @@ function addAmenityInfill(){
   // the 8m local streets. The shelter's 30m long side follows the avenue;
   // its open passenger side faces the carriageway.
   let extraShelters=0;
-  const shelterTarget=20;
+  const shelterTarget=40;
   const roadLines=[];
   for(let p=-980;p<=980;p+=70) roadLines.push(p);
   const segmentCentres=[];
@@ -854,7 +877,7 @@ function addAmenityInfill(){
   return {placedCount,extraShelters};
 }
 const v037AmenityResult=addAmenityInfill();
-console.info('This Is Lagos v0.44: 20-target bus shelters on double-lane avenues only, fronts facing roads; protected courts and supported table-tennis; pharmacy H x3, W x2, L x2',v037AmenityResult);
+console.info('This Is Lagos v0.46: roof-height circular pole bus-stop signs; 40-target bus shelters on double-lane avenues only, fronts facing roads; protected courts and supported table-tennis; pharmacy H x3, W x2, L x2',v037AmenityResult);
 // -----------------------------------------------------------------------------
 
 // Industrial port yards, container stacks and cranes near Apapa.
