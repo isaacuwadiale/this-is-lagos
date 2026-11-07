@@ -725,7 +725,7 @@ function addBusStop(x,z,rotation=0){
   );
   // Stand the sign independently just outside the shelter's roadside edge;
   // the pole reaches approximately to roof level.
-  signPole.position.set(13.2,8.6,5.55);g.add(signPole);
+  signPole.position.set(17.2,8.6,4.8);g.add(signPole);
   const signCanvas=document.createElement('canvas');
   signCanvas.width=256;signCanvas.height=256;
   const signCtx=signCanvas.getContext('2d');
@@ -744,7 +744,7 @@ function addBusStop(x,z,rotation=0){
     new THREE.CircleGeometry(1.2,32),
     new THREE.MeshBasicMaterial({map:signTexture,side:THREE.DoubleSide})
   );
-  circularSign.position.set(13.2,17.35,5.55);g.add(circularSign);
+  circularSign.position.set(17.2,17.35,4.8);g.add(circularSign);
   const alongRoad=Math.abs(Math.sin(rotation))>.5;
   reserveAmenity(x,z,alongRoad?10:32,alongRoad?32:10);
 }
@@ -877,7 +877,7 @@ function addAmenityInfill(){
   return {placedCount,extraShelters};
 }
 const v037AmenityResult=addAmenityInfill();
-console.info('This Is Lagos v0.47: roof-height circular pole bus-stop signs; 40-target bus shelters on double-lane avenues only, fronts facing roads; protected courts and supported table-tennis; pharmacy H x3, W x2, L x2',v037AmenityResult);
+console.info('This Is Lagos v0.48: roof-height circular pole bus-stop signs; 40-target bus shelters on double-lane avenues only, fronts facing roads; protected courts and supported table-tennis; pharmacy H x3, W x2, L x2',v037AmenityResult);
 // -----------------------------------------------------------------------------
 
 // Industrial port yards, container stacks and cranes near Apapa.
