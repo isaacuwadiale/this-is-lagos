@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.42 — protected sports courts, restored bus shelters and supported table-tennis tables
+// THIS IS LAGOS v0.44 — 20-target shelters on double-lane avenues, protected sports courts and supported table-tennis tables
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -717,11 +717,13 @@ function addBusStop(x,z,rotation=0){
   // Transparent long-side screen and passenger bench.
   amenityBox(g,24,6.6,.12,amenityMats.glass,0,7.5,-3.55);
   amenityBox(g,24,.16,.35,mat(0x5b5146),0,4.8,3.1);
-  const frontX=x+Math.sin(rotation)*-4.2;
-  const frontZ=z-Math.cos(rotation)*4.2;
+  // The open passenger side is local +Z. Put the stop sign on that side,
+  // and reserve the actual shelter footprint plus a modest clearance.
+  const frontX=x+Math.sin(rotation)*4.2;
+  const frontZ=z+Math.cos(rotation)*4.2;
   signBoard('BUS STOP',frontX,frontZ,24,0x1769a6);
   const alongRoad=Math.abs(Math.sin(rotation))>.5;
-  reserveAmenity(x,z,alongRoad?14:36,alongRoad?36:14);
+  reserveAmenity(x,z,alongRoad?10:32,alongRoad?32:10);
 }
 function shelterSiteFree(x,z,plotW,plotD,roadAxis,roadCoord){
   // Unlike buildings, shelters intentionally sit beside a road. Check the
@@ -754,7 +756,6 @@ function addAmenityInfill(){
     {kind:'tabletennis',w:14,d:11},
     {kind:'park',w:41,d:35},
     {kind:'shop',w:25,d:17},
-    {kind:'bus',w:36,d:14},
     {kind:'garden',w:27,d:23},
     {kind:'pharmacy',w:50,d:32}
   ];
@@ -768,23 +769,76 @@ function addAmenityInfill(){
   }
   // Deterministic shuffle-like ordering spreads facilities throughout the map.
   candidates.sort((a,b)=>(((a[0]*17+a[1]*31)%997)-((b[0]*17+b[1]*31)%997)));
+  // Dedicated roadside pass (v0.44): place approximately 20 shelters ONLY
+  // beside the 24m-wide double-lane avenues (the 210m road grid). Do not use
+  // the 8m local streets. The shelter's 30m long side follows the avenue;
+  // its open passenger side faces the carriageway.
+  let extraShelters=0;
+  const shelterTarget=20;
+  const roadLines=[];
+  for(let p=-980;p<=980;p+=70) roadLines.push(p);
+  const segmentCentres=[];
+  for(let i=0;i<roadLines.length-1;i++) segmentCentres.push((roadLines[i]+roadLines[i+1])/2);
+
+  // One shelter is sought on each selected roadside, keeping the stops spread
+  // across different avenues rather than clustering them on the first road.
+  const roadsideGroups=[];
+  for(const roadX of roadLines.filter(v=>Math.abs(v%210)<1)){
+    for(const side of [-1,1]){
+      const orderedSegments=segmentCentres.slice().sort((a,b)=>{
+        const sa=Math.abs((a*17+roadX*7+side*29)%997);
+        const sb=Math.abs((b*17+roadX*7+side*29)%997);
+        return sa-sb;
+      });
+      roadsideGroups.push({axis:'x',road:roadX,side,segments:orderedSegments,
+        rank:Math.abs((roadX*31+side*19+7)%991)});
+    }
+  }
+  for(const roadZ of roadLines.filter(v=>Math.abs(v%210)<1)){
+    for(const side of [-1,1]){
+      const orderedSegments=segmentCentres.slice().sort((a,b)=>{
+        const sa=Math.abs((a*19+roadZ*11+side*23)%991);
+        const sb=Math.abs((b*19+roadZ*11+side*23)%991);
+        return sa-sb;
+      });
+      roadsideGroups.push({axis:'z',road:roadZ,side,segments:orderedSegments,
+        rank:Math.abs((roadZ*37+side*17+13)%997)});
+    }
+  }
+  roadsideGroups.sort((a,b)=>a.rank-b.rank);
+
+  for(const group of roadsideGroups){
+    if(extraShelters>=shelterTarget)break;
+    let placedOnThisSide=false;
+    for(const along of group.segments){
+      let x,z,rotation,plotW,plotD;
+      if(group.axis==='x'){
+        // Double-lane north/south avenue. The 8m-wide shelter overlaps the
+        // outer edge of the sidewalk without entering the carriageway.
+        x=group.road+group.side*(12+6.5); z=along;
+        plotW=10; plotD=32;
+        // Local +Z points toward the road: reverse the old, away-facing angles.
+        rotation=group.side>0?-Math.PI/2:Math.PI/2;
+      }else{
+        // Double-lane east/west avenue; the long shelter side stays parallel.
+        z=group.road+group.side*(11+6.5); x=along;
+        plotW=32; plotD=10;
+        rotation=group.side>0?Math.PI:0;
+      }
+      if(!shelterSiteFree(x,z,plotW,plotD,group.axis,group.road))continue;
+      addBusStop(x,z,rotation);
+      extraShelters++;placedCount++;
+      placedOnThisSide=true;
+      break;
+    }
+    // A blocked roadside is skipped; the next double-lane avenue is tried.
+    if(!placedOnThisSide)continue;
+  }
+
   for(let i=0;i<candidates.length&&placedCount<220;i++){
     const [x,z]=candidates[i];
     const type=types[(i*7+Math.floor(Math.abs(x+z)/14))%types.length];
-    let busRotation=0, plotW=type.w, plotD=type.d;
-    if(type.kind==='bus'){
-      // The shelter's 30-unit front runs parallel to the nearest road.
-      // Its open side faces the road; reserve the full rotated 36 x 14 plot.
-      const roadX=Math.round(x/70)*70, roadZ=Math.round(z/70)*70;
-      const dx=Math.abs(x-roadX), dz=Math.abs(z-roadZ);
-      if(dx<=dz){
-        busRotation=x>roadX?Math.PI/2:-Math.PI/2;
-        plotW=14;plotD=36;
-      }else{
-        busRotation=z>roadZ?0:Math.PI;
-        plotW=36;plotD=14;
-      }
-    }
+    const plotW=type.w, plotD=type.d;
     if(!amenityPlotFree(x,z,plotW,plotD))continue;
     if(type.kind==='fuel')addFuelStation(x,z);
     else if(type.kind==='supermarket')addSupermarket(x,z);
@@ -792,45 +846,15 @@ function addAmenityInfill(){
     else if(type.kind==='tabletennis')addTableTennis(x,z);
     else if(type.kind==='park')addGardenPark(x,z,true);
     else if(type.kind==='shop')addShopfront(x,z,'LOCAL SHOPS',0x176b43);
-    else if(type.kind==='bus')addBusStop(x,z,busRotation);
     else if(type.kind==='garden')addGardenPark(x,z,false);
     else if(type.kind==='pharmacy')addPharmacy(x,z);
     placedCount++;
   }
 
-  // Dedicated roadside pass: shelter centres are deliberately offset from
-  // the road edge, rather than sent through the building-only road setback test.
-  let extraShelters=0;
-  const shelterTarget=16;
-  for(let i=0;i<candidates.length&&extraShelters<shelterTarget;i++){
-    const [cx,cz]=candidates[i];
-    const roadX=Math.round(cx/70)*70,roadZ=Math.round(cz/70)*70;
-    const dx=Math.abs(cx-roadX),dz=Math.abs(cz-roadZ);
-    let x,z,rotation,plotW,plotD,roadAxis,roadCoord;
-    if(dx<=dz){
-      // Shelter's 30-unit long side runs along a north-south road.
-      const side=cx>=roadX?1:-1;
-      const roadHalf=(Math.abs(roadX%210)<1)?12:4;
-      x=roadX+side*(roadHalf+8);z=Math.round(cz/14)*14;
-      rotation=side>0?Math.PI/2:-Math.PI/2;
-      plotW=14;plotD=36;roadAxis='x';roadCoord=roadX;
-    }else{
-      // Shelter's 30-unit long side runs along an east-west road.
-      const side=cz>=roadZ?1:-1;
-      const roadHalf=(Math.abs(roadZ%210)<1)?11:4;
-      z=roadZ+side*(roadHalf+8);x=Math.round(cx/14)*14;
-      rotation=side>0?0:Math.PI;
-      plotW=36;plotD=14;roadAxis='z';roadCoord=roadZ;
-    }
-    if(!shelterSiteFree(x,z,plotW,plotD,roadAxis,roadCoord))continue;
-    addBusStop(x,z,rotation);
-    extraShelters++;
-    placedCount++;
-  }
   return {placedCount,extraShelters};
 }
 const v037AmenityResult=addAmenityInfill();
-console.info('This Is Lagos v0.42: protected sports courts, supported table-tennis tables, restored roadside shelters; pharmacy H x3, W x2, L x2',v037AmenityResult);
+console.info('This Is Lagos v0.44: 20-target bus shelters on double-lane avenues only, fronts facing roads; protected courts and supported table-tennis; pharmacy H x3, W x2, L x2',v037AmenityResult);
 // -----------------------------------------------------------------------------
 
 // Industrial port yards, container stacks and cranes near Apapa.
