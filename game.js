@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.47 — 20-target shelters on double-lane avenues, protected sports courts and supported table-tennis tables
+// THIS IS LAGOS v0.52 — cleared 48m avenues, relocated starter palms, unified road markings
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -21,11 +21,7 @@ const mat=(color,roughness=.85)=>new THREE.MeshStandardMaterial({color,roughness
 const grass=mat(0x7eaa78),road=mat(0x343d3b),sidewalk=mat(0xc9d2c8),white=mat(0xf1f5e9),green=mat(0x18824a),glassMat=new THREE.MeshStandardMaterial({color:0x8eb8b4,roughness:.25,metalness:.15}),dark=mat(0x263a31);
 function block(w,h,d,m,x,y,z){const o=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m);o.position.set(x,y+h/2,z);o.castShadow=true;o.receiveShadow=true;scene.add(o);return o}
 block(300,.2,300,grass,0,-.2,0);
-block(18,.12,260,road,0,0,0);block(1.8,.15,260,sidewalk,-10,0,0);block(1.8,.15,260,sidewalk,10,0,0);
-block(260,.12,15,road,0,.01,-22);block(260,.15,1.5,sidewalk,0,.01,-30);block(260,.15,1.5,sidewalk,0,.01,-14);
-for(let x=-120;x<=120;x+=12){block(.12,.025,260,mat(0xe5e9df),x,.08,0)}
-// lane dashes
-for(let z=-125;z<130;z+=9)block(.18,.025,3,white,0,.09,z);
+// Obsolete compact starter roads and markings removed; the unified 48m road grid below is authoritative.
 const buildingMats=[0xe7e8d9,0xd7e2d9,0xd8d8cf,0xe8dfce,0xc7d9d0].map(c=>mat(c));
 const buildingColliders=[];
 // Shared reserved footprints prevent later buildings from occupying sports courts or amenities.
@@ -66,7 +62,7 @@ for(let i=0;i<9;i++){const z=-65+i*16;building(-20,z,8,10,12+(i%3)*5,i);building
 for(let i=0;i<34;i++){let x=(Math.random()-.5)*125,z=-100+Math.random()*180;if(Math.abs(x)<27)continue;building(x,z,7+Math.random()*8,7+Math.random()*8,8+Math.random()*28,i+2)}
 // palm trees
 function palm(x,z){const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.16,.28,5,7),mat(0x80613d));trunk.position.set(x,2.5,z);trunk.castShadow=true;scene.add(trunk);for(let i=0;i<7;i++){let a=i*Math.PI*2/7;const leaf=new THREE.Mesh(new THREE.ConeGeometry(.34,4,5),mat(0x237a43));leaf.position.set(x+Math.cos(a)*1.2,5.1,z+Math.sin(a)*1.2);leaf.rotation.z=-Math.cos(a)*.9;leaf.rotation.x=Math.sin(a)*.9;scene.add(leaf)}}
-for(let z=-65;z<80;z+=17){palm(-12,z);palm(12,z)}
+for(let z=-65;z<80;z+=17){palm(-27.5,z);palm(27.5,z)}
 
 // -----------------------------------------------------------------------------
 // v0.10 EXPANDED LAGOS WORLD: approx. 2.1 km x 2.1 km playable city footprint.
@@ -103,7 +99,7 @@ for(let p=-980;p<=980;p+=70){
   block(2100,.12,8,asphaltMat,0,-.16,p);
 }
 // Road-reservation system: every generated building must fit inside a plot.
-// Major avenues are 24m wide; local streets are 8m wide. A 5m setback keeps
+// Major avenues are 48m wide; local streets are 8m wide. A 5m setback keeps
 // walls, porches and building corners out of the carriageway.
 function roadHalfWidthAt(value){
  const grid=Math.round(value/70)*70;
@@ -572,8 +568,14 @@ for(let gx=-945;gx<=945;gx+=70){
    makeBuilding(gx,gz,width,depth,floors,kind,citySeed++);
   }
   if(blockIndex%3===0){
-   // Keep greenery on the pedestrian side, not in the carriageway.
-   palmTree(gx+24,gz+24,.72);
+   // Keep infill palms clear of every road carriageway and its immediate verge.
+   const px=gx+24,pz=gz+24;
+   const nearGridX=Math.round(px/70)*70,nearGridZ=Math.round(pz/70)*70;
+   const halfX=Math.abs(Math.round(nearGridX/70)%3)===0?24:4;
+   const halfZ=Math.abs(Math.round(nearGridZ/70)%3)===0?24:4;
+   if(Math.abs(px-nearGridX)>halfX+5 && Math.abs(pz-nearGridZ)>halfZ+5){
+    palmTree(px,pz,.72);
+   }
   }
  }
 }
