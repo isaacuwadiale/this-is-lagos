@@ -36,16 +36,16 @@ const ROAD_EDGE_CLEARANCE=4.8;
 // before creating legacy starter buildings or skyline blocks.
 function legacyBuildingPlotClear(x,z,w,d,extra=1){
  const halfW=w/2+extra, halfD=d/2+extra;
- // Vertical streets: 24m avenues every 210m and 8m local roads every 70m.
+ // Vertical streets: 48m avenues every 210m and 8m local roads every 70m.
  const minGX=Math.floor((x-halfW)/70)-1, maxGX=Math.ceil((x+halfW)/70)+1;
  for(let k=minGX;k<=maxGX;k++){
-  const roadX=k*70, roadHalf=(k%3===0)?12:4;
+  const roadX=k*70, roadHalf=(k%3===0)?24:4;
   if(Math.abs(x-roadX)<halfW+roadHalf+ROAD_EDGE_CLEARANCE) return false;
  }
  // Horizontal streets on the same grid.
  const minGZ=Math.floor((z-halfD)/70)-1, maxGZ=Math.ceil((z+halfD)/70)+1;
  for(let k=minGZ;k<=maxGZ;k++){
-  const roadZ=k*70, roadHalf=(k%3===0)?11:4;
+  const roadZ=k*70, roadHalf=(k%3===0)?24:4;
   if(Math.abs(z-roadZ)<halfD+roadHalf+ROAD_EDGE_CLEARANCE) return false;
  }
  // The original compact starter area has an additional north-south road
@@ -88,14 +88,14 @@ for(let i=0;i<18;i++){
   const x=280+i*38;
   block(1.4,.22,22,mat(0x806d52),x,-.02,820);
 }
-// Dense connected road grid. Main avenues every 210m, secondary streets every 70m.
+// Dense connected road grid. Main avenues are 48m wide; secondary streets remain 8m.
 for(let p=-840;p<=840;p+=210){
-  block(24,.18,2100,asphaltMat,p,-.12,0);
-  block(2100,.18,22,asphaltMat,0,-.12,p);
-  block(1,.025,1980,laneMat,p-5,.0,0);
-  block(1,.025,1980,laneMat,p+5,.0,0);
-  block(1980,.025,1,laneMat,0,.0,p-5);
-  block(1980,.025,1,laneMat,0,.0,p+5);
+  block(48,.18,2100,asphaltMat,p,-.12,0);
+  block(2100,.18,48,asphaltMat,0,-.12,p);
+  block(1,.025,1980,laneMat,p-12,.0,0);
+  block(1,.025,1980,laneMat,p+12,.0,0);
+  block(1980,.025,1,laneMat,0,.0,p-12);
+  block(1980,.025,1,laneMat,0,.0,p+12);
 }
 for(let p=-980;p<=980;p+=70){
   if(Math.abs(p%210)<1) continue;
@@ -107,19 +107,19 @@ for(let p=-980;p<=980;p+=70){
 // walls, porches and building corners out of the carriageway.
 function roadHalfWidthAt(value){
  const grid=Math.round(value/70)*70;
- return Math.abs(grid%210)===0?12:4;
+ return Math.abs(grid%210)===0?24:4;
 }
 function clearBuildingPlot(x,z,w,d,extra=1){
  // Reserve the complete footprint plus kerbs and pavements, not just asphalt.
  const halfW=w/2+extra, halfD=d/2+extra;
  const minGX=Math.floor((x-halfW)/70)-1, maxGX=Math.ceil((x+halfW)/70)+1;
  for(let k=minGX;k<=maxGX;k++){
-  const roadX=k*70, roadHalf=(k%3===0)?12:4;
+  const roadX=k*70, roadHalf=(k%3===0)?24:4;
   if(Math.abs(x-roadX)<halfW+roadHalf+ROAD_EDGE_CLEARANCE) return false;
  }
  const minGZ=Math.floor((z-halfD)/70)-1, maxGZ=Math.ceil((z+halfD)/70)+1;
  for(let k=minGZ;k<=maxGZ;k++){
-  const roadZ=k*70, roadHalf=(k%3===0)?11:4;
+  const roadZ=k*70, roadHalf=(k%3===0)?24:4;
   if(Math.abs(z-roadZ)<halfD+roadHalf+ROAD_EDGE_CLEARANCE) return false;
  }
  // The original starter district also has a short cross-street at z=-22,
@@ -191,13 +191,13 @@ for(let p=-840;p<=840;p+=210){
   roadPaint(2100,.22,0,p+offset,paintYellow,.08);
  }
  for(let q=-990;q<990;q+=18){
-  roadPaint(.16,7,p-5.5,q,paintWhite,.08);roadPaint(.16,7,p+5.5,q,paintWhite,.08);
-  roadPaint(7,.16,q,p-5.5,paintWhite,.08);roadPaint(7,.16,q,p+5.5,paintWhite,.08);
+  roadPaint(.16,7,p-12,q,paintWhite,.08);roadPaint(.16,7,p+12,q,paintWhite,.08);
+  roadPaint(7,.16,q,p-12,paintWhite,.08);roadPaint(7,.16,q,p+12,paintWhite,.08);
  }
  // Kerb/edge lines on both sides of each main avenue.
  for(const side of [-1,1]){
-  roadPaint(.18,2100,p+side*11.2,0,paintWhite,.08);
-  roadPaint(2100,.18,0,p+side*11.2,paintWhite,.08);
+  roadPaint(.18,2100,p+side*23.2,0,paintWhite,.08);
+  roadPaint(2100,.18,0,p+side*23.2,paintWhite,.08);
  }
 }
 // Local streets receive short broken centre markings and painted junction bars.
@@ -238,10 +238,10 @@ function streetlight(x,z,rotation=0,scale=1){
  return g;
 }
 for(let p=-840;p<=840;p+=210){
- for(let q=-945;q<=945;q+=105){streetlight(p-15,q,0,.9);streetlight(q,p+15,Math.PI/2,.9);}
+ for(let q=-945;q<=945;q+=105){streetlight(p-27.2,q,0,.9);streetlight(q,p+27.2,Math.PI/2,.9);}
 }
 // Local-street lights are shifted to the outer edge of the new pavement.
-for(let p=-980;p<=980;p+=140){if(Math.abs(p%210)<1)continue;for(let q=-910;q<=910;q+=210){streetlight(p-7.2,q,0,.68);streetlight(q,p+7.2,Math.PI/2,.68);}}
+for(let p=-980;p<=980;p+=140){if(Math.abs(p%210)<1)continue;for(let q=-910;q<=910;q+=210){streetlight(p-27.2,q,0,.68);streetlight(q,p+27.2,Math.PI/2,.68);}}
 
 // Zebra crossings on all four arms of every major junction. Each stripe spans
 // the asphalt road width; the seven bars run perpendicular to the traffic flow.
@@ -251,14 +251,14 @@ function addZebraCrossing(direction,centerX,centerZ,approachSide){
   const offset=approachSide*17+stripe*2.15;
   if(direction==='north-south'){
    // Traffic travels along Z: each stripe spans the road along X.
-   roadPaint(18,1.15,centerX,centerZ+offset,paintWhite,.085);
+   roadPaint(48,1.15,centerX,centerZ+offset,paintWhite,.085);
   }else{
    // Traffic travels along X: each stripe spans the road along Z.
-   roadPaint(1.15,18,centerX+offset,centerZ,paintWhite,.085);
+   roadPaint(1.15,48,centerX+offset,centerZ,paintWhite,.085);
   }
  }
- if(direction==='north-south') roadPaint(18,.45,centerX,centerZ+approachSide*26,paintWhite,.085);
- else roadPaint(.45,18,centerX+approachSide*26,centerZ,paintWhite,.085);
+ if(direction==='north-south') roadPaint(48,.45,centerX,centerZ+approachSide*26,paintWhite,.085);
+ else roadPaint(.45,48,centerX+approachSide*26,centerZ,paintWhite,.085);
 }
 for(let x=-840;x<=840;x+=210){
  for(let z=-840;z<=840;z+=210){
@@ -754,13 +754,13 @@ function shelterSiteFree(x,z,plotW,plotD,roadAxis,roadCoord){
   const halfW=plotW/2+1,halfD=plotD/2+1;
   const minGX=Math.floor((x-halfW)/70)-1,maxGX=Math.ceil((x+halfW)/70)+1;
   for(let k=minGX;k<=maxGX;k++){
-    const rx=k*70,half=(k%3===0)?12:4;
+    const rx=k*70,half=(k%3===0)?24:4;
     if(roadAxis==='x'&&Math.abs(rx-roadCoord)<.01)continue;
     if(Math.abs(x-rx)<halfW+half+1)return false;
   }
   const minGZ=Math.floor((z-halfD)/70)-1,maxGZ=Math.ceil((z+halfD)/70)+1;
   for(let k=minGZ;k<=maxGZ;k++){
-    const rz=k*70,half=(k%3===0)?11:4;
+    const rz=k*70,half=(k%3===0)?24:4;
     if(roadAxis==='z'&&Math.abs(rz-roadCoord)<.01)continue;
     if(Math.abs(z-rz)<halfD+half+1)return false;
   }
@@ -877,7 +877,7 @@ function addAmenityInfill(){
   return {placedCount,extraShelters};
 }
 const v037AmenityResult=addAmenityInfill();
-console.info('This Is Lagos v0.50: roof-height circular pole bus-stop signs; 40-target bus shelters on double-lane avenues only, fronts facing roads; protected courts and supported table-tennis; pharmacy H x3, W x2, L x2',v037AmenityResult);
+console.info('This Is Lagos v0.51: roof-height circular pole bus-stop signs; 40-target bus shelters on double-lane avenues only, fronts facing roads; protected courts and supported table-tennis; pharmacy H x3, W x2, L x2',v037AmenityResult);
 // -----------------------------------------------------------------------------
 
 // Industrial port yards, container stacks and cranes near Apapa.
