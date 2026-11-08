@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.53 — city-wide tree/road-marking removal and bus shelters moved clear of roads
+// THIS IS LAGOS v0.52 — cleared 48m avenues, relocated starter palms, unified road markings
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -60,8 +60,9 @@ function building(x,z,w,d,h,idx){
 for(let i=0;i<9;i++){const z=-65+i*16;building(-20,z,8,10,12+(i%3)*5,i);building(20,z,9,11,16+(i%4)*6,i+1)}
 // farther skyline
 for(let i=0;i<34;i++){let x=(Math.random()-.5)*125,z=-100+Math.random()*180;if(Math.abs(x)<27)continue;building(x,z,7+Math.random()*8,7+Math.random()*8,8+Math.random()*28,i+2)}
-// v0.53: all city trees and palms intentionally removed.
-function palm(x,z){}
+// palm trees
+function palm(x,z){const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.16,.28,5,7),mat(0x80613d));trunk.position.set(x,2.5,z);trunk.castShadow=true;scene.add(trunk);for(let i=0;i<7;i++){let a=i*Math.PI*2/7;const leaf=new THREE.Mesh(new THREE.ConeGeometry(.34,4,5),mat(0x237a43));leaf.position.set(x+Math.cos(a)*1.2,5.1,z+Math.sin(a)*1.2);leaf.rotation.z=-Math.cos(a)*.9;leaf.rotation.x=Math.sin(a)*.9;scene.add(leaf)}}
+for(let z=-65;z<80;z+=17){palm(-27.5,z);palm(27.5,z)}
 
 // -----------------------------------------------------------------------------
 // v0.10 EXPANDED LAGOS WORLD: approx. 2.1 km x 2.1 km playable city footprint.
@@ -167,14 +168,60 @@ const paintWhite=new THREE.MeshBasicMaterial({color:0xf4f2df});
 const paintYellow=new THREE.MeshBasicMaterial({color:0xf1c84b});
 const paintArrow=new THREE.MeshBasicMaterial({color:0xf4f2df,side:THREE.DoubleSide});
 const roadPaintBatches=new Map(),roadArrowRecords=[];
-// v0.53: all road markings are intentionally disabled city-wide.
-// Keep no-op helpers so the existing road/junction construction can run safely.
-function roadPaint(w,d,x,z,material=paintWhite,y=.018){}
-function flushRoadPaint(){}
-function addRoadArrow(x,z,rotation=0){}
-function flushRoadArrows(){}
-function addZebraCrossing(direction,centerX,centerZ,approachSide){}
-// The legacy crossing and lane-marking calls below are harmless no-ops.
+function roadPaint(w,d,x,z,material=paintWhite,y=.018){
+ let batch=roadPaintBatches.get(material);if(!batch){batch=[];roadPaintBatches.set(material,batch)}
+ batch.push({w,d,x,z,y});
+}
+function flushRoadPaint(){
+ for(const [material,records] of roadPaintBatches){
+  const mesh=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),material,records.length);
+  const dummy=new THREE.Object3D();
+  records.forEach((r,i)=>{dummy.position.set(r.x,r.y,r.z);dummy.scale.set(r.w,.035,r.d);dummy.rotation.set(0,0,0);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix)});
+  mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;scene.add(mesh);
+ }
+}
+// Main avenues: double yellow centre lines and broken white lane separators.
+for(let p=-840;p<=840;p+=210){
+ for(const offset of [-.42,.42]){
+  roadPaint(.22,2100,p+offset,0,paintYellow,.08);
+  roadPaint(2100,.22,0,p+offset,paintYellow,.08);
+ }
+ for(let q=-990;q<990;q+=18){
+  roadPaint(.16,7,p-12,q,paintWhite,.08);roadPaint(.16,7,p+12,q,paintWhite,.08);
+  roadPaint(7,.16,q,p-12,paintWhite,.08);roadPaint(7,.16,q,p+12,paintWhite,.08);
+ }
+ // Kerb/edge lines on both sides of each main avenue.
+ for(const side of [-1,1]){
+  roadPaint(.18,2100,p+side*23.2,0,paintWhite,.08);
+  roadPaint(2100,.18,0,p+side*23.2,paintWhite,.08);
+ }
+}
+// Local streets receive short broken centre markings and painted junction bars.
+for(let p=-980;p<=980;p+=70){
+ if(Math.abs(p%210)<1) continue;
+ for(let q=-980;q<980;q+=28){
+  roadPaint(.12,4,p,q,paintWhite,.018);
+  roadPaint(4,.12,q,p,paintWhite,.018);
+ }
+}
+// Direction arrows at regular approach points.
+function addRoadArrow(x,z,rotation=0){roadArrowRecords.push({x,z,rotation});}
+function flushRoadArrows(){
+ if(!roadArrowRecords.length)return;
+ const shape=new THREE.Shape();shape.moveTo(0,3.2);shape.lineTo(-1.1,1.2);shape.lineTo(-.38,1.2);shape.lineTo(-.38,-2.2);shape.lineTo(.38,-2.2);shape.lineTo(.38,1.2);shape.lineTo(1.1,1.2);shape.closePath();
+ const mesh=new THREE.InstancedMesh(new THREE.ShapeGeometry(shape),paintArrow,roadArrowRecords.length);
+ const dummy=new THREE.Object3D();
+ roadArrowRecords.forEach((r,i)=>{dummy.position.set(r.x,.085,r.z);dummy.rotation.set(-Math.PI/2,r.rotation,0);dummy.scale.set(1,1,1);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix)});
+ mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;scene.add(mesh);
+}
+// Add clear directional arrows on the four approaches to every major junction.
+for(let p=-840;p<=840;p+=210){for(let q=-840;q<=840;q+=210){
+ addRoadArrow(p-6,q-32,Math.PI);      // approach from the north, travel south-to-north
+ addRoadArrow(p+6,q+32,0);            // approach from the south, travel north-to-south
+ addRoadArrow(p-32,q+6,-Math.PI/2);   // approach from the west, travel west-to-east
+ addRoadArrow(p+32,q-6,Math.PI/2);    // approach from the east, travel east-to-west
+}}
+
 // Lagos-style streetlights: galvanized poles, outreach arms and warm LED heads.
 // The lamps are placed on the outer verge, clear of the carriageway.
 const poleMat=mat(0x59645e,.55), lampGlow=new THREE.MeshStandardMaterial({color:0xffe7ad,emissive:0xffc66b,emissiveIntensity:1.6,roughness:.3});
@@ -386,8 +433,10 @@ function signBoard(text,x,z,width=22,color=0x176b43){
  const tex=new THREE.CanvasTexture(canvas);const mesh=new THREE.Mesh(new THREE.PlaneGeometry(width,5),new THREE.MeshBasicMaterial({map:tex,transparent:false,side:THREE.DoubleSide}));
  mesh.position.set(x,7,z);scene.add(mesh);return mesh;
 }
-// v0.53: tree/palm generation disabled city-wide.
-function palmTree(x,z,scale=1){}
+function palmTree(x,z,scale=1){
+ const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.22*scale,.34*scale,6*scale,7),mat(0x795b3b));trunk.position.set(x,3*scale,z);scene.add(trunk);
+ for(let k=0;k<8;k++){const a=k*Math.PI/4;const leaf=new THREE.Mesh(new THREE.ConeGeometry(.42*scale,5.2*scale,5),mat(0x287642));leaf.position.set(x+Math.cos(a)*1.5*scale,6*scale,z+Math.sin(a)*1.5*scale);leaf.rotation.z=-Math.cos(a)*.9;leaf.rotation.x=Math.sin(a)*.9;scene.add(leaf)}
+}
 function fencedPitch(cx,cz,name='FOOTBALL PITCH',surface=sportGreen){
  const g=new THREE.Group();g.position.set(cx,0,cz);scene.add(g);
  const field=new THREE.Mesh(new THREE.BoxGeometry(82,.22,48),surface);field.position.y=.04;g.add(field);
@@ -745,9 +794,9 @@ function addAmenityInfill(){
   }
   // Deterministic shuffle-like ordering spreads facilities throughout the map.
   candidates.sort((a,b)=>(((a[0]*17+a[1]*31)%997)-((b[0]*17+b[1]*31)%997)));
-  // Dedicated roadside pass: place shelters ONLY beside the 48m-wide avenues.
-  // The complete shelter and sign footprint is behind the road edge; the
-  // shelter's 30m long side follows the avenue and does not cover asphalt.
+  // Dedicated roadside pass (v0.44): place approximately 20 shelters ONLY
+  // beside the 24m-wide double-lane avenues (the 210m road grid). Do not use
+  // the 8m local streets. The shelter's 30m long side follows the avenue;
   // its open passenger side faces the carriageway.
   let extraShelters=0;
   const shelterTarget=40;
@@ -789,16 +838,16 @@ function addAmenityInfill(){
     for(const along of group.segments){
       let x,z,rotation,plotW,plotD;
       if(group.axis==='x'){
-        // Keep the full shelter and roadside sign beyond the 24m road edge.
-        // The shelter base is on the pedestrian-side verge, never on asphalt.
-        x=group.road+group.side*34; z=along;
-        plotW=14; plotD=36;
+        // Double-lane north/south avenue. The 8m-wide shelter overlaps the
+        // outer edge of the sidewalk without entering the carriageway.
+        x=group.road+group.side*(12+6.5); z=along;
+        plotW=10; plotD=32;
         // Local +Z points toward the road: reverse the old, away-facing angles.
         rotation=group.side>0?-Math.PI/2:Math.PI/2;
       }else{
-        // East/west avenue: same clear setback, with the long side parallel.
-        z=group.road+group.side*34; x=along;
-        plotW=36; plotD=14;
+        // Double-lane east/west avenue; the long shelter side stays parallel.
+        z=group.road+group.side*(11+6.5); x=along;
+        plotW=32; plotD=10;
         rotation=group.side>0?Math.PI:0;
       }
       if(!shelterSiteFree(x,z,plotW,plotD,group.axis,group.road))continue;
@@ -830,7 +879,7 @@ function addAmenityInfill(){
   return {placedCount,extraShelters};
 }
 const v037AmenityResult=addAmenityInfill();
-console.info('This Is Lagos v0.53: roof-height circular pole bus-stop signs; 40-target bus shelters on double-lane avenues only, fronts facing roads; protected courts and supported table-tennis; pharmacy H x3, W x2, L x2',v037AmenityResult);
+console.info('This Is Lagos v0.51: roof-height circular pole bus-stop signs; 40-target bus shelters on double-lane avenues only, fronts facing roads; protected courts and supported table-tennis; pharmacy H x3, W x2, L x2',v037AmenityResult);
 // -----------------------------------------------------------------------------
 
 // Industrial port yards, container stacks and cranes near Apapa.
@@ -1175,4 +1224,4 @@ updateCamera();
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setPixelRatio(maxDevicePixelRatio*renderScale);renderer.setSize(innerWidth,innerHeight)});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)clock.getDelta()});
-toast('Lagos city update v0.53 loaded');
+toast('Lagos city update v0.27 loaded');
