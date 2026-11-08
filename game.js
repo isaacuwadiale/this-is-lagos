@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.52 — cleared 48m avenues, relocated starter palms, unified road markings
+// THIS IS LAGOS v0.53 — road markings and vegetation removed; bus shelters moved fully beside sidewalks
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -61,8 +61,7 @@ for(let i=0;i<9;i++){const z=-65+i*16;building(-20,z,8,10,12+(i%3)*5,i);building
 // farther skyline
 for(let i=0;i<34;i++){let x=(Math.random()-.5)*125,z=-100+Math.random()*180;if(Math.abs(x)<27)continue;building(x,z,7+Math.random()*8,7+Math.random()*8,8+Math.random()*28,i+2)}
 // palm trees
-function palm(x,z){const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.16,.28,5,7),mat(0x80613d));trunk.position.set(x,2.5,z);trunk.castShadow=true;scene.add(trunk);for(let i=0;i<7;i++){let a=i*Math.PI*2/7;const leaf=new THREE.Mesh(new THREE.ConeGeometry(.34,4,5),mat(0x237a43));leaf.position.set(x+Math.cos(a)*1.2,5.1,z+Math.sin(a)*1.2);leaf.rotation.z=-Math.cos(a)*.9;leaf.rotation.x=Math.sin(a)*.9;scene.add(leaf)}}
-for(let z=-65;z<80;z+=17){palm(-27.5,z);palm(27.5,z)}
+function palm(x,z){} // Vegetation disabled in v0.53.
 
 // -----------------------------------------------------------------------------
 // v0.10 EXPANDED LAGOS WORLD: approx. 2.1 km x 2.1 km playable city footprint.
@@ -88,10 +87,6 @@ for(let i=0;i<18;i++){
 for(let p=-840;p<=840;p+=210){
   block(48,.18,2100,asphaltMat,p,-.12,0);
   block(2100,.18,48,asphaltMat,0,-.12,p);
-  block(1,.025,1980,laneMat,p-12,.0,0);
-  block(1,.025,1980,laneMat,p+12,.0,0);
-  block(1980,.025,1,laneMat,0,.0,p-12);
-  block(1980,.025,1,laneMat,0,.0,p+12);
 }
 for(let p=-980;p<=980;p+=70){
   if(Math.abs(p%210)<1) continue;
@@ -168,18 +163,10 @@ const paintWhite=new THREE.MeshBasicMaterial({color:0xf4f2df});
 const paintYellow=new THREE.MeshBasicMaterial({color:0xf1c84b});
 const paintArrow=new THREE.MeshBasicMaterial({color:0xf4f2df,side:THREE.DoubleSide});
 const roadPaintBatches=new Map(),roadArrowRecords=[];
-function roadPaint(w,d,x,z,material=paintWhite,y=.018){
- let batch=roadPaintBatches.get(material);if(!batch){batch=[];roadPaintBatches.set(material,batch)}
- batch.push({w,d,x,z,y});
-}
-function flushRoadPaint(){
- for(const [material,records] of roadPaintBatches){
-  const mesh=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),material,records.length);
-  const dummy=new THREE.Object3D();
-  records.forEach((r,i)=>{dummy.position.set(r.x,r.y,r.z);dummy.scale.set(r.w,.035,r.d);dummy.rotation.set(0,0,0);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix)});
-  mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;scene.add(mesh);
- }
-}
+function roadPaint(w,d,x,z,material=paintWhite,y=.018){}
+function flushRoadPaint(){}
+// Road surface markings are disabled in v0.53.
+
 // Main avenues: double yellow centre lines and broken white lane separators.
 for(let p=-840;p<=840;p+=210){
  for(const offset of [-.42,.42]){
@@ -205,15 +192,10 @@ for(let p=-980;p<=980;p+=70){
  }
 }
 // Direction arrows at regular approach points.
-function addRoadArrow(x,z,rotation=0){roadArrowRecords.push({x,z,rotation});}
-function flushRoadArrows(){
- if(!roadArrowRecords.length)return;
- const shape=new THREE.Shape();shape.moveTo(0,3.2);shape.lineTo(-1.1,1.2);shape.lineTo(-.38,1.2);shape.lineTo(-.38,-2.2);shape.lineTo(.38,-2.2);shape.lineTo(.38,1.2);shape.lineTo(1.1,1.2);shape.closePath();
- const mesh=new THREE.InstancedMesh(new THREE.ShapeGeometry(shape),paintArrow,roadArrowRecords.length);
- const dummy=new THREE.Object3D();
- roadArrowRecords.forEach((r,i)=>{dummy.position.set(r.x,.085,r.z);dummy.rotation.set(-Math.PI/2,r.rotation,0);dummy.scale.set(1,1,1);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix)});
- mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;scene.add(mesh);
-}
+function addRoadArrow(x,z,rotation=0){}
+function flushRoadArrows(){}
+// Direction arrows are disabled in v0.53.
+
 // Add clear directional arrows on the four approaches to every major junction.
 for(let p=-840;p<=840;p+=210){for(let q=-840;q<=840;q+=210){
  addRoadArrow(p-6,q-32,Math.PI);      // approach from the north, travel south-to-north
@@ -433,49 +415,7 @@ function signBoard(text,x,z,width=22,color=0x176b43){
  const tex=new THREE.CanvasTexture(canvas);const mesh=new THREE.Mesh(new THREE.PlaneGeometry(width,5),new THREE.MeshBasicMaterial({map:tex,transparent:false,side:THREE.DoubleSide}));
  mesh.position.set(x,7,z);scene.add(mesh);return mesh;
 }
-function palmTree(x,z,scale=1){
- const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.22*scale,.34*scale,6*scale,7),mat(0x795b3b));trunk.position.set(x,3*scale,z);scene.add(trunk);
- for(let k=0;k<8;k++){const a=k*Math.PI/4;const leaf=new THREE.Mesh(new THREE.ConeGeometry(.42*scale,5.2*scale,5),mat(0x287642));leaf.position.set(x+Math.cos(a)*1.5*scale,6*scale,z+Math.sin(a)*1.5*scale);leaf.rotation.z=-Math.cos(a)*.9;leaf.rotation.x=Math.sin(a)*.9;scene.add(leaf)}
-}
-function fencedPitch(cx,cz,name='FOOTBALL PITCH',surface=sportGreen){
- const g=new THREE.Group();g.position.set(cx,0,cz);scene.add(g);
- const field=new THREE.Mesh(new THREE.BoxGeometry(82,.22,48),surface);field.position.y=.04;g.add(field);
- const lineMat=new THREE.MeshBasicMaterial({color:0xffffff});
- function line(w,h,x,z){const m=new THREE.Mesh(new THREE.BoxGeometry(w,.035,h),lineMat);m.position.set(x,.17,z);g.add(m)}
- line(78,.35,0,-23.5);line(78,.35,0,23.5);line(.35,47,-40,0);line(.35,47,40,0);line(.3,47,0,0);
- const circle=new THREE.Mesh(new THREE.RingGeometry(7.6,7.9,48),lineMat);circle.rotation.x=-Math.PI/2;circle.position.y=.18;g.add(circle);
- for(const x of [-40,40]){const goal=new THREE.Mesh(new THREE.BoxGeometry(.6,5,12),white);goal.position.set(x,2.5,0);g.add(goal)}
- // Simple perimeter fence and floodlights.
- const fenceMat=mat(0x87958b);
- for(const x of [-44,44]){const f=new THREE.Mesh(new THREE.BoxGeometry(.25,3,58),fenceMat);f.position.set(x,1.5,0);g.add(f)}
- for(const z of [-29,29]){const f=new THREE.Mesh(new THREE.BoxGeometry(92,3,.25),fenceMat);f.position.set(0,1.5,z);g.add(f)}
- for(const x of [-48,48])for(const z of [-31,31]){const pole=new THREE.Mesh(new THREE.CylinderGeometry(.16,.22,13,8),dark);pole.position.set(x,6.5,z);g.add(pole);const lamp=new THREE.Mesh(new THREE.BoxGeometry(2,.4,1),white);lamp.position.set(x,13,z);g.add(lamp)}
- signBoard(name,cx,cz-34,26,0x176b43);
-}
-function tennisCentre(cx,cz){
- const g=new THREE.Group();g.position.set(cx,0,cz);scene.add(g);
- for(let c=0;c<3;c++){const z=(c-1)*30;const court=new THREE.Mesh(new THREE.BoxGeometry(22,.2,12),sportBlue);court.position.set(0,.06,z);g.add(court);
-  const ln=new THREE.MeshBasicMaterial({color:0xffffff});
-  for(const x of [-10.5,10.5]){const m=new THREE.Mesh(new THREE.BoxGeometry(.18,.04,11),ln);m.position.set(x,.19,z);g.add(m)}
-  const net=new THREE.Mesh(new THREE.BoxGeometry(.15,1,12),mat(0xe8e8df));net.position.set(0,.65,z);g.add(net)}
- signBoard('LAGOS TENNIS CENTRE',cx,cz-65,28,0x245f94);
-}
-function basketballCentre(cx,cz){
- const court=new THREE.Mesh(new THREE.BoxGeometry(38,.2,23),sportRed);court.position.set(cx,.05,cz);scene.add(court);
- const ring=new THREE.Mesh(new THREE.RingGeometry(5,5.3,32),new THREE.MeshBasicMaterial({color:0xffffff,side:THREE.DoubleSide}));ring.rotation.x=-Math.PI/2;ring.position.set(cx,.18,cz);scene.add(ring);
- signBoard('COMMUNITY BASKETBALL COURT',cx,cz-22,25,0x9b4036);
-}
-function marketCluster(cx,cz,label='LOCAL MARKET'){
- for(let i=0;i<7;i++){const x=cx+(i%4)*13-20,z=cz+Math.floor(i/4)*15;const shop=makeBuilding(x,z,10,10,4,'market',i);if(shop){const canopy=new THREE.Mesh(new THREE.BoxGeometry(10,.35,10),marketMat);canopy.position.set(x,4.4,z);scene.add(canopy)}}
- signBoard(label,cx,cz-18,30,0x9a5b23);
-}
-function compound(cx,cz,kind='residential',seed=0){
- if(!clearBuildingPlot(cx,cz,42,42,1)) return;
- // Walled family compounds with gate, small yard and several low-rise blocks.
- const wall=mat(0xb6ad9a),g=new THREE.Group();g.position.set(cx,0,cz);scene.add(g);
- for(const [x,z,w,d] of [[0,-21,42,.7],[0,21,42,.7],[-21,0,.7,42],[21,0,.7,42]]){
-  const m=new THREE.Mesh(new THREE.BoxGeometry(w,2.2,d),wall);m.position.set(x,1.1,z);g.add(m)
- }
+function palmTree(x,z,scale=1){} // Trees and bushes disabled in v0.53.
  const gate=new THREE.Mesh(new THREE.BoxGeometry(7,2.4,.5),mat(0x354c40));gate.position.set(0,1.2,21);g.add(gate);
  const gateHeader=new THREE.Mesh(new THREE.BoxGeometry(9,.45,.8),trimMat);gateHeader.position.set(0,2.55,21);g.add(gateHeader);
  // Two low-rise buildings create the familiar shared-yard compound layout.
@@ -794,7 +734,7 @@ function addAmenityInfill(){
   }
   // Deterministic shuffle-like ordering spreads facilities throughout the map.
   candidates.sort((a,b)=>(((a[0]*17+a[1]*31)%997)-((b[0]*17+b[1]*31)%997)));
-  // Dedicated roadside pass (v0.44): place approximately 20 shelters ONLY
+  // Dedicated roadside pass (v0.53): place shelters ONLY
   // beside the 24m-wide double-lane avenues (the 210m road grid). Do not use
   // the 8m local streets. The shelter's 30m long side follows the avenue;
   // its open passenger side faces the carriageway.
@@ -840,13 +780,13 @@ function addAmenityInfill(){
       if(group.axis==='x'){
         // Double-lane north/south avenue. The 8m-wide shelter overlaps the
         // outer edge of the sidewalk without entering the carriageway.
-        x=group.road+group.side*(12+6.5); z=along;
+        x=group.road+group.side*31.5; z=along;
         plotW=10; plotD=32;
         // Local +Z points toward the road: reverse the old, away-facing angles.
         rotation=group.side>0?-Math.PI/2:Math.PI/2;
       }else{
         // Double-lane east/west avenue; the long shelter side stays parallel.
-        z=group.road+group.side*(11+6.5); x=along;
+        z=group.road+group.side*31.5; x=along;
         plotW=32; plotD=10;
         rotation=group.side>0?Math.PI:0;
       }
