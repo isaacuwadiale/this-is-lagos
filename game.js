@@ -236,7 +236,12 @@ function addZebraCrossing(direction,centerX,centerZ,approachSide){
  if(direction==='north-south') roadPaint(48,.45,centerX,centerZ+approachSide*26,paintWhite,.085);
  else roadPaint(.45,48,centerX+approachSide*26,centerZ,paintWhite,.085);
 }
-// v0.53 update: zebra crossings removed throughout the city.
+for(let x=-840;x<=840;x+=210){
+ for(let z=-840;z<=840;z+=210){
+  for(const side of [-1,1]){
+  }
+ }
+}
 // Local streets yield at major avenues: short stop bars stay inside the 8m roads.
 for(let major=-840;major<=840;major+=210){
  for(let local=-980;local<=980;local+=70){
