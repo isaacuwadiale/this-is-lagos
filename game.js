@@ -239,6 +239,8 @@ function addZebraCrossing(direction,centerX,centerZ,approachSide){
 for(let x=-840;x<=840;x+=210){
  for(let z=-840;z<=840;z+=210){
   for(const side of [-1,1]){
+   addZebraCrossing('north-south',x,z,side);
+   addZebraCrossing('east-west',x,z,side);
   }
  }
 }
