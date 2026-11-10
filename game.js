@@ -61,7 +61,7 @@ for(let i=0;i<9;i++){const z=-65+i*16;building(-20,z,8,10,12+(i%3)*5,i);building
 // farther skyline
 for(let i=0;i<34;i++){let x=(Math.random()-.5)*125,z=-100+Math.random()*180;if(Math.abs(x)<27)continue;building(x,z,7+Math.random()*8,7+Math.random()*8,8+Math.random()*28,i+2)}
 // palm trees
-function palm(x,z){const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.16,.28,5,7),mat(0x80613d));trunk.position.set(x,2.5,z);trunk.castShadow=true;scene.add(trunk);for(let i=0;i<7;i++){let a=i*Math.PI*2/7;const leaf=new THREE.Mesh(new THREE.ConeGeometry(.34,4,5),mat(0x237a43));leaf.position.set(x+Math.cos(a)*1.2,5.1,z+Math.sin(a)*1.2);leaf.rotation.z=-Math.cos(a)*.9;leaf.rotation.x=Math.sin(a)*.9;scene.add(leaf)}}
+function palm(x,z){const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.48,.84,15,7),mat(0x80613d));trunk.position.set(x,7.5,z);trunk.castShadow=true;scene.add(trunk);for(let i=0;i<7;i++){let a=i*Math.PI*2/7;const leaf=new THREE.Mesh(new THREE.ConeGeometry(1.02,12,5),mat(0x237a43));leaf.position.set(x+Math.cos(a)*3.6,15.3,z+Math.sin(a)*3.6);leaf.rotation.z=-Math.cos(a)*.9;leaf.rotation.x=Math.sin(a)*.9;scene.add(leaf)}}
 for(let z=-65;z<80;z+=17){palm(-27.5,z);palm(27.5,z)}
 
 // -----------------------------------------------------------------------------
@@ -434,9 +434,9 @@ function signBoard(text,x,z,width=22,color=0x176b43){
  mesh.position.set(x,7,z);scene.add(mesh);return mesh;
 }
 function palmTree(x,z,scale=1){
- const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.22*scale,.34*scale,6*scale,7),mat(0x795b3b));trunk.position.set(x,3*scale,z);scene.add(trunk);
- for(let k=0;k<8;k++){const a=k*Math.PI/4;const leaf=new THREE.Mesh(new THREE.ConeGeometry(.42*scale,5.2*scale,5),mat(0x287642));leaf.position.set(x+Math.cos(a)*1.5*scale,6*scale,z+Math.sin(a)*1.5*scale);leaf.rotation.z=-Math.cos(a)*.9;leaf.rotation.x=Math.sin(a)*.9;scene.add(leaf)}
-}
+ const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.66*scale,1.02*scale,18*scale,7),mat(0x795b3b));trunk.position.set(x,9*scale,z);scene.add(trunk);
+ for(let k=0;k<8;k++){const a=k*Math.PI/4;const leaf=new THREE.Mesh(new THREE.ConeGeometry(1.26*scale,15.6*scale,5),mat(0x287642));leaf.position.set(x+Math.cos(a)*4.5*scale,18*scale,z+Math.sin(a)*4.5*scale);leaf.rotation.z=-Math.cos(a)*.9;leaf.rotation.x=Math.sin(a)*.9;scene.add(leaf)}
+ }
 function fencedPitch(cx,cz,name='FOOTBALL PITCH',surface=sportGreen){
  const g=new THREE.Group();g.position.set(cx,0,cz);scene.add(g);
  const field=new THREE.Mesh(new THREE.BoxGeometry(82,.22,48),surface);field.position.y=.04;g.add(field);
