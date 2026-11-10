@@ -180,13 +180,17 @@ function flushRoadPaint(){
   mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;scene.add(mesh);
  }
 }
-// Main avenues: double yellow centre lines and broken white lane separators.
+// Main avenues: keep lane markings between junctions, leaving clear unmarked junction areas.
+function nearMajorJunction(v){return Math.abs(v-Math.round(v/210)*210)<30;}
 for(let p=-840;p<=840;p+=210){
  for(const offset of [-.42,.42]){
-  roadPaint(.22,2100,p+offset,0,paintYellow,.08);
-  roadPaint(2100,.22,0,p+offset,paintYellow,.08);
+  for(let q=-840;q<840;q+=210){
+   roadPaint(.22,150,p+offset,q+105,paintYellow,.08);
+   roadPaint(150,.22,q+105,p+offset,paintYellow,.08);
+  }
  }
  for(let q=-990;q<990;q+=18){
+  if(nearMajorJunction(q))continue;
   roadPaint(.16,7,p-12,q,paintWhite,.08);roadPaint(.16,7,p+12,q,paintWhite,.08);
   roadPaint(7,.16,q,p-12,paintWhite,.08);roadPaint(7,.16,q,p+12,paintWhite,.08);
  }
@@ -196,32 +200,15 @@ for(let p=-840;p<=840;p+=210){
   roadPaint(2100,.18,0,p+side*23.2,paintWhite,.08);
  }
 }
-// Local streets receive short broken centre markings and painted junction bars.
+// Local streets keep centre dashes between avenues, with no paint inside junctions.
 for(let p=-980;p<=980;p+=70){
  if(Math.abs(p%210)<1) continue;
  for(let q=-980;q<980;q+=28){
+  if(nearMajorJunction(q))continue;
   roadPaint(.12,4,p,q,paintWhite,.018);
   roadPaint(4,.12,q,p,paintWhite,.018);
  }
 }
-// Direction arrows at regular approach points.
-function addRoadArrow(x,z,rotation=0){roadArrowRecords.push({x,z,rotation});}
-function flushRoadArrows(){
- if(!roadArrowRecords.length)return;
- const shape=new THREE.Shape();shape.moveTo(0,3.2);shape.lineTo(-1.1,1.2);shape.lineTo(-.38,1.2);shape.lineTo(-.38,-2.2);shape.lineTo(.38,-2.2);shape.lineTo(.38,1.2);shape.lineTo(1.1,1.2);shape.closePath();
- const mesh=new THREE.InstancedMesh(new THREE.ShapeGeometry(shape),paintArrow,roadArrowRecords.length);
- const dummy=new THREE.Object3D();
- roadArrowRecords.forEach((r,i)=>{dummy.position.set(r.x,.085,r.z);dummy.rotation.set(-Math.PI/2,r.rotation,0);dummy.scale.set(1,1,1);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix)});
- mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;scene.add(mesh);
-}
-// Add clear directional arrows on the four approaches to every major junction.
-for(let p=-840;p<=840;p+=210){for(let q=-840;q<=840;q+=210){
- addRoadArrow(p-6,q-32,Math.PI);      // approach from the north, travel south-to-north
- addRoadArrow(p+6,q+32,0);            // approach from the south, travel north-to-south
- addRoadArrow(p-32,q+6,-Math.PI/2);   // approach from the west, travel west-to-east
- addRoadArrow(p+32,q-6,Math.PI/2);    // approach from the east, travel east-to-west
-}}
-
 // Lagos-style streetlights: galvanized poles, outreach arms and warm LED heads.
 // The lamps are placed on the outer verge, clear of the carriageway.
 const poleMat=mat(0x59645e,.55), lampGlow=new THREE.MeshStandardMaterial({color:0xffe7ad,emissive:0xffc66b,emissiveIntensity:1.6,roughness:.3});
@@ -239,43 +226,8 @@ for(let p=-840;p<=840;p+=210){
 // Local-street lights are shifted to the outer edge of the new pavement.
 for(let p=-980;p<=980;p+=140){if(Math.abs(p%210)<1)continue;for(let q=-910;q<=910;q+=210){streetlight(p-27.2,q,0,.68);streetlight(q,p+27.2,Math.PI/2,.68);}}
 
-// Zebra crossings on all four arms of every major junction. Each stripe spans
-// the asphalt road width; the seven bars run perpendicular to the traffic flow.
-function addZebraCrossing(direction,centerX,centerZ,approachSide){
- // direction is the vehicle travel axis. Zebra bars are always perpendicular.
- for(let stripe=-3;stripe<=3;stripe++){
-  const offset=approachSide*17+stripe*2.15;
-  if(direction==='north-south'){
-   // Traffic travels along Z: each stripe spans the road along X.
-   roadPaint(48,1.15,centerX,centerZ+offset,paintWhite,.085);
-  }else{
-   // Traffic travels along X: each stripe spans the road along Z.
-   roadPaint(1.15,48,centerX+offset,centerZ,paintWhite,.085);
-  }
- }
- if(direction==='north-south') roadPaint(48,.45,centerX,centerZ+approachSide*26,paintWhite,.085);
- else roadPaint(.45,48,centerX+approachSide*26,centerZ,paintWhite,.085);
-}
-for(let x=-840;x<=840;x+=210){
- for(let z=-840;z<=840;z+=210){
-  for(const side of [-1,1]){
-   addZebraCrossing('north-south',x,z,side);
-   addZebraCrossing('east-west',x,z,side);
-  }
- }
-}
-// Local streets yield at major avenues: short stop bars stay inside the 8m roads.
-for(let major=-840;major<=840;major+=210){
- for(let local=-980;local<=980;local+=70){
-  if(Math.abs(local%210)<1)continue;
-  roadPaint(.35,6.4,major-15,local,paintWhite,.0);
-  roadPaint(.35,6.4,major+15,local,paintWhite,.0);
-  roadPaint(6.4,.35,local,major-15,paintWhite,.0);
-  roadPaint(6.4,.35,local,major+15,paintWhite,.0);
- }
-}
 // Submit all flat road paint and arrows as instanced batches to limit draw calls.
-flushRoadPaint();flushRoadArrows();
+flushRoadPaint();
 
 // District palette and building families.
 const wallPalette=[0xd9d1bd,0xe2dfd1,0xc8d3c9,0xd6c3a8,0xbfc9c4,0xe8e2d2,0xc7b8a5,0xd7d9cf].map(c=>mat(c));
