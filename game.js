@@ -62,7 +62,7 @@ for(let i=0;i<9;i++){const z=-65+i*16;building(-20,z,8,10,12+(i%3)*5,i);building
 for(let i=0;i<34;i++){let x=(Math.random()-.5)*125,z=-100+Math.random()*180;if(Math.abs(x)<27)continue;building(x,z,7+Math.random()*8,7+Math.random()*8,8+Math.random()*28,i+2)}
 // palm trees
 function palm(x,z){const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.48,.84,15,7),mat(0x80613d));trunk.position.set(x,7.5,z);trunk.castShadow=true;scene.add(trunk);for(let i=0;i<7;i++){let a=i*Math.PI*2/7;const leaf=new THREE.Mesh(new THREE.ConeGeometry(1.02,12,5),mat(0x237a43));leaf.position.set(x+Math.cos(a)*3.6,15.3,z+Math.sin(a)*3.6);leaf.rotation.z=-Math.cos(a)*.9;leaf.rotation.x=Math.sin(a)*.9;scene.add(leaf)}}
-for(let z=-65;z<80;z+=17){palm(-27.5,z);palm(27.5,z)}
+for(let z=-65;z<80;z+=17){if(Math.abs(z+22)>14){palm(-38,z);palm(38,z)}}
 
 // -----------------------------------------------------------------------------
 // v0.10 EXPANDED LAGOS WORLD: approx. 2.1 km x 2.1 km playable city footprint.
@@ -573,7 +573,7 @@ for(let gx=-945;gx<=945;gx+=70){
    const nearGridX=Math.round(px/70)*70,nearGridZ=Math.round(pz/70)*70;
    const halfX=Math.abs(Math.round(nearGridX/70)%3)===0?24:4;
    const halfZ=Math.abs(Math.round(nearGridZ/70)%3)===0?24:4;
-   if(Math.abs(px-nearGridX)>halfX+5 && Math.abs(pz-nearGridZ)>halfZ+5){
+   if(Math.abs(px-nearGridX)>halfX+14 && Math.abs(pz-nearGridZ)>halfZ+14){
     palmTree(px,pz,.72);
    }
   }
