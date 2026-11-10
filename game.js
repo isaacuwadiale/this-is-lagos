@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.53 — road markings and vegetation removed; bus shelters moved fully roadside
+// THIS IS LAGOS v0.52 — cleared 48m avenues, relocated starter palms, unified road markings
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -61,7 +61,7 @@ for(let i=0;i<9;i++){const z=-65+i*16;building(-20,z,8,10,12+(i%3)*5,i);building
 // farther skyline
 for(let i=0;i<34;i++){let x=(Math.random()-.5)*125,z=-100+Math.random()*180;if(Math.abs(x)<27)continue;building(x,z,7+Math.random()*8,7+Math.random()*8,8+Math.random()*28,i+2)}
 // palm trees
-function palm(x,z){}}
+function palm(x,z){const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.16,.28,5,7),mat(0x80613d));trunk.position.set(x,2.5,z);trunk.castShadow=true;scene.add(trunk);for(let i=0;i<7;i++){let a=i*Math.PI*2/7;const leaf=new THREE.Mesh(new THREE.ConeGeometry(.34,4,5),mat(0x237a43));leaf.position.set(x+Math.cos(a)*1.2,5.1,z+Math.sin(a)*1.2);leaf.rotation.z=-Math.cos(a)*.9;leaf.rotation.x=Math.sin(a)*.9;scene.add(leaf)}}
 for(let z=-65;z<80;z+=17){palm(-27.5,z);palm(27.5,z)}
 
 // -----------------------------------------------------------------------------
@@ -88,7 +88,10 @@ for(let i=0;i<18;i++){
 for(let p=-840;p<=840;p+=210){
   block(48,.18,2100,asphaltMat,p,-.12,0);
   block(2100,.18,48,asphaltMat,0,-.12,p);
-  // v0.53: all painted road markings are intentionally omitted.
+  block(1,.025,1980,laneMat,p-12,.0,0);
+  block(1,.025,1980,laneMat,p+12,.0,0);
+  block(1980,.025,1,laneMat,0,.0,p-12);
+  block(1980,.025,1,laneMat,0,.0,p+12);
 }
 for(let p=-980;p<=980;p+=70){
   if(Math.abs(p%210)<1) continue;
@@ -165,8 +168,18 @@ const paintWhite=new THREE.MeshBasicMaterial({color:0xf4f2df});
 const paintYellow=new THREE.MeshBasicMaterial({color:0xf1c84b});
 const paintArrow=new THREE.MeshBasicMaterial({color:0xf4f2df,side:THREE.DoubleSide});
 const roadPaintBatches=new Map(),roadArrowRecords=[];
-function roadPaint(w,d,x,z,material=paintWhite,y=.018){}
-function flushRoadPaint(){}
+function roadPaint(w,d,x,z,material=paintWhite,y=.018){
+ let batch=roadPaintBatches.get(material);if(!batch){batch=[];roadPaintBatches.set(material,batch)}
+ batch.push({w,d,x,z,y});
+}
+function flushRoadPaint(){
+ for(const [material,records] of roadPaintBatches){
+  const mesh=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),material,records.length);
+  const dummy=new THREE.Object3D();
+  records.forEach((r,i)=>{dummy.position.set(r.x,r.y,r.z);dummy.scale.set(r.w,.035,r.d);dummy.rotation.set(0,0,0);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix)});
+  mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;scene.add(mesh);
+ }
+}
 // Main avenues: double yellow centre lines and broken white lane separators.
 for(let p=-840;p<=840;p+=210){
  for(const offset of [-.42,.42]){
@@ -192,8 +205,15 @@ for(let p=-980;p<=980;p+=70){
  }
 }
 // Direction arrows at regular approach points.
-function addRoadArrow(x,z,rotation=0){}
-function flushRoadArrows(){}
+function addRoadArrow(x,z,rotation=0){roadArrowRecords.push({x,z,rotation});}
+function flushRoadArrows(){
+ if(!roadArrowRecords.length)return;
+ const shape=new THREE.Shape();shape.moveTo(0,3.2);shape.lineTo(-1.1,1.2);shape.lineTo(-.38,1.2);shape.lineTo(-.38,-2.2);shape.lineTo(.38,-2.2);shape.lineTo(.38,1.2);shape.lineTo(1.1,1.2);shape.closePath();
+ const mesh=new THREE.InstancedMesh(new THREE.ShapeGeometry(shape),paintArrow,roadArrowRecords.length);
+ const dummy=new THREE.Object3D();
+ roadArrowRecords.forEach((r,i)=>{dummy.position.set(r.x,.085,r.z);dummy.rotation.set(-Math.PI/2,r.rotation,0);dummy.scale.set(1,1,1);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix)});
+ mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;scene.add(mesh);
+}
 // Add clear directional arrows on the four approaches to every major junction.
 for(let p=-840;p<=840;p+=210){for(let q=-840;q<=840;q+=210){
  addRoadArrow(p-6,q-32,Math.PI);      // approach from the north, travel south-to-north
@@ -413,7 +433,10 @@ function signBoard(text,x,z,width=22,color=0x176b43){
  const tex=new THREE.CanvasTexture(canvas);const mesh=new THREE.Mesh(new THREE.PlaneGeometry(width,5),new THREE.MeshBasicMaterial({map:tex,transparent:false,side:THREE.DoubleSide}));
  mesh.position.set(x,7,z);scene.add(mesh);return mesh;
 }
-function palmTree(x,z,scale=1){}
+function palmTree(x,z,scale=1){
+ const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.22*scale,.34*scale,6*scale,7),mat(0x795b3b));trunk.position.set(x,3*scale,z);scene.add(trunk);
+ for(let k=0;k<8;k++){const a=k*Math.PI/4;const leaf=new THREE.Mesh(new THREE.ConeGeometry(.42*scale,5.2*scale,5),mat(0x287642));leaf.position.set(x+Math.cos(a)*1.5*scale,6*scale,z+Math.sin(a)*1.5*scale);leaf.rotation.z=-Math.cos(a)*.9;leaf.rotation.x=Math.sin(a)*.9;scene.add(leaf)}
+}
 function fencedPitch(cx,cz,name='FOOTBALL PITCH',surface=sportGreen){
  const g=new THREE.Group();g.position.set(cx,0,cz);scene.add(g);
  const field=new THREE.Mesh(new THREE.BoxGeometry(82,.22,48),surface);field.position.y=.04;g.add(field);
@@ -490,7 +513,9 @@ function buildDistrict(name,cx,cz,type,seed){
     if(!clearBuildingPlot(x,z,42,42,1)) continue;
     const yard=new THREE.Mesh(new THREE.BoxGeometry(34,.12,30),grass);yard.position.set(x,.02,z);scene.add(yard);
     compound(x,z,'duplex',seed+i);
-    // v0.53: planted hedges/bushes removed.
+    for(const sx of [-12,12]){
+     const hedge=new THREE.Mesh(new THREE.BoxGeometry(1.1,1.5,25),mat(0x326b3c));hedge.position.set(x+sx, .75,z);scene.add(hedge);
+    }
    }else compound(x,z,houseKind,seed+i);
   }
   for(let i=0;i<7;i++)makeBuilding(cx+(i%4)*36-54,cz-100+Math.floor(i/4)*28,24,18,5+(i%2)*2,'shop',seed+i);
@@ -684,9 +709,6 @@ function addBusStop(x,z,rotation=0){
   const g=new THREE.Group();g.position.set(x,0,z);g.rotation.y=rotation;scene.add(g);
   // Preserve the requested tall shelter and double its breadth from 4 to 8 units.
   // The 30-unit front remains parallel to the road.
-  // Wider paved boarding pad connects the shelter to the existing sidewalk.
-  // The whole shelter footprint stays outside the 48m avenue carriageway.
-  amenityBox(g,32,.12,10.5,amenityMats.paving,0,.02,0);
   amenityBox(g,30,.16,8,amenityMats.paving,0,.08,0);
   for(const px of [-13.5,13.5]){
     for(const pz of [-3.25,3.25]){
@@ -773,7 +795,7 @@ function addAmenityInfill(){
   // Deterministic shuffle-like ordering spreads facilities throughout the map.
   candidates.sort((a,b)=>(((a[0]*17+a[1]*31)%997)-((b[0]*17+b[1]*31)%997)));
   // Dedicated roadside pass (v0.44): place approximately 20 shelters ONLY
-  // beside the 48m-wide avenues (the 210m road grid). Do not use
+  // beside the 24m-wide double-lane avenues (the 210m road grid). Do not use
   // the 8m local streets. The shelter's 30m long side follows the avenue;
   // its open passenger side faces the carriageway.
   let extraShelters=0;
@@ -818,15 +840,15 @@ function addAmenityInfill(){
       if(group.axis==='x'){
         // Double-lane north/south avenue. The 8m-wide shelter overlaps the
         // outer edge of the sidewalk without entering the carriageway.
-        x=group.road+group.side*30.5; z=along;
+        x=group.road+group.side*(12+6.5); z=along;
         plotW=10; plotD=32;
         // Local +Z points toward the road: reverse the old, away-facing angles.
-        rotation=group.side>0?Math.PI/2:-Math.PI/2;
+        rotation=group.side>0?-Math.PI/2:Math.PI/2;
       }else{
         // Double-lane east/west avenue; the long shelter side stays parallel.
-        z=group.road+group.side*30.5; x=along;
+        z=group.road+group.side*(11+6.5); x=along;
         plotW=32; plotD=10;
-        rotation=group.side>0?0:Math.PI;
+        rotation=group.side>0?Math.PI:0;
       }
       if(!shelterSiteFree(x,z,plotW,plotD,group.axis,group.road))continue;
       addBusStop(x,z,rotation);
@@ -857,7 +879,7 @@ function addAmenityInfill(){
   return {placedCount,extraShelters};
 }
 const v037AmenityResult=addAmenityInfill();
-console.info('This Is Lagos v0.53: roof-height circular pole bus-stop signs; 40-target bus shelters outside 48m avenue carriageways, fronts facing roads; protected courts and supported table-tennis; pharmacy H x3, W x2, L x2',v037AmenityResult);
+console.info('This Is Lagos v0.51: roof-height circular pole bus-stop signs; 40-target bus shelters on double-lane avenues only, fronts facing roads; protected courts and supported table-tennis; pharmacy H x3, W x2, L x2',v037AmenityResult);
 // -----------------------------------------------------------------------------
 
 // Industrial port yards, container stacks and cranes near Apapa.
