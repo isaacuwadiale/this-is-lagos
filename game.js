@@ -62,7 +62,7 @@ for(let i=0;i<9;i++){const z=-65+i*16;building(-20,z,8,10,12+(i%3)*5,i);building
 for(let i=0;i<34;i++){let x=(Math.random()-.5)*125,z=-100+Math.random()*180;if(Math.abs(x)<27)continue;building(x,z,7+Math.random()*8,7+Math.random()*8,8+Math.random()*28,i+2)}
 // palm trees
 function palm(x,z){const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.48,.84,15,7),mat(0x80613d));trunk.position.set(x,7.5,z);trunk.castShadow=true;scene.add(trunk);for(let i=0;i<7;i++){let a=i*Math.PI*2/7;const leaf=new THREE.Mesh(new THREE.ConeGeometry(1.02,12,5),mat(0x237a43));leaf.position.set(x+Math.cos(a)*3.6,15.3,z+Math.sin(a)*3.6);leaf.rotation.z=-Math.cos(a)*.9;leaf.rotation.x=Math.sin(a)*.9;scene.add(leaf)}}
-// Roadside tree placements removed; keep tree function for park landscaping.
+for(let z=-65;z<80;z+=17){palm(-27.5,z);palm(27.5,z)}
 
 // -----------------------------------------------------------------------------
 // v0.10 EXPANDED LAGOS WORLD: approx. 2.1 km x 2.1 km playable city footprint.
@@ -168,17 +168,7 @@ const paintWhite=new THREE.MeshBasicMaterial({color:0xf4f2df});
 const paintYellow=new THREE.MeshBasicMaterial({color:0xf1c84b});
 const paintArrow=new THREE.MeshBasicMaterial({color:0xf4f2df,side:THREE.DoubleSide});
 const roadPaintBatches=new Map(),roadArrowRecords=[];
-// Suppress every road-paint segment that touches the marked area around a major junction.
-function touchesMajorJunction(x,z,w,d){
- for(let jx=-840;jx<=840;jx+=210){
-  for(let jz=-840;jz<=840;jz+=210){
-   if(Math.abs(x-jx)<55+w/2 && Math.abs(z-jz)<55+d/2)return true;
-  }
- }
- return false;
-}
 function roadPaint(w,d,x,z,material=paintWhite,y=.018){
- if(touchesMajorJunction(x,z,w,d))return;
  let batch=roadPaintBatches.get(material);if(!batch){batch=[];roadPaintBatches.set(material,batch)}
  batch.push({w,d,x,z,y});
 }
@@ -215,8 +205,15 @@ for(let p=-980;p<=980;p+=70){
  }
 }
 // Direction arrows at regular approach points.
-function addRoadArrow(x,z,rotation=0){});}
-function flushRoadArrows(){}
+function addRoadArrow(x,z,rotation=0){roadArrowRecords.push({x,z,rotation});}
+function flushRoadArrows(){
+ if(!roadArrowRecords.length)return;
+ const shape=new THREE.Shape();shape.moveTo(0,3.2);shape.lineTo(-1.1,1.2);shape.lineTo(-.38,1.2);shape.lineTo(-.38,-2.2);shape.lineTo(.38,-2.2);shape.lineTo(.38,1.2);shape.lineTo(1.1,1.2);shape.closePath();
+ const mesh=new THREE.InstancedMesh(new THREE.ShapeGeometry(shape),paintArrow,roadArrowRecords.length);
+ const dummy=new THREE.Object3D();
+ roadArrowRecords.forEach((r,i)=>{dummy.position.set(r.x,.085,r.z);dummy.rotation.set(-Math.PI/2,r.rotation,0);dummy.scale.set(1,1,1);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix)});
+ mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;scene.add(mesh);
+}
 // Add clear directional arrows on the four approaches to every major junction.
 for(let p=-840;p<=840;p+=210){for(let q=-840;q<=840;q+=210){
  addRoadArrow(p-6,q-32,Math.PI);      // approach from the north, travel south-to-north
@@ -570,7 +567,16 @@ for(let gx=-945;gx<=945;gx+=70){
    const floors=kind==='shop'?4:(kind==='tenement'?5:12);
    makeBuilding(gx,gz,width,depth,floors,kind,citySeed++);
   }
-   // Scattered roadside/infill tree placements removed.
+  if(blockIndex%3===0){
+   // Keep infill palms clear of every road carriageway and its immediate verge.
+   const px=gx+24,pz=gz+24;
+   const nearGridX=Math.round(px/70)*70,nearGridZ=Math.round(pz/70)*70;
+   const halfX=Math.abs(Math.round(nearGridX/70)%3)===0?24:4;
+   const halfZ=Math.abs(Math.round(nearGridZ/70)%3)===0?24:4;
+   if(Math.abs(px-nearGridX)>halfX+5 && Math.abs(pz-nearGridZ)>halfZ+5){
+    palmTree(px,pz,.72);
+   }
+  }
  }
 }
 
