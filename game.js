@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.52 — cleared 48m avenues, relocated starter palms, unified road markings
+// THIS IS LAGOS v0.53 — realistic trees with ground shade, kept off all roads; cleared 48m avenues, unified road markings
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -60,9 +60,207 @@ function building(x,z,w,d,h,idx){
 for(let i=0;i<9;i++){const z=-65+i*16;building(-20,z,8,10,12+(i%3)*5,i);building(20,z,9,11,16+(i%4)*6,i+1)}
 // farther skyline
 for(let i=0;i<34;i++){let x=(Math.random()-.5)*125,z=-100+Math.random()*180;if(Math.abs(x)<27)continue;building(x,z,7+Math.random()*8,7+Math.random()*8,8+Math.random()*28,i+2)}
-// palm trees
-function palm(x,z){const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.48,.84,15,7),mat(0x80613d));trunk.position.set(x,7.5,z);trunk.castShadow=true;scene.add(trunk);for(let i=0;i<7;i++){let a=i*Math.PI*2/7;const leaf=new THREE.Mesh(new THREE.ConeGeometry(1.02,12,5),mat(0x237a43));leaf.position.set(x+Math.cos(a)*3.6,15.3,z+Math.sin(a)*3.6);leaf.rotation.z=-Math.cos(a)*.9;leaf.rotation.x=Math.sin(a)*.9;scene.add(leaf)}}
-for(let z=-65;z<80;z+=17){palm(-27.5,z);palm(27.5,z)}
+// ============================================================================
+// TREES (v0.53): realistic broadleaf shade trees + pinnate palms.
+// Each species is built once as a vertex-coloured archetype (lumpy leaf masses with soft normals, forked
+// trunks, ringed palm trunks, leaflet fronds) and drawn as chunked instanced meshes. Every tree also casts a
+// soft dappled shade patch on the ground, offset away from the sun, so pavements and roads under canopies
+// are visibly shaded. Trees are never placed on a carriageway or its pavement (see treeOnRoad).
+// ============================================================================
+const TREE_SUN=new THREE.Vector3(-35,55,25);
+const treeRand=(()=>{let s=20260512;return()=>{s=(s*1664525+1013904223)>>>0;return s/4294967296}})();
+const treeHash=(x,z,k=0)=>{const v=Math.sin(x*127.1+z*311.7+k*74.7)*43758.5453;return v-Math.floor(v)};
+const tcol=hex=>new THREE.Color(hex);
+function TreePart(){return {pos:[],nor:[],col:[],idx:[]}}
+function treeVert(part,px,py,pz,nx,ny,nz,c){
+ const l=Math.hypot(nx,ny,nz)||1;
+ part.pos.push(px,py,pz);part.nor.push(nx/l,ny/l,nz/l);part.col.push(c.r,c.g,c.b);
+ return part.pos.length/3-1;
+}
+// Lumpy leaf mass: displaced sphere, normals blended with the whole-crown direction so the canopy shades as one soft form.
+function treeBlob(part,cx,cy,cz,rx,ry,rz,dark,light,crown,lump=.24){
+ const g=new THREE.SphereGeometry(1,8,5),P=g.attributes.position,I=g.index.array,base=part.pos.length/3;
+ const ph=treeRand()*50,tint=.9+treeRand()*.2,c=new THREE.Color();
+ for(let i=0;i<P.count;i++){
+  const ux=P.getX(i),uy=P.getY(i),uz=P.getZ(i);
+  const n=Math.sin(ux*3.3+ph)*Math.cos(uz*2.9+ph*1.7)+Math.sin(uy*4.1+ph*.6)*.7;
+  const r=1+n*lump*.45;
+  const px=cx+ux*rx*r,py=cy+uy*ry*r,pz=cz+uz*rz*r;
+  const t=Math.min(1,Math.max(0,(uy*.5+.5)*.8+n*.08+.08));
+  c.copy(dark).lerp(light,t*t*.6+t*.4).multiplyScalar(tint);
+  const k=.45/crown[3];
+  treeVert(part,px,py,pz,ux*.55+(px-crown[0])*k,uy*.55+(py-crown[1])*k,uz*.55+(pz-crown[2])*k,c);
+ }
+ for(let i=0;i<I.length;i++)part.idx.push(I[i]+base);
+ g.dispose();
+}
+// Tapered tube along a polyline: trunks, limbs, palm trunks and frond spines.
+function treeTube(part,pts,radii,sides,colorAt){
+ const base=part.pos.length/3,T=new THREE.Vector3(),S=new THREE.Vector3(),U=new THREE.Vector3(),c=new THREE.Color();
+ const up=new THREE.Vector3(0,1,0),side=new THREE.Vector3(1,0,0);
+ for(let i=0;i<pts.length;i++){
+  const a=pts[Math.max(0,i-1)],b=pts[Math.min(pts.length-1,i+1)];
+  T.set(b[0]-a[0],b[1]-a[1],b[2]-a[2]).normalize();
+  S.crossVectors(T,Math.abs(T.y)>.95?side:up).normalize();U.crossVectors(S,T).normalize();
+  colorAt(i/(pts.length-1),i,c);
+  for(let k=0;k<=sides;k++){
+   const an=k/sides*Math.PI*2,ca=Math.cos(an),sa=Math.sin(an);
+   const dx=ca*S.x+sa*U.x,dy=ca*S.y+sa*U.y,dz=ca*S.z+sa*U.z;
+   treeVert(part,pts[i][0]+dx*radii[i],pts[i][1]+dy*radii[i],pts[i][2]+dz*radii[i],dx,dy,dz,c);
+  }
+ }
+ for(let i=0;i<pts.length-1;i++)for(let k=0;k<sides;k++){
+  const a=base+i*(sides+1)+k,b=a+1,c2=a+sides+1,d=c2+1;
+  part.idx.push(a,c2,b,b,c2,d);
+ }
+}
+function treeGeo(part){
+ const g=new THREE.BufferGeometry();
+ g.setAttribute('position',new THREE.Float32BufferAttribute(part.pos,3));
+ g.setAttribute('normal',new THREE.Float32BufferAttribute(part.nor,3));
+ g.setAttribute('color',new THREE.Float32BufferAttribute(part.col,3));
+ g.setIndex(part.idx);return g;
+}
+// Broadleaf shade trees: 0 = rounded mango-like, 1 = wide umbrella (flame/almond), 2 = tall neem-like.
+function buildBroadleaf(v){
+ const part=TreePart(),bark=tcol(0x4a382a),barkLt=tcol(0x6b5440);
+ const spec=[
+  {trunkH:3.4,cy:7.3,rx:4.6,ry:3.5,n:8,dark:0x1d5128,light:0x6aa23d,spread:2.3},
+  {trunkH:4.6,cy:8.2,rx:5.8,ry:1.9,n:9,dark:0x28622d,light:0x86b348,spread:3.4},
+  {trunkH:5.2,cy:8.6,rx:3.5,ry:4.4,n:8,dark:0x1b4a28,light:0x5a9a3a,spread:1.6}
+ ][v];
+ const lean=(treeRand()-.5)*.6,trunk=[],rad=[];
+ for(let i=0;i<=6;i++){const t=i/6;trunk.push([lean*t*t*1.2,spec.trunkH*t,Math.sin(t*3)*.12]);rad.push(.62*(1-t)+.32*t+(i===0?.18:0))}
+ treeTube(part,trunk,rad,7,(t,i,c)=>c.copy(bark).lerp(barkLt,t*.55+(i%2)*.08));
+ const top=trunk[6],dark=tcol(spec.dark),light=tcol(spec.light),crown=[0,spec.cy,0,Math.max(spec.rx,spec.ry)];
+ treeBlob(part,0,spec.cy-spec.ry*.05,0,spec.rx*.62,spec.ry*.85,spec.rx*.62,dark,light,crown);
+ for(let k=1;k<spec.n;k++){
+  const a=k/spec.n*Math.PI*2+treeRand()*.7,d=spec.spread*(.55+treeRand()*.6);
+  const bx=Math.cos(a)*d,bz=Math.sin(a)*d,by=spec.cy+(treeRand()-.3)*spec.ry*.7;
+  treeTube(part,[[top[0],top[1]-.2,top[2]],[bx*.45,(top[1]+by)/2,bz*.45],[bx*.8,by-spec.ry*.35,bz*.8]],[.24,.16,.09],5,(t,i,c)=>c.copy(bark).lerp(barkLt,t*.4));
+  treeBlob(part,bx,by,bz,spec.rx*(.42+treeRand()*.16),spec.ry*(.55+treeRand()*.25),spec.rx*(.42+treeRand()*.16),dark,light,crown);
+ }
+ return {geo:treeGeo(part),shade:[5,6.2,3.8][v],crownY:spec.cy,base:1};
+}
+// Pinnate palms: ringed leaning trunk, arching fronds made of paired leaflets, coconut cluster.
+function buildPalm(v){
+ const part=TreePart(),H=v===0?14.5:17,lean=v===0?1.6:-2.1,N=14,pts=[],rad=[];
+ const b0=tcol(0x8b7b66),b1=tcol(0x5f5342);
+ for(let i=0;i<=N;i++){const t=i/N;pts.push([lean*t*t,H*t,Math.sin(t*Math.PI)*.35*(v?1:-1)]);rad.push(.36+.34*Math.pow(1-t,2.2)+(i===0?.1:0))}
+ treeTube(part,pts,rad,7,(t,i,c)=>c.copy(b0).lerp(b1,t*.5).multiplyScalar(i%2?.86:1.04));
+ const top=pts[N],leafDark=tcol(0x2a6a2c),leafLight=tcol(0x86bb4c),rach=tcol(0x6d7a3a),c=new THREE.Color();
+ for(let f=0;f<14;f++){
+  const a=f/14*Math.PI*2+treeRand()*.35,L=5.4+treeRand()*1.6,pitch0=.95-(f%3)*.55+(treeRand()-.5)*.3;
+  const dx=Math.cos(a),dz=Math.sin(a),sx=-dz,sz=dx,NS=11,sp=[[top[0],top[1]+.2,top[2]]];
+  let px=top[0],py=top[1]+.2,pz=top[2];
+  for(let j=1;j<=NS;j++){const t=j/NS,pitch=pitch0-t*2.5,dl=L/NS;px+=dx*Math.cos(pitch)*dl;pz+=dz*Math.cos(pitch)*dl;py+=Math.sin(pitch)*dl;sp.push([px,py,pz])}
+  for(let j=1;j<NS;j++){
+   const t=j/NS,ll=(.55+1.7*Math.sin(Math.PI*Math.min(1,t*1.05+.05)))*(L/6),p0=sp[j],p1=sp[j+1];
+   for(const sd of [-1,1]){
+    const tip=[(p0[0]+p1[0])/2+sx*sd*ll*.9+dx*ll*.25,(p0[1]+p1[1])/2-ll*.55,(p0[2]+p1[2])/2+sz*sd*ll*.9+dz*ll*.25];
+    c.copy(leafDark).lerp(leafLight,.25+.55*t+treeRand()*.15);
+    const i0=treeVert(part,p0[0],p0[1],p0[2],0,1,0,c),i1=treeVert(part,p1[0],p1[1],p1[2],0,1,0,c);
+    c.lerp(leafLight,.35);
+    const i2=treeVert(part,tip[0],tip[1],tip[2],sx*sd*.35,1,sz*sd*.35,c);
+    part.idx.push(i0,i1,i2);
+   }
+  }
+ }
+ const nutD=tcol(0x4e5d22),nutL=tcol(0x8a9a3a);
+ for(let k=0;k<3;k++){const a=k*Math.PI*2/3+.4;treeBlob(part,top[0]+Math.cos(a)*.5,top[1]-.15,top[2]+Math.sin(a)*.5,.32,.36,.32,nutD,nutL,[top[0],top[1],top[2],1],.1)}
+ return {geo:treeGeo(part),shade:3.8,crownY:H,base:.85};
+}
+const TREE_TYPES=[buildBroadleaf(0),buildBroadleaf(1),buildBroadleaf(2),buildPalm(0),buildPalm(1)];
+const treeMat=new THREE.MeshStandardMaterial({vertexColors:true,roughness:.92,metalness:0,side:THREE.DoubleSide});
+// Dappled shade decal (soft edge with light gaps where sun filters through the leaves).
+const shadeTex=(()=>{
+ const cv=document.createElement('canvas');cv.width=cv.height=128;const g=cv.getContext('2d');
+ const gr=g.createRadialGradient(64,64,6,64,64,62);
+ gr.addColorStop(0,'rgba(8,16,10,.62)');gr.addColorStop(.55,'rgba(8,16,10,.5)');gr.addColorStop(1,'rgba(8,16,10,0)');
+ g.fillStyle=gr;g.fillRect(0,0,128,128);
+ g.globalCompositeOperation='destination-out';
+ for(let i=0;i<46;i++){const a=treeRand()*Math.PI*2,r=Math.sqrt(treeRand())*50;g.fillStyle='rgba(0,0,0,'+(.18+treeRand()*.3)+')';g.beginPath();g.arc(64+Math.cos(a)*r,64+Math.sin(a)*r,1.5+treeRand()*3.5,0,Math.PI*2);g.fill()}
+ return new THREE.CanvasTexture(cv);
+})();
+const shadeMat=new THREE.MeshBasicMaterial({map:shadeTex,transparent:true,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-2,polygonOffsetUnits:-2});
+const shadePlane=new THREE.PlaneGeometry(2,2);shadePlane.rotateX(-Math.PI/2);
+
+const TREE_CHUNK=150,TREE_VIEW_DIST=520,TREE_SHADE_DIST=380,treeChunks=new Map(),treeSpots=[];
+// True when (x,z) lies on any carriageway or its pavement (plus a trunk margin). Trees are rejected there.
+function treeOnRoad(x,z,margin=3.4){
+ const gx=Math.round(x/70)*70,gz=Math.round(z/70)*70;
+ const hx=Math.abs(gx%210)<1?24:4,hz=Math.abs(gz%210)<1?24:4;
+ return Math.abs(x-gx)<hx+margin||Math.abs(z-gz)<hz+margin;
+}
+// kind: 'shade' (broadleaf), 'palm', or 'auto' (mixed by position). Returns false when the spot is on a road.
+function addTree(x,z,scale=1,kind='auto'){
+ if(treeOnRoad(x,z))return false;
+ const h=treeHash(x,z);let type;
+ if(kind==='palm')type=3+(h<.5?0:1);
+ else if(kind==='shade')type=Math.floor(h*3)%3;
+ else type=h<.4?3+(treeHash(x,z,2)<.5?0:1):Math.floor(treeHash(x,z,1)*3)%3;
+ treeSpots.push({x,z,type,s:scale*(.88+treeHash(x,z,3)*.28),rot:treeHash(x,z,4)*Math.PI*2,tr:.9+treeHash(x,z,5)*.14,tg:.92+treeHash(x,z,6)*.14,tb:.88+treeHash(x,z,7)*.16});
+ return true;
+}
+// Shade trees along both verges of every 48m avenue, kept clear of junctions, streetlights, buildings and amenities.
+function addStreetTrees(){
+ const SP=36,clearOf=(list,x,z,m)=>!list.some(c=>x+m>c.minX&&x-m<c.maxX&&z+m>c.minZ&&z-m<c.maxZ);
+ for(let p=-840;p<=840;p+=210){
+  for(const side of [-1,1]){
+   const off=side*27.6;let k=0;
+   for(let q=-975+(side>0?SP/2:0);q<=975;q+=SP,k++){
+    const r=((q+945)%105+105)%105;if(Math.min(r,105-r)<4)continue;   // streetlight spacing
+    for(const axis of ['z','x']){
+     const x=axis==='z'?p+off:q,z=axis==='z'?q:p+off;
+     if(treeOnRoad(x,z)||!clearOf(buildingColliders,x,z,2.5)||!clearOf(amenityColliders,x,z,2.5))continue;
+     const palm=(k%3===1);addTree(x,z,palm?.95:.8,palm?'palm':'shade');
+    }
+   }
+  }
+ }
+}
+function finalizeTrees(){
+ addStreetTrees();
+ for(const t of treeSpots){
+  const key=Math.floor(t.x/TREE_CHUNK)+','+Math.floor(t.z/TREE_CHUNK);
+  let ch=treeChunks.get(key);
+  if(!ch){const cx=(Math.floor(t.x/TREE_CHUNK)+.5)*TREE_CHUNK,cz=(Math.floor(t.z/TREE_CHUNK)+.5)*TREE_CHUNK;ch={cx,cz,trees:TREE_TYPES.map(()=>[]),sphere:new THREE.Sphere(new THREE.Vector3(cx,10,cz),125),group:null,decals:null};treeChunks.set(key,ch)}
+  ch.trees[t.type].push(t);
+  const tr=.55*t.s*TREE_TYPES[t.type].base+.35;   // trunk collider
+  buildingColliders.push({minX:t.x-tr,maxX:t.x+tr,minZ:t.z-tr,maxZ:t.z+tr});
+ }
+ const dummy=new THREE.Object3D(),col=new THREE.Color();
+ for(const ch of treeChunks.values()){
+  const group=new THREE.Group(),decals=[];
+  TREE_TYPES.forEach((T,ti)=>{
+   const list=ch.trees[ti];if(!list.length)return;
+   const mesh=new THREE.InstancedMesh(T.geo,treeMat,list.length);
+   list.forEach((t,i)=>{
+    const sc=t.s*T.base;
+    dummy.position.set(t.x,0,t.z);dummy.rotation.set(0,t.rot,0);dummy.scale.setScalar(sc);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix);
+    col.setRGB(t.tr,t.tg,t.tb);mesh.setColorAt(i,col);
+    const h=T.crownY*sc,ox=-TREE_SUN.x/TREE_SUN.y*h,oz=-TREE_SUN.z/TREE_SUN.y*h;
+    decals.push({x:t.x+ox,z:t.z+oz,r:T.shade*sc,rot:Math.atan2(-oz,ox)});
+   });
+   mesh.instanceMatrix.needsUpdate=true;if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true;
+   mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;group.add(mesh);
+  });
+  const dm=new THREE.InstancedMesh(shadePlane,shadeMat,decals.length);
+  decals.forEach((d,i)=>{dummy.position.set(d.x,.16,d.z);dummy.rotation.set(0,d.rot,0);dummy.scale.set(d.r*1.2,1,d.r);dummy.updateMatrix();dm.setMatrixAt(i,dummy.matrix)});
+  dm.instanceMatrix.needsUpdate=true;dm.frustumCulled=false;dm.renderOrder=2;
+  group.add(dm);ch.group=group;ch.decals=dm;scene.add(group);
+ }
+}
+// Chunk-level frustum + distance culling (called with the building culling pass).
+function updateTreeVisibility(){
+ const px=player.position.x,pz=player.position.z;
+ for(const ch of treeChunks.values()){
+  const d=Math.hypot(ch.cx-px,ch.cz-pz)-125,inView=viewFrustum.intersectsSphere(ch.sphere);
+  ch.group.visible=inView&&d<TREE_VIEW_DIST;
+  ch.decals.visible=d<TREE_SHADE_DIST;
+ }
+}
+// Starter-avenue palms were removed: some stood on the cross-avenue and local street. Street trees are now placed by addStreetTrees().
 
 // -----------------------------------------------------------------------------
 // v0.10 EXPANDED LAGOS WORLD: approx. 2.1 km x 2.1 km playable city footprint.
@@ -479,10 +677,7 @@ function signBoard(text,x,z,width=22,color=0x176b43){
  const tex=new THREE.CanvasTexture(canvas);const mesh=new THREE.Mesh(new THREE.PlaneGeometry(width,5),new THREE.MeshBasicMaterial({map:tex,transparent:false,side:THREE.DoubleSide}));
  mesh.position.set(x,7,z);scene.add(mesh);return mesh;
 }
-function palmTree(x,z,scale=1){
- const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.66*scale,1.02*scale,18*scale,7),mat(0x795b3b));trunk.position.set(x,9*scale,z);scene.add(trunk);
- for(let k=0;k<8;k++){const a=k*Math.PI/4;const leaf=new THREE.Mesh(new THREE.ConeGeometry(1.26*scale,15.6*scale,5),mat(0x287642));leaf.position.set(x+Math.cos(a)*4.5*scale,18*scale,z+Math.sin(a)*4.5*scale);leaf.rotation.z=-Math.cos(a)*.9;leaf.rotation.x=Math.sin(a)*.9;scene.add(leaf)}
- }
+function palmTree(x,z,scale=1){addTree(x,z,scale*1.15,'palm')}
 function fencedPitch(cx,cz,name='FOOTBALL PITCH',surface=sportGreen){
  const g=new THREE.Group();g.position.set(cx,0,cz);scene.add(g);
  const field=new THREE.Mesh(new THREE.BoxGeometry(82,.22,48),surface);field.position.y=.04;g.add(field);
@@ -620,7 +815,7 @@ for(let gx=-945;gx<=945;gx+=70){
    const halfX=Math.abs(Math.round(nearGridX/70)%3)===0?24:4;
    const halfZ=Math.abs(Math.round(nearGridZ/70)%3)===0?24:4;
    if(Math.abs(px-nearGridX)>halfX+5 && Math.abs(pz-nearGridZ)>halfZ+5){
-    palmTree(px,pz,.72);
+    addTree(px,pz,1,'auto');
    }
   }
  }
@@ -719,7 +914,7 @@ function addGardenPark(x,z,large=false){
   amenityBox(g,w,.12,d,amenityMats.grass,0,.02,0);
   for(let i=0;i<6;i++){
     const a=i*Math.PI/3,px=Math.cos(a)*w*.29,pz=Math.sin(a)*d*.29;
-    palmTree(x+px,z+pz,.48);
+    addTree(x+px,z+pz,i%2?.8:1,i%2?'palm':'shade');
   }
   for(const bx of [-w*.22,w*.22]){
     const bench=amenityBox(g,4,.35,.8,mat(0x76513a),bx,.2,0);
@@ -1182,6 +1377,8 @@ function updateVisibleBuildings(){
   }
  }
 }
+// All trees are registered by now: build instanced meshes, shade patches and trunk colliders.
+finalizeTrees();
 // Index building footprints into a spatial grid once. Movement checks now inspect
 // only the small set of buildings in the player's current grid cell, not the whole city.
 const COLLISION_CELL_SIZE=64;
@@ -1264,7 +1461,7 @@ function animate(){
   if(body)body.position.y=1.05+Math.sin(performance.now()*.012)*.045;
  }
  if(weather==='Rain'){for(const d of drops){d.position.y-=uiDt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*180;d.position.z=player.position.z+(Math.random()-.5)*180}}}
- updateCamera();if((cullFrame++%3)===0)updateVisibleBuildings();renderer.render(scene,camera);
+ updateCamera();if((cullFrame++%3)===0){updateVisibleBuildings();updateTreeVisibility();}renderer.render(scene,camera);
 }
 updateCamera();
 const clock=new THREE.Clock();animate();
