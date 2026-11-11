@@ -89,7 +89,9 @@ for(let i=0;i<18;i++){
 // Grid lines sit every 70m; every third one (multiples of 210) is a 48m avenue,
 // the rest are 8m local streets.
 // Stop line sits STOP_OFF metres outside the junction box; the zebra crossing fills the gap before the box.
-const STOP_OFF=5, ZEBRA_IN=.8, ZEBRA_DEPTH=3.2, ZEBRA_BAR=.6;
+// Zebra: bars 2x wider (1.2m) and 3x longer (9.6m); it starts ZEBRA_IN from the junction box and extends backwards,
+// and the stop line (plus all other markings) sits behind it so nothing enters the box.
+const ZEBRA_IN=.8, ZEBRA_DEPTH=9.6, ZEBRA_BAR=1.2, STOP_OFF=ZEBRA_IN+ZEBRA_DEPTH+1.1;
 const JUNC_GRID=[];for(let g=-980;g<=980;g+=70)JUNC_GRID.push({g,half:Math.abs(g%210)<1?24:4});
 // kind 'avenue' = crossings with other avenues only (plus local-street mouths when mouths=true);
 // kind 'local' = crossings with every road. pad widens each clear zone.
@@ -251,12 +253,13 @@ function flushRoadArrows(){
  roadArrowRecords.forEach((r,i)=>{dummy.position.set(r.x,.085,r.z);dummy.rotation.set(-Math.PI/2,r.rotation,0);dummy.scale.set(1,1,1);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix)});
  mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;scene.add(mesh);
 }
-// Add clear directional arrows on the four approaches to every major junction.
+// Add clear directional arrows on the four approaches to every major junction (kept behind the stop line).
+const AO=32+(STOP_OFF-5)+1;
 for(let p=-840;p<=840;p+=210){for(let q=-840;q<=840;q+=210){
- addRoadArrow(p-6,q-32,Math.PI);      // approach from the north, travel south-to-north
- addRoadArrow(p+6,q+32,0);            // approach from the south, travel north-to-south
- addRoadArrow(p-32,q+6,-Math.PI/2);   // approach from the west, travel west-to-east
- addRoadArrow(p+32,q-6,Math.PI/2);    // approach from the east, travel east-to-west
+ addRoadArrow(p-6,q-AO,Math.PI);      // approach from the north, travel south-to-north
+ addRoadArrow(p+6,q+AO,0);            // approach from the south, travel north-to-south
+ addRoadArrow(p-AO,q+6,-Math.PI/2);   // approach from the west, travel west-to-east
+ addRoadArrow(p+AO,q-6,Math.PI/2);    // approach from the east, travel east-to-west
 }}
 
 // Lagos-style streetlights: galvanized poles, outreach arms and warm LED heads.
