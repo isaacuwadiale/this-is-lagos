@@ -239,28 +239,16 @@ for(let p=-840;p<=840;p+=210){
 // Local-street lights are shifted to the outer edge of the new pavement.
 for(let p=-980;p<=980;p+=140){if(Math.abs(p%210)<1)continue;for(let q=-910;q<=910;q+=210){streetlight(p-27.2,q,0,.68);streetlight(q,p+27.2,Math.PI/2,.68);}}
 
-// Zebra crossings on all four arms of every major junction. Each stripe spans
-// the asphalt road width; the seven bars run perpendicular to the traffic flow.
-function addZebraCrossing(direction,centerX,centerZ,approachSide){
- // direction is the vehicle travel axis. Zebra bars are always perpendicular.
- for(let stripe=-3;stripe<=3;stripe++){
-  const offset=approachSide*17+stripe*2.15;
-  if(direction==='north-south'){
-   // Traffic travels along Z: each stripe spans the road along X.
-   roadPaint(48,1.15,centerX,centerZ+offset,paintWhite,.085);
-  }else{
-   // Traffic travels along X: each stripe spans the road along Z.
-   roadPaint(1.15,48,centerX+offset,centerZ,paintWhite,.085);
-  }
- }
+// Zebra stripes removed; only the junction stop line remains on each arm.
+function addStopLine(direction,centerX,centerZ,approachSide){
  if(direction==='north-south') roadPaint(48,.45,centerX,centerZ+approachSide*26,paintWhite,.085);
  else roadPaint(.45,48,centerX+approachSide*26,centerZ,paintWhite,.085);
 }
 for(let x=-840;x<=840;x+=210){
  for(let z=-840;z<=840;z+=210){
   for(const side of [-1,1]){
-   addZebraCrossing('north-south',x,z,side);
-   addZebraCrossing('east-west',x,z,side);
+   addStopLine('north-south',x,z,side);
+   addStopLine('east-west',x,z,side);
   }
  }
 }
