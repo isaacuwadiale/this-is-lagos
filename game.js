@@ -788,8 +788,71 @@ function addAmenityInfill(){
   }
   // Deterministic shuffle-like ordering spreads facilities throughout the map.
   candidates.sort((a,b)=>(((a[0]*17+a[1]*31)%997)-((b[0]*17+b[1]*31)%997)));
-  // Bus-shelter placement disabled: all bus shelters removed.
-  const extraShelters=0;
+  // Dedicated roadside pass (v0.44): place approximately 20 shelters ONLY
+  // beside the 24m-wide double-lane avenues (the 210m road grid). Do not use
+  // the 8m local streets. The shelter's 30m long side follows the avenue;
+  // its open passenger side faces the carriageway.
+  let extraShelters=0;
+  const shelterTarget=40;
+  const roadLines=[];
+  for(let p=-980;p<=980;p+=70) roadLines.push(p);
+  const segmentCentres=[];
+  for(let i=0;i<roadLines.length-1;i++) segmentCentres.push((roadLines[i]+roadLines[i+1])/2);
+
+  // One shelter is sought on each selected roadside, keeping the stops spread
+  // across different avenues rather than clustering them on the first road.
+  const roadsideGroups=[];
+  for(const roadX of roadLines.filter(v=>Math.abs(v%210)<1)){
+    for(const side of [-1,1]){
+      const orderedSegments=segmentCentres.slice().sort((a,b)=>{
+        const sa=Math.abs((a*17+roadX*7+side*29)%997);
+        const sb=Math.abs((b*17+roadX*7+side*29)%997);
+        return sa-sb;
+      });
+      roadsideGroups.push({axis:'x',road:roadX,side,segments:orderedSegments,
+        rank:Math.abs((roadX*31+side*19+7)%991)});
+    }
+  }
+  for(const roadZ of roadLines.filter(v=>Math.abs(v%210)<1)){
+    for(const side of [-1,1]){
+      const orderedSegments=segmentCentres.slice().sort((a,b)=>{
+        const sa=Math.abs((a*19+roadZ*11+side*23)%991);
+        const sb=Math.abs((b*19+roadZ*11+side*23)%991);
+        return sa-sb;
+      });
+      roadsideGroups.push({axis:'z',road:roadZ,side,segments:orderedSegments,
+        rank:Math.abs((roadZ*37+side*17+13)%997)});
+    }
+  }
+  roadsideGroups.sort((a,b)=>a.rank-b.rank);
+
+  for(const group of roadsideGroups){
+    if(extraShelters>=shelterTarget)break;
+    let placedOnThisSide=false;
+    for(const along of group.segments){
+      let x,z,rotation,plotW,plotD;
+      if(group.axis==='x'){
+        // Double-lane north/south avenue. The 8m-wide shelter overlaps the
+        // outer edge of the sidewalk without entering the carriageway.
+        x=group.road+group.side*(12+6.5); z=along;
+        plotW=10; plotD=32;
+        // Local +Z points toward the road: reverse the old, away-facing angles.
+        rotation=group.side>0?-Math.PI/2:Math.PI/2;
+      }else{
+        // Double-lane east/west avenue; the long shelter side stays parallel.
+        z=group.road+group.side*(11+6.5); x=along;
+        plotW=32; plotD=10;
+        rotation=group.side>0?Math.PI:0;
+      }
+      if(!shelterSiteFree(x,z,plotW,plotD,group.axis,group.road))continue;
+      addBusStop(x,z,rotation);
+      extraShelters++;placedCount++;
+      placedOnThisSide=true;
+      break;
+    }
+    // A blocked roadside is skipped; the next double-lane avenue is tried.
+    if(!placedOnThisSide)continue;
+  }
 
   for(let i=0;i<candidates.length&&placedCount<220;i++){
     const [x,z]=candidates[i];
