@@ -88,6 +88,8 @@ for(let i=0;i<18;i++){
 // Junction helpers: every road crossing is a clear box (no paint inside it).
 // Grid lines sit every 70m; every third one (multiples of 210) is a 48m avenue,
 // the rest are 8m local streets.
+// Stop line sits STOP_OFF metres outside the junction box; the zebra crossing fills the gap before the box.
+const STOP_OFF=5, ZEBRA_IN=.8, ZEBRA_DEPTH=3.2, ZEBRA_BAR=.6;
 const JUNC_GRID=[];for(let g=-980;g<=980;g+=70)JUNC_GRID.push({g,half:Math.abs(g%210)<1?24:4});
 // kind 'avenue' = crossings with other avenues only (plus local-street mouths when mouths=true);
 // kind 'local' = crossings with every road. pad widens each clear zone.
@@ -106,8 +108,8 @@ function freeRuns(from,to,spans){
  return runs.filter(r=>r[1]-r[0]>.5);
 }
 function dashClear(c,len,spans){return !spans.some(([a,b])=>c+len/2>a&&c-len/2<b)}
-// Avenue paint ends exactly at the stop lines (2m outside each 24m half-width junction box).
-const aveSpans=junctionSpans('avenue',false,2), aveDashSpans=junctionSpans('avenue',false,2.3), aveEdgeSpans=junctionSpans('avenue',true,2,0), localSpans=junctionSpans('local',true,2.3);
+// All avenue/local paint ends at the stop lines (STOP_OFF outside each junction box).
+const aveSpans=junctionSpans('avenue',false,STOP_OFF), aveDashSpans=junctionSpans('avenue',false,STOP_OFF+.3), aveEdgeSpans=junctionSpans('avenue',true,STOP_OFF,0), localSpans=junctionSpans('local',true,STOP_OFF+.3);
 for(let p=-840;p<=840;p+=210){
   block(48,.18,2100,asphaltMat,p,-.12,0);
   block(2100,.18,48,asphaltMat,0,-.12,p);
@@ -274,28 +276,44 @@ for(let p=-840;p<=840;p+=210){
 // Local-street lights are shifted to the outer edge of the new pavement.
 for(let p=-980;p<=980;p+=140){if(Math.abs(p%210)<1)continue;for(let q=-910;q<=910;q+=210){streetlight(p-27.2,q,0,.68);streetlight(q,p+27.2,Math.PI/2,.68);}}
 
-// Zebra stripes removed; only the junction stop line remains on each arm.
+// Stop lines on every avenue arm entering an avenue/avenue junction.
 function addStopLine(direction,centerX,centerZ,approachSide){
- if(direction==='north-south') roadPaint(48,.45,centerX,centerZ+approachSide*26,paintWhite,.085);
- else roadPaint(.45,48,centerX+approachSide*26,centerZ,paintWhite,.085);
+ const d=24+STOP_OFF;
+ if(direction==='north-south') roadPaint(48,.45,centerX,centerZ+approachSide*d,paintWhite,.085);
+ else roadPaint(.45,48,centerX+approachSide*d,centerZ,paintWhite,.085);
+}
+// Zebra crossing: bars run PARALLEL to the road (along its direction of travel), spaced across its width,
+// sitting between the stop line and the junction box. roadAxis 'z' = road runs north-south at x=roadPos.
+function addZebra(roadAxis,roadPos,g,gHalf,side,roadHalf,y){
+ const n=Math.floor((2*roadHalf-1+ZEBRA_BAR)/(2*ZEBRA_BAR)),total=n*ZEBRA_BAR+(n-1)*ZEBRA_BAR;
+ const along=g+side*(gHalf+ZEBRA_IN+ZEBRA_DEPTH/2);
+ for(let i=0;i<n;i++){
+  const across=roadPos-total/2+ZEBRA_BAR/2+i*ZEBRA_BAR*2;
+  if(roadAxis==='z') roadPaint(ZEBRA_BAR,ZEBRA_DEPTH,across,along,paintWhite,y);
+  else roadPaint(ZEBRA_DEPTH,ZEBRA_BAR,along,across,paintWhite,y);
+ }
 }
 for(let x=-840;x<=840;x+=210){
  for(let z=-840;z<=840;z+=210){
   for(const side of [-1,1]){
    addStopLine('north-south',x,z,side);
    addStopLine('east-west',x,z,side);
+   addZebra('z',x,z,24,side,24,.085);   // north-south avenue arm
+   addZebra('x',z,x,24,side,24,.085);   // east-west avenue arm
   }
  }
 }
 // Every local street entering ANY junction (avenue or local crossing) gets a
-// full-width stop line 2m before the junction box.
+// stop line and a zebra crossing.
 for(let local=-980;local<=980;local+=70){
  if(Math.abs(local%210)<1)continue;
  for(const {g,half} of JUNC_GRID){
   for(const side of [-1,1]){
-   const d=g+side*(half+2);
+   const d=g+side*(half+STOP_OFF);
    roadPaint(7.6,.45,local,d,paintWhite,.018);   // north-south street, bar across its width
    roadPaint(.45,7.6,d,local,paintWhite,.018);   // east-west street
+   addZebra('z',local,g,half,side,4,.018);
+   addZebra('x',local,g,half,side,4,.018);
   }
  }
 }
