@@ -512,8 +512,9 @@ function streetlight(x,z,rotation=0,scale=1){
  const hood=new THREE.Mesh(new THREE.BoxGeometry(1.45*scale,.12*scale,.62*scale),poleMat);hood.position.set(1.85*scale,7.72*scale,0);g.add(hood);
  return g;
 }
+const avenueLamps=[];   // kept so a bus shelter can replace a lamp that stands inside its footprint
 for(let p=-840;p<=840;p+=210){
- for(let q=-945;q<=945;q+=105){streetlight(p-27.2,q,0,.9);streetlight(q,p+27.2,Math.PI/2,.9);}
+ for(let q=-945;q<=945;q+=105){avenueLamps.push({g:streetlight(p-27.2,q,0,.9),x:p-27.2,z:q});avenueLamps.push({g:streetlight(q,p+27.2,Math.PI/2,.9),x:q,z:p+27.2});}
 }
 // Local-street lights are shifted to the outer edge of the new pavement.
 for(let p=-980;p<=980;p+=140){if(Math.abs(p%210)<1)continue;for(let q=-910;q<=910;q+=210){streetlight(p-27.2,q,0,.68);streetlight(q,p+27.2,Math.PI/2,.68);}}
@@ -987,6 +988,23 @@ function addTableTennis(x,z){
   signBoard('TABLE TENNIS',x,z-6,14,0x176b43);
   reserveAmenity(x,z,14,11);
 }
+// Road legend "BUS" painted in the kerb-side lane beside each shelter. Text reads from the driver's seat for that
+// lane (right-hand traffic: the east/south half of an avenue flows north/east, the west/north half south/west).
+let busMarkMat=null,busMarkGeo=null;
+function addBusRoadMark(roadAxis,road,side,along){
+  if(!busMarkMat){
+    const cv=document.createElement('canvas');cv.width=cv.height=256;const g=cv.getContext('2d');
+    g.fillStyle='#f4f2df';g.font='900 230px "Arial Black", Arial, sans-serif';g.textAlign='center';g.textBaseline='middle';g.fillText('BUS',128,136,236);
+    const tex=new THREE.CanvasTexture(cv);tex.anisotropy=4;
+    busMarkMat=new THREE.MeshBasicMaterial({map:tex,transparent:true,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-3,polygonOffsetUnits:-3});
+    busMarkGeo=new THREE.PlaneGeometry(4.4,9);busMarkGeo.rotateX(-Math.PI/2);
+  }
+  const lane=side*17.6;   // centre of the outer lane (between the lane divider at 12m and the edge line at 23.2m)
+  const m=new THREE.Mesh(busMarkGeo,busMarkMat);
+  m.position.set(roadAxis==='x'?road+lane:along,.115,roadAxis==='x'?along:road+lane);
+  m.rotation.y=roadAxis==='x'?(side>0?0:Math.PI):(side>0?-Math.PI/2:Math.PI/2);
+  m.renderOrder=3;scene.add(m);
+}
 function addBusStop(x,z,rotation=0,zScale=1){
   // zScale squashes the shelter's depth (local Z) so it fits on the pavement beside the road.
   const g=new THREE.Group();g.position.set(x,0,z);g.rotation.y=rotation;g.scale.set(1,1,zScale);scene.add(g);
@@ -1078,49 +1096,57 @@ function addAmenityInfill(){
   }
   // Deterministic shuffle-like ordering spreads facilities throughout the map.
   candidates.sort((a,b)=>(((a[0]*17+a[1]*31)%997)-((b[0]*17+b[1]*31)%997)));
-  // Bus shelters (v0.56): exactly 30, standing on the pavement BESIDE the 48m avenues (never on the carriageway).
-  // Sites are chosen by farthest-point sampling so the 30 shelters are spread evenly across the whole city.
-  // Each shelter keeps clear of crossing roads (zebra and stop-line zones), streetlight poles, buildings and other amenities.
+  // Bus shelters (v0.57): 30 stops, each with a shelter on BOTH sides of an avenue directly opposite one another
+  // (60 shelters in all), standing on the pavements beside the carriageway, never on it. Stops are chosen by
+  // farthest-point sampling so they are spread evenly across the whole city, and each shelter has a "BUS" legend
+  // painted on the road beside it. Sites keep clear of crossing roads (zebra and stop-line zones), buildings and
+  // other amenities; a streetlight pole that stands inside a footprint is removed.
   let extraShelters=0;
   const shelterTarget=30,SH_LEN=36,SH_DEPTH=5,SH_HALF=SH_LEN/2;
   const avenueLines=[],gridLines=[];
   for(let p=-840;p<=840;p+=210)avenueLines.push(p);
   for(let p=-980;p<=980;p+=70)gridLines.push(p);
-  const shelterCands=[];
-  for(const roadAxis of ['x','z'])for(const road of avenueLines)for(const side of [-1,1])for(let along=-900;along<=900;along+=6){
+  const shelterSite=(roadAxis,road,side,along)=>{
     const off=24+.6+SH_DEPTH/2;   // front edge just behind the kerb, on the pavement
     const x=roadAxis==='x'?road+side*off:along,z=roadAxis==='x'?along:road+side*off;
-    if(x>650&&z>650)continue;   // waterfront/port zone stays reserved
-    let ok=true;
-    for(const gl of gridLines){const half=Math.abs(gl%210)<1?24:4;if(Math.abs(along-gl)<SH_HALF+half+.8){ok=false;break}}
-    if(!ok)continue;
-    // Streetlight poles stand on one verge of each avenue every 105m.
-    if(side===(roadAxis==='x'?-1:1)){const r=((along+945)%105+105)%105;if(Math.min(r,105-r)<SH_HALF+1.5)continue}
+    if(x>650&&z>650)return null;   // waterfront/port zone stays reserved
+    for(const gl of gridLines){const half=Math.abs(gl%210)<1?24:4;if(Math.abs(along-gl)<SH_HALF+half+.8)return null}
     const hx=roadAxis==='x'?SH_DEPTH/2+.1:SH_HALF,hz=roadAxis==='x'?SH_HALF:SH_DEPTH/2+.1;
-    if(buildingColliders.some(c=>x+hx>c.minX+1&&x-hx<c.maxX-1&&z+hz>c.minZ+1&&z-hz<c.maxZ-1))continue;
-    if(amenityColliders.some(c=>x+hx>c.minX&&x-hx<c.maxX&&z+hz>c.minZ&&z-hz<c.maxZ))continue;
-    shelterCands.push({x,z,roadAxis,side});
+    if(buildingColliders.some(c=>x+hx>c.minX+1&&x-hx<c.maxX-1&&z+hz>c.minZ+1&&z-hz<c.maxZ-1))return null;
+    if(amenityColliders.some(c=>x+hx>c.minX&&x-hx<c.maxX&&z+hz>c.minZ&&z-hz<c.maxZ))return null;
+    return {x,z,roadAxis,road,side,along};
+  };
+  // A stop is valid only when BOTH facing sites are free.
+  const shelterCands=[];
+  for(const roadAxis of ['x','z'])for(const road of avenueLines)for(let along=-900;along<=900;along+=6){
+    const a=shelterSite(roadAxis,road,-1,along),b=a&&shelterSite(roadAxis,road,1,along);
+    if(a&&b)shelterCands.push({sites:[a,b],cx:roadAxis==='x'?road:along,cz:roadAxis==='x'?along:road});
   }
-  const chosenShelters=[];
+  const chosenStops=[];
   if(shelterCands.length){
     let first=shelterCands[0];
-    for(const c of shelterCands)if(Math.hypot(c.x,c.z)<Math.hypot(first.x,first.z))first=c;
-    chosenShelters.push(first);
-    const minDist=shelterCands.map(c=>Math.hypot(c.x-first.x,c.z-first.z));
-    while(chosenShelters.length<shelterTarget&&chosenShelters.length<shelterCands.length){
+    for(const c of shelterCands)if(Math.hypot(c.cx,c.cz)<Math.hypot(first.cx,first.cz))first=c;
+    chosenStops.push(first);
+    const minDist=shelterCands.map(c=>Math.hypot(c.cx-first.cx,c.cz-first.cz));
+    while(chosenStops.length<shelterTarget&&chosenStops.length<shelterCands.length){
       let best=0;for(let i=1;i<minDist.length;i++)if(minDist[i]>minDist[best])best=i;
-      const pick=shelterCands[best];chosenShelters.push(pick);
-      for(let i=0;i<minDist.length;i++)minDist[i]=Math.min(minDist[i],Math.hypot(shelterCands[i].x-pick.x,shelterCands[i].z-pick.z));
+      const pick=shelterCands[best];chosenStops.push(pick);
+      for(let i=0;i<minDist.length;i++)minDist[i]=Math.min(minDist[i],Math.hypot(shelterCands[i].cx-pick.cx,shelterCands[i].cz-pick.cz));
     }
   }
   let minShelterGap=Infinity;
-  for(const c of chosenShelters){
-    // Local +Z points toward the road, so the open passenger side faces the carriageway.
-    const rotation=c.roadAxis==='x'?(c.side>0?-Math.PI/2:Math.PI/2):(c.side>0?Math.PI:0);
-    addBusStop(c.x,c.z,rotation,SH_DEPTH/8);
-    extraShelters++;placedCount++;
+  for(const stop of chosenStops){
+    for(const c of stop.sites){
+      // Local +Z points toward the road, so the open passenger side faces the carriageway.
+      const rotation=c.roadAxis==='x'?(c.side>0?-Math.PI/2:Math.PI/2):(c.side>0?Math.PI:0);
+      addBusStop(c.x,c.z,rotation,SH_DEPTH/8);
+      {const hx=c.roadAxis==='x'?SH_DEPTH/2+1:SH_HALF+1,hz=c.roadAxis==='x'?SH_HALF+1:SH_DEPTH/2+1;
+       for(const lamp of avenueLamps)if(lamp.g.parent&&Math.abs(lamp.x-c.x)<hx&&Math.abs(lamp.z-c.z)<hz)scene.remove(lamp.g);}   // the shelter replaces any streetlight standing in its footprint
+      addBusRoadMark(c.roadAxis,c.road,c.side,c.along);
+      extraShelters++;placedCount++;
+    }
   }
-  for(let i=0;i<chosenShelters.length;i++)for(let j=i+1;j<chosenShelters.length;j++)minShelterGap=Math.min(minShelterGap,Math.hypot(chosenShelters[i].x-chosenShelters[j].x,chosenShelters[i].z-chosenShelters[j].z));
+  for(let i=0;i<chosenStops.length;i++)for(let j=i+1;j<chosenStops.length;j++)minShelterGap=Math.min(minShelterGap,Math.hypot(chosenStops[i].cx-chosenStops[j].cx,chosenStops[i].cz-chosenStops[j].cz));
 
   for(let i=0;i<candidates.length&&placedCount<220;i++){
     const [x,z]=candidates[i];
@@ -1141,7 +1167,7 @@ function addAmenityInfill(){
   return {placedCount,extraShelters,minShelterGap:Math.round(minShelterGap)};
 }
 const v037AmenityResult=addAmenityInfill();
-console.info('This Is Lagos v0.51: roof-height circular pole bus-stop signs; 30 evenly spaced bus shelters on the pavement beside the avenues, fronts facing roads; protected courts and supported table-tennis; pharmacy H x3, W x2, L x2',v037AmenityResult);
+console.info('This Is Lagos v0.51: roof-height circular pole bus-stop signs; 60 bus shelters (30 opposite pairs, evenly spaced) on the pavements beside the avenues with BUS road legends, fronts facing roads; protected courts and supported table-tennis; pharmacy H x3, W x2, L x2',v037AmenityResult);
 // -----------------------------------------------------------------------------
 
 // Industrial port yards, container stacks and cranes near Apapa.
