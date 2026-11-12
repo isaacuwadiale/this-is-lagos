@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.55 — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
+// THIS IS LAGOS v0.56 — live city map overlay — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -1444,6 +1444,70 @@ function collidesWithBuilding(x,z){
  for(const b of list){if(x>b.minX&&x<b.maxX&&z>b.minZ&&z<b.maxZ)return true;}
  return false;
 }
+
+// ============================================================================
+// LIVE CITY MAP — lightweight 2D overlay linked to the player's actual 3D
+// world position. The map covers the same -1050..1050 world bounds as movement.
+// ============================================================================
+const cityMapStyle=document.createElement('style');
+cityMapStyle.textContent=`
+ #cityMapToggle{position:fixed;top:14px;right:14px;z-index:12000;border:1px solid rgba(255,255,255,.22);border-radius:11px;background:#16834a;color:#fff;font:800 12px/1 system-ui,sans-serif;letter-spacing:1.1px;padding:12px 16px;box-shadow:0 5px 18px #10251b55;cursor:pointer;touch-action:manipulation}
+ #cityMapPanel{position:fixed;top:60px;right:14px;z-index:11999;width:min( min(360px, calc(100vw - 28px)), 360px);padding:12px;border:1px solid rgba(255,255,255,.16);border-radius:15px;background:rgba(12,24,19,.96);color:#f5fff7;box-shadow:0 12px 34px #0008;backdrop-filter:blur(12px);font:12px/1.35 system-ui,sans-serif;display:none}
+ #cityMapPanel.open{display:block}
+ #cityMapHead{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px}
+ #cityMapHead strong{font-size:13px;letter-spacing:1px}
+ #cityMapClose{border:0;border-radius:8px;background:#ffffff18;color:white;font-size:20px;line-height:1;padding:4px 9px;cursor:pointer}
+ #cityMapCanvas{display:block;width:100%;height:auto;aspect-ratio:1.24;background:#1e3029;border-radius:9px;border:1px solid #ffffff20}
+ #cityMapFoot{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-top:9px;color:#d6e8dc;font-size:11px}
+ #cityMapPosition{font-variant-numeric:tabular-nums;color:#fff}
+ @media(max-width:520px){#cityMapPanel{top:58px;right:10px;width:min(300px,calc(100vw - 20px));padding:10px}#cityMapToggle{top:10px;right:10px;padding:11px 14px}}
+`;
+document.head.appendChild(cityMapStyle);
+const cityMapToggle=document.createElement('button');cityMapToggle.id='cityMapToggle';cityMapToggle.type='button';cityMapToggle.textContent='MAP';cityMapToggle.setAttribute('aria-expanded','false');cityMapToggle.setAttribute('aria-controls','cityMapPanel');
+const cityMapPanel=document.createElement('section');cityMapPanel.id='cityMapPanel';cityMapPanel.setAttribute('aria-label','Lagos city map');
+cityMapPanel.innerHTML='<div id="cityMapHead"><strong>LAGOS CITY MAP</strong><button id="cityMapClose" type="button" aria-label="Close map">×</button></div><canvas id="cityMapCanvas" width="620" height="500" aria-label="Map showing roads, districts and your live position"></canvas><div id="cityMapFoot"><span>▲ NORTH</span><span id="cityMapPosition">Locating player…</span></div>';
+document.body.append(cityMapToggle,cityMapPanel);
+const cityMapCanvas=document.querySelector('#cityMapCanvas');
+const cityMapCtx=cityMapCanvas.getContext('2d');
+let cityMapOpen=false,cityMapElapsed=0;
+const CITY_MAP_MIN=-1050,CITY_MAP_MAX=1050,CITY_MAP_SPAN=CITY_MAP_MAX-CITY_MAP_MIN;
+function cityMapPoint(x,z){return {x:(x-CITY_MAP_MIN)/CITY_MAP_SPAN*cityMapCanvas.width,y:(z-CITY_MAP_MIN)/CITY_MAP_SPAN*cityMapCanvas.height}}
+function drawCityMap(){
+ if(!cityMapCtx)return;
+ const ctx=cityMapCtx,w=cityMapCanvas.width,h=cityMapCanvas.height;
+ ctx.clearRect(0,0,w,h);ctx.fillStyle='#263d32';ctx.fillRect(0,0,w,h);
+ // Subtle block texture and the actual procedural road grid used by the city.
+ ctx.fillStyle='#304b3b';
+ for(let x=-1015;x<1050;x+=70)for(let z=-1015;z<1050;z+=70){const p=cityMapPoint(x,z);ctx.fillRect(p.x+5,p.y+5,Math.max(1,w*60/CITY_MAP_SPAN),Math.max(1,h*60/CITY_MAP_SPAN));}
+ for(let k=-15;k<=15;k++){
+  const world=k*70,p=cityMapPoint(world,0),q=cityMapPoint(0,world);
+  const major=k%3===0;
+  ctx.strokeStyle=major?'#a6b5a4':'#65786b';ctx.lineWidth=major?Math.max(5,w*48/CITY_MAP_SPAN):Math.max(1.5,w*8/CITY_MAP_SPAN);
+  ctx.beginPath();ctx.moveTo(p.x,0);ctx.lineTo(p.x,h);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(0,q.y);ctx.lineTo(w,q.y);ctx.stroke();
+ }
+ // District names and location markers use the same coordinates as the 3D city.
+ ctx.textAlign='center';ctx.textBaseline='middle';
+ for(const d of districtDefs){
+  const p=cityMapPoint(d[1],d[2]);
+  ctx.fillStyle='#f2e9bb';ctx.font='600 11px system-ui,sans-serif';ctx.fillText(d[0],p.x,p.y-8);
+  ctx.fillStyle='#e9c75b';ctx.beginPath();ctx.arc(p.x,p.y+5,3.2,0,Math.PI*2);ctx.fill();
+ }
+ // Player position: bright green pulse and a directional arrow.
+ const me=cityMapPoint(player.position.x,player.position.z);
+ const pulse=1+Math.sin(performance.now()*.006)*.16;
+ ctx.fillStyle='#8cf0a8';ctx.globalAlpha=.22;ctx.beginPath();ctx.arc(me.x,me.y,17*pulse,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;
+ ctx.save();ctx.translate(me.x,me.y);ctx.rotate(Math.PI+player.rotation.y);
+ ctx.fillStyle='#ffffff';ctx.strokeStyle='#0b5d35';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(0,-13);ctx.lineTo(9,10);ctx.lineTo(0,6);ctx.lineTo(-9,10);ctx.closePath();ctx.fill();ctx.stroke();ctx.restore();
+ // Small map frame and north marker.
+ ctx.strokeStyle='#ffffff30';ctx.lineWidth=2;ctx.strokeRect(1,1,w-2,h-2);
+ const nearest=districtDefs.reduce((best,d)=>{const dist=Math.hypot(player.position.x-d[1],player.position.z-d[2]);return dist<best.dist?{name:d[0],dist}:best},{name:'LAGOS',dist:Infinity});
+ const pos=document.querySelector('#cityMapPosition');if(pos)pos.textContent=`${nearest.dist<260?nearest.name:'LAGOS'} · ${Math.round(player.position.x)}, ${Math.round(player.position.z)}`;
+}
+function setCityMapOpen(open){cityMapOpen=!!open;cityMapPanel.classList.toggle('open',cityMapOpen);cityMapToggle.setAttribute('aria-expanded',String(cityMapOpen));if(cityMapOpen)drawCityMap()}
+cityMapToggle.addEventListener('click',()=>setCityMapOpen(!cityMapOpen));
+document.querySelector('#cityMapClose').addEventListener('click',()=>setCityMapOpen(false));
+window.addEventListener('keydown',e=>{if(e.key==='Escape'&&cityMapOpen)setCityMapOpen(false)});
 let uiUpdateElapsed=0;
 // Adaptive render resolution: if frame rate drops, lower pixel count without restarting.
 let fpsSampleTime=0,fpsFrames=0,slowSamples=0,fastSamples=0;
@@ -1464,6 +1528,7 @@ function animate(){
   if(nextScale!==renderScale){renderScale=nextScale;renderer.setPixelRatio(maxDevicePixelRatio*renderScale);renderer.setSize(innerWidth,innerHeight);slowSamples=0;fastSamples=0;}
  }
  worldMinutes=(worldMinutes+uiDt*daySpeed)%1440;uiUpdateElapsed+=uiDt;
+ if(cityMapOpen){cityMapElapsed+=uiDt;if(cityMapElapsed>=.12){cityMapElapsed=0;drawCityMap()}}
  if(uiUpdateElapsed>=.25){
   uiUpdateElapsed=0;let h=Math.floor(worldMinutes/60),m=Math.floor(worldMinutes%60);
   const clockEl=document.querySelector('#clock');if(clockEl)clockEl.textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');
@@ -1514,4 +1579,4 @@ updateCamera();
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setPixelRatio(maxDevicePixelRatio*renderScale);renderer.setSize(innerWidth,innerHeight)});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)clock.getDelta()});
-toast('Lagos city update v0.27 loaded');
+toast('Lagos city map update v0.56 loaded');
