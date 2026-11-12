@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.57 — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
+// THIS IS LAGOS v0.58 — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -1342,7 +1342,31 @@ function openTransport(){
 }
 const demoStock=[['City compact car','Car','₦8,500,000'],['Family SUV','Car','₦18,000,000'],['Commercial danfo','Bus','₦12,000,000'],['Okada motorcycle','Bike','₦1,200,000'],['Passenger speedboat','Boat','₦25,000,000']];
 function openDealer(){const items=demoStock.map((v,i)=>`<div class="activity-row"><b>${v[0]}</b><span>${v[1]} · ${v[2]}</span><button class="panel-button" data-vehicle="${i}">View purchase</button></div>`).join('');modal('Official vehicle dealership',`<p>Vehicles and prices are set by the game operator. A player may buy for themselves or choose another player as recipient.</p>${items}<p class="small-note">Catalogue prices are illustrative placeholders. Purchases and real-money payment are not enabled in this prototype.</p>`,[['Close',null,true]]);document.querySelectorAll('[data-vehicle]').forEach(b=>b.onclick=()=>{const v=demoStock[Number(b.dataset.vehicle)];modal('Vehicle purchase preview',`<p><b>${v[0]}</b></p><p>Listed demo price: ${v[2]}</p><label class="recipient-label">Recipient player<input id="vehicleRecipient" placeholder="Enter player name" value="Your character"></label><p class="small-note">No payment will be taken in this preview.</p>`,[['Confirm preview',()=>toast('Purchase flow previewed; no charge made.')],['Back',()=>openDealer(),true]])})}
-function openGarage(){modal('Vehicle garage & security',`<p><b>Your demo garage</b></p><p>No vehicles are registered to this local preview yet.</p><p>Each owned vehicle will have a unique unlock code. Owners must physically touch the vehicle to lock or unlock it; remote locking is not available.</p><p>Unlocked vehicles or vehicles with the owner inside can be targeted for theft. A successful theft may trigger an owner report and a player-police pursuit.</p><p class="small-note">Theft, arrests, fixed penalties and negative real-money balances are design concepts only. They are not active or connected to a real wallet.</p>`,[['Close',null,true]])}
+// Vehicle ownership registry — local prototype only. A secure server must become authoritative
+// before ownership, unlock credentials, theft reports or purchases are used in multiplayer.
+const VEHICLE_REGISTRY_KEY='til-owned-vehicles-v1';
+function readOwnedVehicles(){try{const data=JSON.parse(localStorage.getItem(VEHICLE_REGISTRY_KEY)||'[]');return Array.isArray(data)?data:[]}catch(_e){return[]}}
+function saveOwnedVehicles(records){localStorage.setItem(VEHICLE_REGISTRY_KEY,JSON.stringify(records))}
+function escapeVehicleText(value){return String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
+function createVehicleId(){return 'TIL-'+Date.now().toString(36).toUpperCase()+'-'+Math.random().toString(36).slice(2,7).toUpperCase()}
+function createUnlockCode(){return String(Math.floor(100000+Math.random()*900000))}
+function registerDemoVehicle(model,type){
+ const records=readOwnedVehicles();
+ const name=String(avatarSettings?.name||'New Lagosian').slice(0,24);
+ const record={id:createVehicleId(),model,type,ownerName:name,ownerId:'local-player',unlockCode:createUnlockCode(),locked:true,status:'registered',createdAt:new Date().toISOString(),prototype:true};
+ records.push(record);saveOwnedVehicles(records);toast('Test vehicle registered to '+name);openGarage();
+}
+function openGarage(){
+ const records=readOwnedVehicles();
+ const rows=records.length?records.map((v,i)=>`<div class="activity-row" style="display:block;margin:10px 0;padding:12px"><b>${escapeVehicleText(v.model)}</b><span style="display:block">${escapeVehicleText(v.type)} · ${escapeVehicleText(v.id)}</span><span style="display:block">Owner: ${escapeVehicleText(v.ownerName)} · ${v.locked?'Locked':'Unlocked'}</span><span style="display:block;font-size:12px;opacity:.8">Unlock code: <b id="vehicleCode-${i}">••••••</b></span><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="panel-button" data-reveal-code="${i}">Show code</button><button class="panel-button" data-copy-code="${i}">Copy code</button></div><small style="display:block;margin-top:7px">Local test record · not a paid or server-verified vehicle</small></div>`).join(''):'<p>No vehicles are registered to this character yet.</p>';
+ modal('Vehicle garage & ownership',`<p><b>Your registered vehicles</b></p>${rows}<button class="panel-button" id="registerTestVehicle" style="width:100%;margin:10px 0">＋ Register a test vehicle</button><p>Each vehicle receives a unique vehicle ID, registered owner and six-digit unlock code. The owner is taken from the current character profile.</p><p class="small-note">This is a local prototype: records are saved only in this browser and are not shared with other players. Unlock codes are prototype credentials, not secure anti-theft keys. Physical-touch locking/unlocking will be connected when drivable vehicle objects are added to the world. No payment or real-money wallet is connected.</p>`,[['Close',null,true]]);
+ document.querySelector('#registerTestVehicle')?.addEventListener('click',()=>{
+  const opts=demoStock.map((v,i)=>`<option value="${i}">${escapeVehicleText(v[0])} · ${escapeVehicleText(v[1])}</option>`).join('');
+  modal('Register a test vehicle',`<p>Select a vehicle model to create a local ownership record. This does not purchase or spawn a drivable vehicle.</p><label>Vehicle model<select id="testVehicleModel">${opts}</select></label>`,[['Register test record',()=>{const v=demoStock[Number(document.querySelector('#testVehicleModel')?.value)||0];registerDemoVehicle(v[0],v[1])}],['Cancel',()=>openGarage(),true]]);
+ });
+ document.querySelectorAll('[data-reveal-code]').forEach(b=>b.addEventListener('click',()=>{const i=Number(b.dataset.revealCode),el=document.querySelector('#vehicleCode-'+i);if(el){el.textContent=records[i]?.unlockCode||'Unavailable';b.textContent='Code shown'}}));
+ document.querySelectorAll('[data-copy-code]').forEach(b=>b.addEventListener('click',async()=>{const code=records[Number(b.dataset.copyCode)]?.unlockCode;if(!code)return;try{await navigator.clipboard.writeText(code);toast('Unlock code copied')}catch(_e){toast('Copy is unavailable in this browser; reveal the code instead')}}));
+}
 
 document.querySelector('#profileBtn').onclick=()=>{
   const swatches=["#4b2d20","#70452f","#8a563b","#a86f4e","#c58a65"];
@@ -1367,7 +1391,7 @@ document.querySelector('#profileBtn').onclick=()=>{
     }],['Cancel',null,true]]
   );
 };
-document.querySelector('#menuBtn').onclick=()=>modal('THIS IS LAGOS','<p>Welcome to the Lagos city prototype.</p><p><b>Prototype controls</b><br>WASD / arrow keys: move<br>Drag: look around<br>C: switch camera<br>Weather button: clear / rain</p><p>This v0.5 build is a local interface prototype. Online accounts, live multiplayer, real-money wallet payments, police services and vehicle ownership records still require a secure online backend.</p>',[['Continue',null]]);
+document.querySelector('#menuBtn').onclick=()=>modal('THIS IS LAGOS','<p>Welcome to the Lagos city prototype.</p><p><b>Prototype controls</b><br>WASD / arrow keys: move<br>Drag: look around<br>C: switch camera<br>Weather button: clear / rain</p><p>This v0.58 build is a local interface prototype. Vehicle ownership records are stored on this device only; shared ownership, secure vehicle keys, purchases, live multiplayer and real-money wallet payments require a secure online backend.</p>',[['Continue',null]]);
 window.addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;if(e.key.toLowerCase()==='c')document.querySelector('#cameraBtn').click()});window.addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
 // Reliable camera controls: capture drag on the canvas and track globally.
 let pointer=null;
@@ -1604,4 +1628,4 @@ updateCamera();
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setPixelRatio(maxDevicePixelRatio*renderScale);renderer.setSize(innerWidth,innerHeight)});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)clock.getDelta()});
-toast('Lagos detailed city map update v0.57 loaded');
+toast('Lagos vehicle ownership update v0.58 loaded');
