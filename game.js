@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.56 — live city map overlay — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
+// THIS IS LAGOS v0.57 — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -24,6 +24,10 @@ block(300,.2,300,grass,0,-.2,0);
 // Obsolete compact starter roads and markings removed; the unified 48m road grid below is authoritative.
 const buildingMats=[0xe7e8d9,0xd7e2d9,0xd8d8cf,0xe8dfce,0xc7d9d0].map(c=>mat(c));
 const buildingColliders=[];
+// Exact world-space footprints used by the live 2D map.
+const cityMapBuildings=[];
+const cityMapFacilities=[];
+function recordCityFacility(type,x,z,w,d,label){cityMapFacilities.push({type,x,z,w,d,label:label||type.toUpperCase()});}
 // Shared reserved footprints prevent later buildings from occupying sports courts or amenities.
 const amenityColliders=[];
 // Road reservations include the asphalt, kerbs and full pedestrian pavement.
@@ -56,6 +60,7 @@ function building(x,z,w,d,h,idx){
  const m=buildingMats[idx%buildingMats.length];const body=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m);body.position.y=h/2;g.add(body);const cap=new THREE.Mesh(new THREE.BoxGeometry(w+.15,.3,d+.15),green);cap.position.y=h-.15;g.add(cap);
  for(let y=2;y<h-1;y+=2.6){for(let xx=-w/2+1;xx<w/2-.5;xx+=2){const win=new THREE.Mesh(new THREE.BoxGeometry(.85,1.15,.08),glassMat);win.position.set(xx,y,d/2+.045);g.add(win);const win2=win.clone();win2.position.z=-d/2-.045;g.add(win2)}}
  buildingColliders.push({minX:x-sw/2-1,maxX:x+sw/2+1,minZ:z-sd/2-1,maxZ:z+sd/2+1});
+ cityMapBuildings.push({x,z,w:sw,d:sd,kind:'legacy'});
 }
 for(let i=0;i<9;i++){const z=-65+i*16;building(-20,z,8,10,12+(i%3)*5,i);building(20,z,9,11,16+(i%4)*6,i+1)}
 // farther skyline
@@ -623,6 +628,7 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
  const visibilityRadius=Math.sqrt(scaledW*scaledW+scaledD*scaledD+(h*BUILDING_SCALE)*(h*BUILDING_SCALE))*0.62;
  viewCulledBuildings.push({group:obj,sphere:new THREE.Sphere(new THREE.Vector3(x,h/2,z),visibilityRadius),detailChildren:null,detailDistance:320,maxDistance:1150});
  buildingColliders.push({minX:x-scaledW/2-1,maxX:x+scaledW/2+1,minZ:z-scaledD/2-1,maxZ:z+scaledD/2+1});
+ cityMapBuildings.push({x,z,w:scaledW*placed.fit,d:scaledD*placed.fit,kind});
  const main=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),wall);main.position.y=h/2;main.castShadow=false;main.receiveShadow=false;obj.add(main);
  const roof=new THREE.Mesh(new THREE.BoxGeometry(w+.35,.5,d+.35),roofPalette[Math.abs(seed+2)%roofPalette.length]);roof.position.y=h+.18;roof.castShadow=false;obj.add(roof);
  // Lagos residential facades: recessed-looking windows, balcony slabs,
@@ -734,6 +740,7 @@ function fencedPitch(cx,cz,name='FOOTBALL PITCH',surface=sportGreen){
  for(const z of [-29,29]){const f=new THREE.Mesh(new THREE.BoxGeometry(92,3,.25),fenceMat);f.position.set(0,1.5,z);g.add(f)}
  for(const x of [-48,48])for(const z of [-31,31]){const pole=new THREE.Mesh(new THREE.CylinderGeometry(.16,.22,13,8),dark);pole.position.set(x,6.5,z);g.add(pole);const lamp=new THREE.Mesh(new THREE.BoxGeometry(2,.4,1),white);lamp.position.set(x,13,z);g.add(lamp)}
  signBoard(name,cx,cz-34,26,0x176b43);
+ recordCityFacility('football',cx,cz,92,58,name);
 }
 function tennisCentre(cx,cz){
  const g=new THREE.Group();g.position.set(cx,0,cz);scene.add(g);
@@ -742,15 +749,18 @@ function tennisCentre(cx,cz){
   for(const x of [-10.5,10.5]){const m=new THREE.Mesh(new THREE.BoxGeometry(.18,.04,11),ln);m.position.set(x,.19,z);g.add(m)}
   const net=new THREE.Mesh(new THREE.BoxGeometry(.15,1,12),mat(0xe8e8df));net.position.set(0,.65,z);g.add(net)}
  signBoard('LAGOS TENNIS CENTRE',cx,cz-65,28,0x245f94);
+ recordCityFacility('tennis',cx,cz,30,72,'Tennis centre');
 }
 function basketballCentre(cx,cz){
  const court=new THREE.Mesh(new THREE.BoxGeometry(38,.2,23),sportRed);court.position.set(cx,.05,cz);scene.add(court);
  const ring=new THREE.Mesh(new THREE.RingGeometry(5,5.3,32),new THREE.MeshBasicMaterial({color:0xffffff,side:THREE.DoubleSide}));ring.rotation.x=-Math.PI/2;ring.position.set(cx,.18,cz);scene.add(ring);
  signBoard('COMMUNITY BASKETBALL COURT',cx,cz-22,25,0x9b4036);
+ recordCityFacility('basketball',cx,cz,38,23,'Basketball court');
 }
 function marketCluster(cx,cz,label='LOCAL MARKET'){
  for(let i=0;i<7;i++){const x=cx+(i%4)*13-20,z=cz+Math.floor(i/4)*15;const shop=makeBuilding(x,z,10,10,4,'market',i);if(shop){const canopy=new THREE.Mesh(new THREE.BoxGeometry(10,.35,10),marketMat);canopy.position.set(x,4.4,z);scene.add(canopy)}}
  signBoard(label,cx,cz-18,30,0x9a5b23);
+ recordCityFacility('market',cx,cz,78,30,label);
 }
 function compound(cx,cz,kind='residential',seed=0){
  if(!clearBuildingPlot(cx,cz,42,42,1)) return;
@@ -894,7 +904,7 @@ function addShopfront(x,z,label='SHOP',accent=0x176b43){
     amenityBox(g,4.2,2.8,.12,amenityMats.glass,-8.1+i*5.4,1.1,6.62);
     amenityBox(g,4.5,.35,.55,mat(accent),-8.1+i*5.4,4.15,6.9);
   }
-  signBoard(label,x,z-7,15,accent);reserveAmenity(x,z,25,17);
+  signBoard(label,x,z-7,15,accent);reserveAmenity(x,z,25,17);recordCityFacility('shop',x,z,25,17,label);
 }
 function addPharmacy(x,z){
   // Pharmacy dimensions are scaled from the original shopfront: H x3, W x2, L x2.
@@ -910,7 +920,7 @@ function addPharmacy(x,z){
   const sign=signBoard('PHARMACY',x,z-15,44,0x16844b);
   sign.position.y=19;
   // Reserve the full enlarged footprint plus clearance from roads and neighbours.
-  reserveAmenity(x,z,50,32);
+  reserveAmenity(x,z,50,32);recordCityFacility('pharmacy',x,z,50,32,'Pharmacy');
 }
 function addSupermarket(x,z){
   const g=new THREE.Group();g.position.set(x,0,z);scene.add(g);
@@ -919,7 +929,7 @@ function addSupermarket(x,z){
   amenityBox(g,27,3.6,.15,amenityMats.glass,0,1.2,11.1);
   amenityBox(g,29,.8,.6,mat(0x16844b),0,6.3,11.7);
   signBoard('SUPERMARKET',x,z-12,22,0x16844b);
-  reserveAmenity(x,z,34,26);
+  reserveAmenity(x,z,34,26);recordCityFacility('supermarket',x,z,34,26,'Supermarket');
 }
 function addFuelStation(x,z){
   const g=new THREE.Group();g.position.set(x,0,z);scene.add(g);
@@ -935,7 +945,7 @@ function addFuelStation(x,z){
     amenityBox(g,.45,.25,.25,mat(0x252525),px,1.8,2.55);
   }
   signBoard('FUEL STATION',x,z-14,20,0xd52f32);
-  reserveAmenity(x,z,36,29);
+  reserveAmenity(x,z,36,29);recordCityFacility('fuel',x,z,36,29,'Fuel station');
 }
 function addTennisCourt(x,z){
   const g=new THREE.Group();g.position.set(x,0,z);scene.add(g);
@@ -948,7 +958,7 @@ function addTennisCourt(x,z){
     const m=new THREE.Mesh(new THREE.BoxGeometry(29,.04,.18),line);m.position.set(0,.17,pz);g.add(m);
   }
   const net=new THREE.Mesh(new THREE.BoxGeometry(.18,1,18),amenityMats.white);net.position.set(0,.7,0);g.add(net);
-  signBoard('COMMUNITY TENNIS',x,z-12,20,0x245f94);reserveAmenity(x,z,34,25);
+  signBoard('COMMUNITY TENNIS',x,z-12,20,0x245f94);reserveAmenity(x,z,34,25);recordCityFacility('tennis',x,z,34,25,'Tennis court');
 }
 function addGardenPark(x,z,large=false){
   const w=large?38:27,d=large?32:23;
@@ -967,7 +977,7 @@ function addGardenPark(x,z,large=false){
     fountain.position.set(0,.38,0);g.add(fountain);
     signBoard('COMMUNITY PARK',x,z-d/2-2,20,0x176b43);
   }else signBoard('GARDEN',x,z-d/2-2,13,0x176b43);
-  reserveAmenity(x,z,w+3,d+3);
+  reserveAmenity(x,z,w+3,d+3);recordCityFacility('park',x,z,w+3,d+3,large?'Community park':'Garden');
 }
 function addTableTennis(x,z){
   const g=new THREE.Group();g.position.set(x,0,z);scene.add(g);
@@ -986,7 +996,7 @@ function addTableTennis(x,z){
   amenityBox(g,.12,.48,.12,amenityMats.white,0,2.12,-2.22);
   amenityBox(g,.12,.48,.12,amenityMats.white,0,2.12,2.22);
   signBoard('TABLE TENNIS',x,z-6,14,0x176b43);
-  reserveAmenity(x,z,14,11);
+  reserveAmenity(x,z,14,11);recordCityFacility('tabletennis',x,z,14,11,'Table tennis');
 }
 // Road legend "BUS" painted in the kerb-side lane beside each shelter. Text reads from the driver's seat for that
 // lane (right-hand traffic: the east/south half of an avenue flows north/east, the west/north half south/west).
@@ -1050,7 +1060,7 @@ function addBusStop(x,z,rotation=0,zScale=1){
   circularSign.position.set(17.2,17.35,4.8);g.add(circularSign);
   const alongRoad=Math.abs(Math.sin(rotation))>.5;
   const depth=8*zScale+1;
-  reserveAmenity(x,z,alongRoad?depth:36,alongRoad?36:depth);
+  reserveAmenity(x,z,alongRoad?depth:36,alongRoad?36:depth);recordCityFacility('bus',x,z,alongRoad?depth:36,alongRoad?36:depth,'Bus stop');
 }
 function shelterSiteFree(x,z,plotW,plotD,roadAxis,roadCoord){
   // Unlike buildings, shelters intentionally sit beside a road. Check the
@@ -1460,12 +1470,13 @@ cityMapStyle.textContent=`
  #cityMapCanvas{display:block;width:100%;height:auto;aspect-ratio:1.24;background:#1e3029;border-radius:9px;border:1px solid #ffffff20}
  #cityMapFoot{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-top:9px;color:#d6e8dc;font-size:11px}
  #cityMapPosition{font-variant-numeric:tabular-nums;color:#fff}
+ #cityMapLegend{margin-top:6px;color:#bcd0c1;font-size:10px;line-height:1.4}
  @media(max-width:520px){#cityMapPanel{top:58px;right:10px;width:min(300px,calc(100vw - 20px));padding:10px}#cityMapToggle{top:10px;right:10px;padding:11px 14px}}
 `;
 document.head.appendChild(cityMapStyle);
 const cityMapToggle=document.createElement('button');cityMapToggle.id='cityMapToggle';cityMapToggle.type='button';cityMapToggle.textContent='MAP';cityMapToggle.setAttribute('aria-expanded','false');cityMapToggle.setAttribute('aria-controls','cityMapPanel');
 const cityMapPanel=document.createElement('section');cityMapPanel.id='cityMapPanel';cityMapPanel.setAttribute('aria-label','Lagos city map');
-cityMapPanel.innerHTML='<div id="cityMapHead"><strong>LAGOS CITY MAP</strong><button id="cityMapClose" type="button" aria-label="Close map">×</button></div><canvas id="cityMapCanvas" width="620" height="500" aria-label="Map showing roads, districts and your live position"></canvas><div id="cityMapFoot"><span>▲ NORTH</span><span id="cityMapPosition">Locating player…</span></div>';
+cityMapPanel.innerHTML='<div id="cityMapHead"><strong>LAGOS CITY MAP</strong><button id="cityMapClose" type="button" aria-label="Close map">×</button></div><canvas id="cityMapCanvas" width="620" height="500" aria-label="Map showing roads, districts and your live position"></canvas><div id="cityMapFoot"><span>▲ NORTH</span><span id="cityMapPosition">Locating player…</span></div><div id="cityMapLegend">Buildings · Shops · Fuel · Markets · Parks · Bus stops · Sports</div>';
 document.body.append(cityMapToggle,cityMapPanel);
 const cityMapCanvas=document.querySelector('#cityMapCanvas');
 const cityMapCtx=cityMapCanvas.getContext('2d');
@@ -1476,9 +1487,23 @@ function drawCityMap(){
  if(!cityMapCtx)return;
  const ctx=cityMapCtx,w=cityMapCanvas.width,h=cityMapCanvas.height;
  ctx.clearRect(0,0,w,h);ctx.fillStyle='#263d32';ctx.fillRect(0,0,w,h);
- // Subtle block texture and the actual procedural road grid used by the city.
- ctx.fillStyle='#304b3b';
- for(let x=-1015;x<1050;x+=70)for(let z=-1015;z<1050;z+=70){const p=cityMapPoint(x,z);ctx.fillRect(p.x+5,p.y+5,Math.max(1,w*60/CITY_MAP_SPAN),Math.max(1,h*60/CITY_MAP_SPAN));}
+ // Draw each generated building at its exact 3D world footprint, not generic block squares.
+ const sx=w/CITY_MAP_SPAN,sz=h/CITY_MAP_SPAN;
+ for(const b of cityMapBuildings){
+  const p=cityMapPoint(b.x,b.z),bw=Math.max(1.2,b.w*sx),bh=Math.max(1.2,b.d*sz);
+  const kind=b.kind;
+  ctx.fillStyle=kind==='office'?'#9ab8c4':kind==='apartment'?'#c5b9a0':kind==='shop'||kind==='market'?'#d5a86c':kind==='tenement'?'#b9a99a':kind==='duplex'?'#c4c7a0':'#b8c8b2';
+  ctx.strokeStyle='#26352d';ctx.lineWidth=.65;
+  ctx.fillRect(p.x-bw/2,p.y-bh/2,bw,bh);ctx.strokeRect(p.x-bw/2,p.y-bh/2,bw,bh);
+ }
+ // Actual facility footprints are plotted at the coordinates where their 3D models were created.
+ const facilityStyle={fuel:['#e34e4e','F'],supermarket:['#e7c64d','S'],pharmacy:['#5bc5a0','P'],park:['#65b96b','♣'],tennis:['#5c9fe0','T'],basketball:['#dc8750','B'],football:['#65b96b','⚽'],market:['#d49a52','M'],shop:['#d49a52','s'],tabletennis:['#8a9ee0','TT'],bus:['#63b9d6','BUS']};
+ for(const f of cityMapFacilities){
+  const p=cityMapPoint(f.x,f.z),fw=Math.max(2,f.w*sx),fh=Math.max(2,f.d*sz),style=facilityStyle[f.type]||['#e4d8a2','•'];
+  ctx.fillStyle=style[0];ctx.strokeStyle='#17271f';ctx.lineWidth=.8;
+  ctx.fillRect(p.x-fw/2,p.y-fh/2,fw,fh);ctx.strokeRect(p.x-fw/2,p.y-fh/2,fw,fh);
+  if(fw>7&&fh>6){ctx.fillStyle='#14251c';ctx.font='bold 8px system-ui,sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(style[1],p.x,p.y)}
+ }
  for(let k=-15;k<=15;k++){
   const world=k*70,p=cityMapPoint(world,0),q=cityMapPoint(0,world);
   const major=k%3===0;
@@ -1579,4 +1604,4 @@ updateCamera();
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setPixelRatio(maxDevicePixelRatio*renderScale);renderer.setSize(innerWidth,innerHeight)});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)clock.getDelta()});
-toast('Lagos city map update v0.56 loaded');
+toast('Lagos detailed city map update v0.57 loaded');
