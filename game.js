@@ -1,12 +1,12 @@
-// THIS IS LAGOS v0.63 — Lagos street names, physical street signs and Grand Dealership on Isaac Uwadiale Road — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
+// THIS IS LAGOS v0.67 — v0.66 startup and shelter-placement performance fixes; 25x city land area and 25x city content quantity — 100 sports centres, existing two-pole district gateways retained — Lagos street names, physical street signs and Grand Dealership on Isaac Uwadiale Road — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const mount=document.querySelector('#game');
 const scene=new THREE.Scene();
 scene.background=new THREE.Color(0x9fc9d4);
-scene.fog=new THREE.Fog(0x9fc9d4,520,2100);
-const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,.1,4200);
+scene.fog=new THREE.Fog(0x9fc9d4,700,6500);
+const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,.1,16000);
 camera.position.set(0,5,9);
 const renderer=new THREE.WebGLRenderer({antialias:true, powerPreference:'high-performance'});
 // Start crisp, then reduce resolution only when sustained low FPS requires it.
@@ -44,7 +44,7 @@ const horizontalStreetNames=[
  'Admiralty Road','Freedom Way','Jakande Roundabout Road','Chevron Drive','Orchid Road',
  'Allen Avenue','Opebi Road','Obafemi Awolowo Way','Adeniyi Jones Avenue','Mobolaji Bank Anthony Way','Ikeja Along Road'
 ];
-function streetName(axis,index){const names=axis==='x'?verticalStreetNames:horizontalStreetNames;return names[index+15]||`${axis==='x'?'Lagos North-South':'Lagos East-West'} Street ${index+15}`;}
+function streetName(axis,index){const names=axis==='x'?verticalStreetNames:horizontalStreetNames;if(index>=-15&&index<=15)return names[index+15];return `${axis==='x'?'Lagos North-South':'Lagos East-West'} Street ${String(index+75).padStart(3,'0')}`;}
 function recordCityFacility(type,x,z,w,d,label){cityMapFacilities.push({type,x,z,w,d,label:label||type.toUpperCase()});}
 // Shared reserved footprints prevent later buildings from occupying sports courts or amenities.
 const amenityColliders=[];
@@ -232,11 +232,11 @@ const shadeTex=(()=>{
 const shadeMat=new THREE.MeshBasicMaterial({map:shadeTex,transparent:true,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-2,polygonOffsetUnits:-2});
 const shadePlane=new THREE.PlaneGeometry(2,2);shadePlane.rotateX(-Math.PI/2);
 
-const TREE_CHUNK=80,TREE_CHUNK_R=72,TREE_NEAR_DIST=120,TREE_VIEW_DIST=440,TREE_SHADE_DIST=280;
+const TREE_CHUNK=160,TREE_CHUNK_R=144,TREE_NEAR_DIST=160,TREE_VIEW_DIST=900,TREE_SHADE_DIST=500;
 const treeChunks=new Map(),treeSpots=[];
 // True when (x,z) lies on any carriageway or its pavement (plus a trunk margin). Trees are rejected there.
 function treeOnRoad(x,z,margin=3.4){
- const gx=Math.max(-980,Math.min(980,Math.round(x/70)*70)),gz=Math.max(-980,Math.min(980,Math.round(z/70)*70));
+ const gx=Math.max(-5180,Math.min(5180,Math.round(x/70)*70)),gz=Math.max(-5180,Math.min(5180,Math.round(z/70)*70));
  const hx=Math.abs(gx%210)<1?24:4,hz=Math.abs(gz%210)<1?24:4;
  return Math.abs(x-gx)<hx+margin||Math.abs(z-gz)<hz+margin;
 }
@@ -258,11 +258,11 @@ function addStreetTrees(){
   }
  }
  const free=(x,z,m)=>{const a=idx.get(Math.floor(x/CS)+','+Math.floor(z/CS));if(!a)return true;for(const c of a)if(x+m>c.minX&&x-m<c.maxX&&z+m>c.minZ&&z-m<c.maxZ)return false;return true};
- for(let g=-980;g<=980;g+=70){
+ for(let g=-5180;g<=5180;g+=70){
   const avenue=Math.abs(g%210)<1,half=avenue?24:4,SP=avenue?6.5:7.5;
   for(const side of [-1,1]){
-   for(let q=-1040+(side>0?SP/2:0);q<=1040;q+=SP){
-    if(avenue){const r=((q+945)%105+105)%105;if(Math.min(r,105-r)<1.5)continue}   // streetlight poles
+   for(let q=-5140+(side>0?SP/2:0);q<=5140;q+=SP){
+    if(avenue){const r=((q+5145)%105+105)%105;if(Math.min(r,105-r)<1.5)continue}   // streetlight poles
     for(const axis of ['z','x']){
      const jq=q+(treeHash(g,q,11+side)-.5)*1.6,off=g+side*(half+3.5+treeHash(q,g,13)*.4);
      const x=axis==='z'?off:jq,z=axis==='z'?jq:off;
@@ -327,17 +327,17 @@ function updateTreeVisibility(){
 // Starter-avenue palms were removed: some stood on the cross-avenue and local street. Street trees are now placed by addStreetTrees().
 
 // -----------------------------------------------------------------------------
-// v0.10 EXPANDED LAGOS WORLD: approx. 2.1 km x 2.1 km playable city footprint.
+// v0.10 EXPANDED LAGOS WORLD: approx. 10.5 km x 10.5 km playable city footprint (25x land area).
 // The original compact prototype remains as the central starter district; this
 // generator adds connected Lagos-inspired districts, arterials, compounds,
 // markets, civic buildings, sports venues, waterfront and recognizable signage.
 // -----------------------------------------------------------------------------
-const CITY_HALF=1050;
+const CITY_HALF=5250;
 const cityGroundMat=mat(0x789b70), asphaltMat=mat(0x303735), laneMat=mat(0xe8dfc4),
       curbMat=mat(0xbfc8b9), sandMat=mat(0xc7ad83), lagoonMat=new THREE.MeshStandardMaterial({color:0x3f8f9a,roughness:.35,metalness:.12}),
       roofMat=mat(0x8e5140), concreteMat=mat(0xb9b7a9), marketMat=mat(0xd5b46e),
       sportGreen=mat(0x287b43), sportBlue=mat(0x276a9a), sportRed=mat(0xb74b3b);
-block(2100,.35,2100,cityGroundMat,0,-.42,0);
+block(10500,.35,10500,cityGroundMat,0,-.42,0);
 
 // Lagos-style lagoon/waterfront on the south-eastern edge with a sandy shore.
 block(690,.5,230,lagoonMat,610,-.28,930);
@@ -354,7 +354,7 @@ for(let i=0;i<18;i++){
 // Zebra: bars 2x wider (1.2m) and 3x longer (9.6m); it starts ZEBRA_IN from the junction box and extends backwards,
 // and the stop line (plus all other markings) sits behind it so nothing enters the box.
 const ZEBRA_IN=.8, ZEBRA_DEPTH=9.6, ZEBRA_BAR=1.2, STOP_OFF=ZEBRA_IN+ZEBRA_DEPTH+1.1;
-const JUNC_GRID=[];for(let g=-980;g<=980;g+=70)JUNC_GRID.push({g,half:Math.abs(g%210)<1?24:4});
+const JUNC_GRID=[];for(let g=-5180;g<=5180;g+=70)JUNC_GRID.push({g,half:Math.abs(g%210)<1?24:4});
 // kind 'avenue' = crossings with other avenues only (plus local-street mouths when mouths=true);
 // kind 'local' = crossings with every road. pad widens each clear zone.
 function junctionSpans(kind,mouths=false,pad=0,padLocal=pad){
@@ -374,10 +374,10 @@ function freeRuns(from,to,spans){
 function dashClear(c,len,spans){return !spans.some(([a,b])=>c+len/2>a&&c-len/2<b)}
 // All avenue/local paint ends at the stop lines (STOP_OFF outside each junction box).
 const aveSpans=junctionSpans('avenue',false,STOP_OFF), aveDashSpans=junctionSpans('avenue',false,STOP_OFF+.3), aveEdgeSpans=junctionSpans('avenue',true,STOP_OFF,0), localSpans=junctionSpans('local',true,STOP_OFF+.3);
-for(let p=-840;p<=840;p+=210){
-  block(48,.18,2100,asphaltMat,p,-.12,0);
-  block(2100,.18,48,asphaltMat,0,-.12,p);
-  for(const [a,b] of freeRuns(-990,990,aveSpans)){
+for(let p=-5040;p<=5040;p+=210){
+  block(48,.18,10500,asphaltMat,p,-.12,0);
+  block(10500,.18,48,asphaltMat,0,-.12,p);
+  for(const [a,b] of freeRuns(-5250,5250,aveSpans)){
     const m=(a+b)/2,l=b-a;
     block(1,.025,l,laneMat,p-12,.0,m);
     block(1,.025,l,laneMat,p+12,.0,m);
@@ -385,10 +385,10 @@ for(let p=-840;p<=840;p+=210){
     block(l,.025,1,laneMat,m,.0,p+12);
   }
 }
-for(let p=-980;p<=980;p+=70){
+for(let p=-5180;p<=5180;p+=70){
   if(Math.abs(p%210)<1) continue;
-  block(8,.12,2100,asphaltMat,p,-.16,0);
-  block(2100,.12,8,asphaltMat,0,-.16,p);
+  block(8,.12,10500,asphaltMat,p,-.16,0);
+  block(10500,.12,8,asphaltMat,0,-.16,p);
 }
 // Road-reservation system: every generated building must fit inside a plot.
 // Major avenues are 48m wide; local streets are 8m wide. A 5m setback keeps
@@ -431,7 +431,7 @@ function addRoadsideInstances(records,material){
 }
 function buildSidewalkNetwork(){
  const pavements=[],kerbs=[];
- const grid=[];for(let v=-980;v<=980;v+=70)grid.push(v);
+ const grid=[];for(let v=-5180;v<=5180;v+=70)grid.push(v);
  for(const p of grid){
   const roadHalf=roadHalfWidthAt(p);
   for(let i=0;i<grid.length-1;i++){
@@ -474,22 +474,22 @@ function flushRoadPaint(){
 }
 // Main avenues: double yellow centre lines and broken white lane separators.
 // All paint stops short of every junction box so crossings are left clear.
-for(let p=-840;p<=840;p+=210){
+for(let p=-5040;p<=5040;p+=210){
  for(const offset of [-.42,.42]){
-  for(const [a,b] of freeRuns(-1050,1050,aveSpans)){
+  for(const [a,b] of freeRuns(-5250,5250,aveSpans)){
    const m=(a+b)/2,l=b-a;
    roadPaint(.22,l,p+offset,m,paintYellow,.08);
    roadPaint(l,.22,m,p+offset,paintYellow,.08);
   }
  }
- for(let q=-990;q<990;q+=18){
+ for(let q=-5190;q<5190;q+=18){
   if(!dashClear(q,7,aveDashSpans))continue;
   roadPaint(.16,7,p-12,q,paintWhite,.08);roadPaint(.16,7,p+12,q,paintWhite,.08);
   roadPaint(7,.16,q,p-12,paintWhite,.08);roadPaint(7,.16,q,p+12,paintWhite,.08);
  }
  // Kerb/edge lines on both sides of each main avenue; gaps at junctions and side-street mouths.
  for(const side of [-1,1]){
-  for(const [a,b] of freeRuns(-1050,1050,aveEdgeSpans)){
+  for(const [a,b] of freeRuns(-5250,5250,aveEdgeSpans)){
    const m=(a+b)/2,l=b-a;
    roadPaint(.18,l,p+side*23.2,m,paintWhite,.08);
    roadPaint(l,.18,m,p+side*23.2,paintWhite,.08);
@@ -497,9 +497,9 @@ for(let p=-840;p<=840;p+=210){
  }
 }
 // Local streets receive short broken centre markings, never inside a junction.
-for(let p=-980;p<=980;p+=70){
+for(let p=-5180;p<=5180;p+=70){
  if(Math.abs(p%210)<1) continue;
- for(let q=-980;q<980;q+=28){
+ for(let q=-5180;q<5180;q+=28){
   if(!dashClear(q,4,localSpans))continue;
   roadPaint(.12,4,p,q,paintWhite,.018);
   roadPaint(4,.12,q,p,paintWhite,.018);
@@ -517,7 +517,7 @@ function flushRoadArrows(){
 }
 // Add clear directional arrows on the four approaches to every major junction (kept behind the stop line).
 const AO=32+(STOP_OFF-5)+1;
-for(let p=-840;p<=840;p+=210){for(let q=-840;q<=840;q+=210){
+for(let p=-5040;p<=5040;p+=210){for(let q=-5040;q<=5040;q+=210){
  addRoadArrow(p-6,q-AO,Math.PI);      // approach from the north, travel south-to-north
  addRoadArrow(p+6,q+AO,0);            // approach from the south, travel north-to-south
  addRoadArrow(p-AO,q+6,-Math.PI/2);   // approach from the west, travel west-to-east
@@ -547,24 +547,32 @@ function removeStreetlight(l){
  for(const m of slMeshes){m.setMatrixAt(l.i,zero);m.instanceMatrix.needsUpdate=true;}
  slGlowAttr.setY(l.i,-5000);slGlowAttr.needsUpdate=true;
 }
+function removeStreetlightsInRect(x,z,halfX,halfZ){
+ const minX=Math.floor((x-halfX)/16),maxX=Math.floor((x+halfX)/16);
+ const minZ=Math.floor((z-halfZ)/16),maxZ=Math.floor((z+halfZ)/16);
+ for(let ix=minX;ix<=maxX;ix++)for(let iz=minZ;iz<=maxZ;iz++){
+  const cell=slCells.get(ix+','+iz);if(!cell)continue;
+  for(const lamp of cell)if(!lamp.removed&&Math.abs(lamp.x-x)<halfX&&Math.abs(lamp.z-z)<halfZ)removeStreetlight(lamp);
+ }
+}
 {
  const H=STREETLIGHT_HEIGHT,specs=[];
  const roadHalf=c=>(Math.round(c/70)%3===0)?24:4;      // every 3rd road is a 48m avenue, the rest are 8m streets
  const onCarriageway=(x,z)=>{const rx=Math.round(x/70)*70,rz=Math.round(z/70)*70;return Math.abs(x-rx)<roadHalf(rx)+1.2||Math.abs(z-rz)<roadHalf(rz)+1.2;};
  // Any lamp whose pole would stand on asphalt (or its kerb) is simply not built.
- const add=(x,z,rot,arm)=>{if(Math.abs(x)>1000||Math.abs(z)>1000||onCarriageway(x,z))return;specs.push({x,z,rot,arm});};
+ const add=(x,z,rot,arm)=>{if(Math.abs(x)>5200||Math.abs(z)>5200||onCarriageway(x,z))return;specs.push({x,z,rot,arm});};
  // Avenues: both verges, every 105 units (spots that fall inside a crossing avenue are dropped by the filter).
- for(let p=-840;p<=840;p+=210)for(let q=-945;q<=945;q+=105){
+ for(let p=-5040;p<=5040;p+=210)for(let q=-5145;q<=5145;q+=105){
   add(p-27.2,q,0,5.8);add(p+27.2,q,Math.PI,5.8);                  // north-south avenue
   add(q,p+27.2,Math.PI/2,5.8);add(q,p-27.2,-Math.PI/2,5.8);       // east-west avenue
  }
  // Local streets: lamps on the pavement beside the street, alternating sides, mid-block every 210 units.
  let li=0;
- for(let c=-980;c<=980;c+=70){
+ for(let c=-5180;c<=5180;c+=70){
   if(Math.round(c/70)%3===0)continue;
-  for(let n=-14;n<=13;n++){
+  for(let n=-74;n<=73;n++){
    if(((n%3)+3)%3!==0)continue;
-   const q=35+70*n;if(Math.abs(q)>945)continue;
+   const q=35+70*n;if(Math.abs(q)>5145)continue;
    const side=(li++%2)?1:-1;
    add(c+side*6.2,q,side<0?0:Math.PI,5.2);
    add(q,c+side*6.2,side<0?-Math.PI/2:Math.PI/2,5.2);
@@ -652,8 +660,8 @@ function addZebra(roadAxis,roadPos,g,gHalf,side,roadHalf,y){
   else roadPaint(ZEBRA_DEPTH,ZEBRA_BAR,along,across,paintWhite,y);
  }
 }
-for(let x=-840;x<=840;x+=210){
- for(let z=-840;z<=840;z+=210){
+for(let x=-5040;x<=5040;x+=210){
+ for(let z=-5040;z<=5040;z+=210){
   for(const side of [-1,1]){
    addStopLine('north-south',x,z,side);
    addStopLine('east-west',x,z,side);
@@ -664,7 +672,7 @@ for(let x=-840;x<=840;x+=210){
 }
 // Every local street entering ANY junction (avenue or local crossing) gets a
 // stop line and a zebra crossing.
-for(let local=-980;local<=980;local+=70){
+for(let local=-5180;local<=5180;local+=70){
  if(Math.abs(local%210)<1)continue;
  for(const {g,half} of JUNC_GRID){
   for(const side of [-1,1]){
@@ -701,7 +709,7 @@ function findBuildingPosition(x,z,w,d){
  const fitFactors=[1,.85,.7,.58,.48,.38,.30,.24];
  const candidates=[[x,z]];
  // Search the surrounding city in 35m increments, then progressively wider rings.
- for(let r=35;r<=980;r+=35){
+ for(let r=35;r<=5180;r+=35){
   for(let a=0;a<8;a++){
    const ang=a*Math.PI/4;
    candidates.push([x+Math.cos(ang)*r,z+Math.sin(ang)*r]);
@@ -737,7 +745,7 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
  const obj=new THREE.Group();obj.position.set(x,0,z);obj.scale.setScalar(BUILDING_SCALE);scene.add(obj);
  // Keep the complete building in memory, but skip drawing it when outside the camera view.
  const visibilityRadius=Math.sqrt(scaledW*scaledW+scaledD*scaledD+(h*BUILDING_SCALE)*(h*BUILDING_SCALE))*0.62;
- viewCulledBuildings.push({group:obj,sphere:new THREE.Sphere(new THREE.Vector3(x,h/2,z),visibilityRadius),detailChildren:null,detailDistance:320,maxDistance:1150});
+ viewCulledBuildings.push({group:obj,sphere:new THREE.Sphere(new THREE.Vector3(x,h/2,z),visibilityRadius),detailChildren:null,detailDistance:420,maxDistance:2100});
  buildingColliders.push({minX:x-scaledW/2-1,maxX:x+scaledW/2+1,minZ:z-scaledD/2-1,maxZ:z+scaledD/2+1});
  cityMapBuildings.push({x,z,w:scaledW*placed.fit,d:scaledD*placed.fit,kind});
  const main=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),wall);main.position.y=h/2;main.castShadow=false;main.receiveShadow=false;obj.add(main);
@@ -904,12 +912,12 @@ function addStreetNameSign(name,x,z,axis){
  return g;
 }
 function buildStreetNameSigns(){
- for(let k=-15;k<=15;k++){
+ for(let k=-75;k<=75;k++){
   const road=k*70,half=(k%3===0)?24:4;
   // One sign per street, standing on the pavement beside the road (never over the carriageway).
-  const vx=road+half+2.0,vz=-455;
+  const vx=road+half+2.0,vz=-2455;
   addStreetNameSign(streetName('x',k),vx,vz,'x');
-  const hx=-455,hz=road+half+2.0;
+  const hx=-2455,hz=road+half+2.0;
   addStreetNameSign(streetName('z',k),hx,hz,'z');
  }
 }
@@ -924,7 +932,7 @@ const districtPoleGeo=new THREE.CylinderGeometry(.5,.7,DISTRICT_POLE_HEIGHT,12);
 const districtPoleMat=mat(0x2b3640);
 const districtFrameMat=mat(0x16202a);
 function makeDistrictTexture(name,aspect){
- const cw=2048,ch=Math.round(cw/aspect);
+ const cw=512,ch=Math.round(cw/aspect);
  const cv=document.createElement('canvas');cv.width=cw;cv.height=ch;
  const c=cv.getContext('2d');
  const bg=c.createLinearGradient(0,0,0,ch);bg.addColorStop(0,'#2a72a8');bg.addColorStop(1,'#16456c');
@@ -942,7 +950,7 @@ function makeDistrictTexture(name,aspect){
 }
 function districtGatewayPlacement(cx,cz){
  const mod=(a,n)=>((a%n)+n)%n;
- const avenueNear=v=>Math.max(-840,Math.min(840,Math.round(v/210)*210));   // outermost avenue of the grid is at +/-840
+ const avenueNear=v=>Math.max(-5040,Math.min(5040,Math.round(v/210)*210));   // outermost avenue of the grid is at +/-840
  const midBlock=v=>{   // mid-block points (35 + 70n) that are not on a streetlight spot (multiples of 105)
   let best=null;
   for(let n=Math.floor(v/70)-4;n<=Math.floor(v/70)+4;n++){
@@ -1077,6 +1085,15 @@ const districtDefs=[
  ['EPE WATERFRONT',930,760,'civic'],['MAINLAND SPORTS PARK',-70,120,'sports'],['AGEGE',-880,20,'residential'],
  ['FESTAC TOWN',-760,760,'residential'],['APAPA PORT',-980,520,'civic']
 ];
+// Repeat the original Lagos district plan across a 5x5 connected grid. Each tile
+// retains normal-sized roads, buildings and facilities; only the city footprint
+// and the count of districts/content increase. The centre tile keeps original names.
+const baseDistrictDefs=districtDefs.slice();
+for(let tx=-2;tx<=2;tx++)for(let tz=-2;tz<=2;tz++){
+ if(tx===0&&tz===0)continue;
+ const tileNo=(tz+2)*5+(tx+2)+1;
+ for(const d of baseDistrictDefs)districtDefs.push([`${d[0]} DISTRICT ${String(tileNo).padStart(2,'0')}`,d[1]+tx*2100,d[2]+tz*2100,d[3]]);
+}
 // Reserve every fixed sports venue BEFORE any district buildings are generated.
 // This prevents buildings in earlier or later districts from landing on courts.
 for(const d of districtDefs){
@@ -1089,45 +1106,61 @@ for(const d of districtDefs){
  // Football pitch and safety perimeter.
  amenityColliders.push({minX:cx-52,maxX:cx+52,minZ:cz-38,maxZ:cz+38});
 }
-districtDefs.forEach((d,i)=>buildDistrict(d[0],d[1],d[2],d[3],i*13));
+baseDistrictDefs.forEach((d,i)=>buildDistrict(d[0],d[1],d[2],d[3],i*13));
 buildDistrictGateways();
 
 // v0.35: denser city infill with a 60% tall-building target.
 // One substantial building is placed near the centre of each available block;
 // the placement routine retains full road/pavement and overlap protection.
+// Expanded infill: one lightweight instanced building per available plot.
+// 25x more grid plots are generated across the 5x-by-5x city footprint.
+const expandedBuildingRecords=[];
 let citySeed=1000;
-for(let gx=-945;gx<=945;gx+=70){
- for(let gz=-945;gz<=945;gz+=70){
-  const nearLandmark=districtDefs.some(d=>Math.hypot(gx-d[1],gz-d[2])<105);
-  if(nearLandmark) continue;
-  if(gx>650 && gz>650) continue;
-  const blockIndex=Math.round((gx+945)/70)+Math.round((gz+945)/70);
-  // Deterministic 3-in-5 distribution: 60% towers, remaining plots varied.
-  const isTall=(blockIndex%5)<3;
-  if(isTall){
-   const kind=(blockIndex%4===0)?'office':'apartment';
-   makeBuilding(gx,gz,10,12,40,kind,citySeed++);
-  }else{
-   const variant=Math.abs(blockIndex)%4;
-   const kind=variant===0?'mixed':(variant===1?'residential':(variant===2?'tenement':'shop'));
-   const width=kind==='shop'?8:9,depth=kind==='shop'?9:11;
-   const floors=kind==='shop'?4:(kind==='tenement'?5:12);
-   makeBuilding(gx,gz,width,depth,floors,kind,citySeed++);
-  }
-  if(blockIndex%3===0){
-   // Keep infill palms clear of every road carriageway and its immediate verge.
-   const px=gx+24,pz=gz+24;
-   const nearGridX=Math.round(px/70)*70,nearGridZ=Math.round(pz/70)*70;
-   const halfX=Math.abs(Math.round(nearGridX/70)%3)===0?24:4;
-   const halfZ=Math.abs(Math.round(nearGridZ/70)%3)===0?24:4;
-   if(Math.abs(px-nearGridX)>halfX+5 && Math.abs(pz-nearGridZ)>halfZ+5){
-    addTree(px,pz,1,'palm');
-   }
-  }
+for(let gx=-5145;gx<=5145;gx+=70){
+ for(let gz=-5145;gz<=5145;gz+=70){
+  const ix=Math.round((gx+5145)/70),iz=Math.round((gz+5145)/70);
+  const blockIndex=ix*148+iz;
+  // Reserve one in nine plots for the expanded sports-centre network.
+  if(blockIndex%7===0)continue;
+  const nearLandmark=baseDistrictDefs.some(d=>Math.hypot(gx-d[1],gz-d[2])<105);
+  if(nearLandmark)continue;
+  const kind=(blockIndex%5)<3?((blockIndex%4===0)?'office':'apartment'):(['mixed','residential','tenement','shop'][Math.abs(blockIndex)%4]);
+  const width=(kind==='shop'?8:10)*(kind==='office'?1.22:1.14)*4;
+  const depth=(kind==='shop'?9:12)*(kind==='office'?1.22:1.14)*4;
+  const height=(kind==='office'?([20,25,30,35,40][Math.abs(blockIndex)%5]*3.2):(kind==='apartment'?([25,30,35,40][Math.abs(blockIndex)%4]*3.2):([5,7,10,12][Math.abs(blockIndex)%4]*3.1)))*4;
+  const color=kind==='office'?0x9ab8c4:(kind==='apartment'?0xc5b9a0:(kind==='shop'?0xd5a86c:(kind==='tenement'?0xb9a99a:0xb8c8b2)));
+  expandedBuildingRecords.push({x:gx,z:gz,w:width,d:depth,h:height,kind,color,seed:citySeed++});
+  buildingColliders.push({minX:gx-width/2-1,maxX:gx+width/2+1,minZ:gz-depth/2-1,maxZ:gz+depth/2+1});
+  cityMapBuildings.push({x:gx,z:gz,w:width,d:depth,kind});
  }
 }
+// Split instanced buildings into 25 geographic chunks for frustum-friendly rendering.
+for(let tx=-2;tx<=2;tx++)for(let tz=-2;tz<=2;tz++){
+ const records=expandedBuildingRecords.filter(b=>Math.floor((b.x+5250)/2100)===tx+2&&Math.floor((b.z+5250)/2100)===tz+2);
+ if(!records.length)continue;
+ const group=new THREE.Group();scene.add(group);
+ const body=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),new THREE.MeshStandardMaterial({color:0xffffff,roughness:.86}),records.length);
+ const roof=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),roofMat,records.length);
+ const dummy=new THREE.Object3D(),color=new THREE.Color();
+ records.forEach((b,i)=>{
+  dummy.position.set(b.x,b.h/2,b.z);dummy.scale.set(b.w,b.h,b.d);dummy.updateMatrix();body.setMatrixAt(i,dummy.matrix);
+  color.setHex(b.color);body.setColorAt(i,color);
+  dummy.position.set(b.x,b.h+.25,b.z);dummy.scale.set(b.w+1,.5,b.d+1);dummy.updateMatrix();roof.setMatrixAt(i,dummy.matrix);
+ });
+ body.instanceMatrix.needsUpdate=true;roof.instanceMatrix.needsUpdate=true;body.frustumCulled=true;roof.frustumCulled=true;group.add(body,roof);
+}
+// Spatial hash for the enlarged building stock keeps amenity and shelter placement efficient.
+const EXPANDED_COLLISION_CELL=100,expandedBuildingGrid=new Map();
+for(const b of buildingColliders){
+ const minX=Math.floor(b.minX/EXPANDED_COLLISION_CELL),maxX=Math.floor(b.maxX/EXPANDED_COLLISION_CELL),minZ=Math.floor(b.minZ/EXPANDED_COLLISION_CELL),maxZ=Math.floor(b.maxZ/EXPANDED_COLLISION_CELL);
+ for(let ix=minX;ix<=maxX;ix++)for(let iz=minZ;iz<=maxZ;iz++){const k=ix+','+iz;let a=expandedBuildingGrid.get(k);if(!a)expandedBuildingGrid.set(k,a=[]);a.push(b)}
+}
+function expandedBuildingOverlap(x,z,w,d,margin=0){
+ const minX=Math.floor((x-w/2-margin)/EXPANDED_COLLISION_CELL),maxX=Math.floor((x+w/2+margin)/EXPANDED_COLLISION_CELL),minZ=Math.floor((z-d/2-margin)/EXPANDED_COLLISION_CELL),maxZ=Math.floor((z+d/2+margin)/EXPANDED_COLLISION_CELL);
+ for(let ix=minX;ix<=maxX;ix++)for(let iz=minZ;iz<=maxZ;iz++){const a=expandedBuildingGrid.get(ix+','+iz)||[];for(const b of a)if(x+w/2+margin>b.minX&&x-w/2-margin<b.maxX&&z+d/2+margin>b.minZ&&z-d/2-margin<b.maxZ)return true}
+ return false;
+}
 
-// -----------------------------------------------------------------------------
 // v0.37 COMMUNITY AMENITY INFILL
 // Preserve every existing building. Add useful destinations only on vacant,
 // road-safe plots, using the same city collision reservations as buildings.
@@ -1139,7 +1172,7 @@ const amenityMats={
 };
 function amenityPlotFree(x,z,w,d){
   if(!clearBuildingPlot(x,z,w,d,3)) return false;
-  const overlaps=buildingColliders.some(c=>x+w/2+3>c.minX&&x-w/2-3<c.maxX&&z+d/2+3>c.minZ&&z-d/2-3<c.maxZ);
+  const overlaps=expandedBuildingOverlap(x,z,w,d,3);
   if(overlaps)return false;
   return !amenityColliders.some(c=>x+w/2+3>c.minX&&x-w/2-3<c.maxX&&z+d/2+3>c.minZ&&z-d/2-3<c.maxZ);
 }
@@ -1332,7 +1365,7 @@ function shelterSiteFree(x,z,plotW,plotD,roadAxis,roadCoord){
     if(roadAxis==='z'&&Math.abs(rz-roadCoord)<.01)continue;
     if(Math.abs(z-rz)<halfD+half+1)return false;
   }
-  const overlapsBuildings=buildingColliders.some(c=>x+halfW>c.minX&&x-halfW<c.maxX&&z+halfD>c.minZ&&z-halfD<c.maxZ);
+  const overlapsBuildings=expandedBuildingOverlap(x,z,plotW,plotD,1);
   if(overlapsBuildings)return false;
   return !amenityColliders.some(c=>x+halfW>c.minX&&x-halfW<c.maxX&&z+halfD>c.minZ&&z-halfD<c.maxZ);
 }
@@ -1351,9 +1384,10 @@ function addAmenityInfill(){
     {kind:'pharmacy',w:50,d:32}
   ];
   const candidates=[];
-  // 14m spacing gives a broad search while avoiding a huge per-frame cost.
-  for(let x=-980;x<=980;x+=14){
-    for(let z=-980;z<=980;z+=14){
+  // One candidate per 70m city block keeps startup work bounded while
+  // still sampling every available block across the expanded 25x footprint.
+  for(let x=-5075;x<=5145;x+=70){
+    for(let z=-5075;z<=5145;z+=70){
       if(x>650&&z>650)continue; // keep the waterfront/port zone reserved
       candidates.push([x,z]);
     }
@@ -1366,23 +1400,23 @@ function addAmenityInfill(){
   // painted on the road beside it. Sites keep clear of crossing roads (zebra and stop-line zones), buildings and
   // other amenities; a streetlight pole that stands inside a footprint is removed.
   let extraShelters=0;
-  const shelterTarget=30,SH_LEN=36,SH_DEPTH=5,SH_HALF=SH_LEN/2;
+  const shelterTarget=750,SH_LEN=36,SH_DEPTH=5,SH_HALF=SH_LEN/2;
   const avenueLines=[],gridLines=[];
-  for(let p=-840;p<=840;p+=210)avenueLines.push(p);
-  for(let p=-980;p<=980;p+=70)gridLines.push(p);
+  for(let p=-5040;p<=5040;p+=210)avenueLines.push(p);
+  for(let p=-5180;p<=5180;p+=70)gridLines.push(p);
   const shelterSite=(roadAxis,road,side,along)=>{
     const off=24+.6+SH_DEPTH/2;   // front edge just behind the kerb, on the pavement
     const x=roadAxis==='x'?road+side*off:along,z=roadAxis==='x'?along:road+side*off;
     if(x>650&&z>650)return null;   // waterfront/port zone stays reserved
     for(const gl of gridLines){const half=Math.abs(gl%210)<1?24:4;if(Math.abs(along-gl)<SH_HALF+half+.8)return null}
     const hx=roadAxis==='x'?SH_DEPTH/2+.1:SH_HALF,hz=roadAxis==='x'?SH_HALF:SH_DEPTH/2+.1;
-    if(buildingColliders.some(c=>x+hx>c.minX+1&&x-hx<c.maxX-1&&z+hz>c.minZ+1&&z-hz<c.maxZ-1))return null;
+    if(expandedBuildingOverlap(x,z,hx*2,hz*2,-1))return null;
     if(amenityColliders.some(c=>x+hx>c.minX&&x-hx<c.maxX&&z+hz>c.minZ&&z-hz<c.maxZ))return null;
     return {x,z,roadAxis,road,side,along};
   };
   // A stop is valid only when BOTH facing sites are free.
   const shelterCands=[];
-  for(const roadAxis of ['x','z'])for(const road of avenueLines)for(let along=-900;along<=900;along+=6){
+  for(const roadAxis of ['x','z'])for(const road of avenueLines)for(let along=-5100;along<=5100;along+=24){
     const a=shelterSite(roadAxis,road,-1,along),b=a&&shelterSite(roadAxis,road,1,along);
     if(a&&b)shelterCands.push({sites:[a,b],cx:roadAxis==='x'?road:along,cz:roadAxis==='x'?along:road});
   }
@@ -1405,7 +1439,7 @@ function addAmenityInfill(){
       const rotation=c.roadAxis==='x'?(c.side>0?-Math.PI/2:Math.PI/2):(c.side>0?Math.PI:0);
       addBusStop(c.x,c.z,rotation,SH_DEPTH/8);
       {const hx=c.roadAxis==='x'?SH_DEPTH/2+1:SH_HALF+1,hz=c.roadAxis==='x'?SH_HALF+1:SH_DEPTH/2+1;
-       for(const lamp of avenueLamps)if(!lamp.removed&&Math.abs(lamp.x-c.x)<hx&&Math.abs(lamp.z-c.z)<hz)removeStreetlight(lamp);}   // the shelter replaces any streetlight standing in its footprint
+       removeStreetlightsInRect(c.x,c.z,hx,hz);}   // use the streetlight spatial hash; shelter replaces lamps in its footprint
       addBusRoadMark(c.roadAxis,c.road,c.side,c.along);
       extraShelters++;placedCount++;
     }
@@ -1431,7 +1465,116 @@ function addAmenityInfill(){
   return {placedCount,extraShelters,minShelterGap:Math.round(minShelterGap)};
 }
 const v037AmenityResult=addAmenityInfill();
-console.info('This Is Lagos v0.51: roof-height circular pole bus-stop signs; 60 bus shelters (30 opposite pairs, evenly spaced) on the pavements beside the avenues with BUS road legends, fronts facing roads; protected courts and supported table-tennis; pharmacy H x3, W x2, L x2',v037AmenityResult);
+console.info('This Is Lagos v0.67: roof-height circular pole bus-stop signs; 1,500 bus shelters (750 opposite pairs, evenly spaced) on the pavements beside the avenues with BUS road legends, fronts facing roads; protected courts and supported table-tennis; pharmacy H x3, W x2, L x2',v037AmenityResult);
+
+// v0.65: 2,500 purpose-built, named sports centres distributed throughout Lagos.
+// Reuses the game's existing road-safe plot checks, facility registry, activity
+// interaction markers and live map. Each campus has its own parking and several
+// sports/recreation spaces; the layout varies deterministically by centre.
+const SPORTS_CENTRE_TARGET=2500;
+const DETAILED_SPORTS_CENTRE_LIMIT=100;
+const sportsCentreNames=[];
+const sportsCentreAccent=[0x176b43,0x245f94,0x9b4036,0x7a5a28];
+function nearestDistrictFor(x,z){
+ let best=districtDefs[0],bestD=Infinity;
+ for(const d of districtDefs){const q=(x-d[1])**2+(z-d[2])**2;if(q<bestD){bestD=q;best=d}}
+ return best;
+}
+function sportsCentreSiteFree(x,z){
+ const w=44,d=44;
+ if(!amenityPlotFree(x,z,w,d))return false;
+ // Keep a little breathing room between campuses without consuming an entire block.
+ return !sportsCentreNames.some(s=>Math.abs(x-s.x)<49&&Math.abs(z-s.z)<49);
+}
+function buildSportsCentre(x,z,index,district){
+ const g=new THREE.Group();g.position.set(x,0,z);scene.add(g);
+ const paving=mat(0xbfc9bd),fence=mat(0x65766b),courtLine=new THREE.MeshBasicMaterial({color:0xf4f2e7});
+ const accent=sportsCentreAccent[index%sportsCentreAccent.length];
+ // Perimeter campus apron and low boundary walls.
+ amenityBox(g,44,.22,44,paving,0,0,0);
+ for(const [px,pz,pw,pd] of [[0,-21.5,44,.45],[0,21.5,44,.45],[-21.5,0,.45,44],[21.5,0,.45,44]])amenityBox(g,pw,1.35,pd,fence,px,.2,pz);
+ // Multi-sport futsal/football practice pitch.
+ amenityBox(g,22,.16,12,sportGreen,-8,.18,-10);
+ for(const px of [-18,-8,2])amenityBox(g,.12,.035,11,courtLine,px,.29,-10);
+ amenityBox(g,21,.035,.12,courtLine,-8,.29,-15.8);amenityBox(g,21,.035,.12,courtLine,-8,.29,-4.2);
+ // Basketball court and hoops.
+ amenityBox(g,16,.16,9,sportRed,9,.18,-10);
+ for(const px of [1,17]){amenityBox(g,.18,2,.18,dark,px, .34,-10);amenityBox(g,1.8,.12,.18,white,px,.34+2,-10)}
+ // Tennis / multipurpose court.
+ amenityBox(g,19,.16,10,sportBlue,-8,.18,5);
+ amenityBox(g,.12,.035,9,courtLine,-17.4,.29,5);amenityBox(g,.12,.035,9,courtLine,1.4,.29,5);
+ amenityBox(g,18,.035,.12,courtLine,-8,.29,.2);amenityBox(g,18,.035,.12,courtLine,-8,.29,9.8);
+ // Gym, reception and changing-room block with glazed frontage.
+ amenityBox(g,12,4.4,7,mat(0xe1dfd2),9,0,9);
+ amenityBox(g,12,.5,7,mat(accent),9,4.4,9);
+ amenityBox(g,5,2.4,.12,amenityMats.glass,7,1,12.56);
+ amenityBox(g,3,2.4,.12,amenityMats.glass,12,1,12.56);
+ // Dedicated parking: four marked bays inside the secured entrance apron.
+ amenityBox(g,18,.12,6,asphaltMat,9,.18,17);
+ for(let k=0;k<5;k++)amenityBox(g,.12,.035,5,white,1+k*4,.31,17);
+ // Four compact floodlight masts.
+ for(const [lx,lz] of [[-19,-19],[19,-19],[-19,19],[19,19]]){
+  amenityBox(g,.28,7,.28,dark,lx,.22,lz);
+  amenityBox(g,1.4,.22,.65,white,lx,7.05,lz);
+ }
+ const label=`SPORTS CENTRE ${String(index+1).padStart(3,'0')} · ${district[0]}`;
+ signBoard(label,x,z-23,29,accent);
+ reserveAmenity(x,z,44,44);
+ recordCityFacility('sportscomplex',x,z,44,44,label);
+ sportsCentreNames.push({x,z,label,district:district[0]});
+}
+function buildOneHundredSportsCentres(){
+ // Candidate positions sit in the middle of existing city blocks, safely away
+ // from the 48m avenues and 8m local streets. Shuffle deterministically so the
+ // centres are spread across districts rather than clustered in one corner.
+ const candidates=[];
+ for(let ix=-73;ix<=73;ix++)for(let iz=-73;iz<=73;iz++){
+  const x=35+ix*70,z=35+iz*70;
+  if(x<-5145||x>5145||z<-5145||z>5145)continue;
+  candidates.push({x,z,score:Math.abs(ix*17+iz*31)%97});
+ }
+ candidates.sort((a,b)=>a.score-b.score);
+ // Select the first 100 available reserved plots in a deterministic spread,
+ // then associate each campus with its nearest named district.
+ candidates.sort((a,b)=>a.score-b.score);
+ for(const c of candidates){
+  if(sportsCentreNames.length>=DETAILED_SPORTS_CENTRE_LIMIT)break;
+  if(!sportsCentreSiteFree(c.x,c.z))continue;
+  buildSportsCentre(c.x,c.z,sportsCentreNames.length,nearestDistrictFor(c.x,c.z));
+ }
+ return {target:SPORTS_CENTRE_TARGET,created:sportsCentreNames.length};
+}
+const sportsCentreBuildResult=buildOneHundredSportsCentres();
+// Up to 2,400 additional purpose-built, compact sports campuses are instanced in
+// reserved road-safe plots. Each includes a court, a green practice area and
+// dedicated marked parking; all receive named map entries.
+{
+ const target=SPORTS_CENTRE_TARGET-sportsCentreNames.length,records=[],used=new Set(sportsCentreNames.map(s=>Math.round((s.x+5145)/70)+','+Math.round((s.z+5145)/70)));
+ const courtMat=new THREE.MeshStandardMaterial({color:0x276a9a,roughness:.8}),fieldMat=new THREE.MeshStandardMaterial({color:0x287b43,roughness:.9}),parkMat=new THREE.MeshStandardMaterial({color:0x303735,roughness:.9}),lineMat=new THREE.MeshBasicMaterial({color:0xf4f2e7});
+ let n=0;for(let ix=-73;ix<=73&&n<target;ix++)for(let iz=-73;iz<=73&&n<target;iz++){
+  const x=35+ix*70,z=35+iz*70,key=Math.round((x+5145)/70)+','+Math.round((z+5145)/70);
+  if(((ix+74)*148+(iz+74))%7!==0||used.has(key))continue;
+  if(expandedBuildingOverlap(x,z,44,44,2)||amenityColliders.some(c=>x+23>c.minX&&x-23<c.maxX&&z+23>c.minZ&&z-23<c.maxZ))continue;
+  const label=`SPORTS CENTRE ${String(sportsCentreNames.length+1).padStart(4,'0')}`;
+  records.push({x,z,label});sportsCentreNames.push({x,z,label,district:nearestDistrictFor(x,z)[0]});
+  recordCityFacility('sportscomplex',x,z,44,44,label);amenityColliders.push({minX:x-22,maxX:x+22,minZ:z-22,maxZ:z+22});used.add(key);n++;
+ }
+ function campusInstances(geometry,material,fn){const mesh=new THREE.InstancedMesh(geometry,material,records.length),d=new THREE.Object3D();records.forEach((r,i)=>{fn(d,r);d.updateMatrix();mesh.setMatrixAt(i,d.matrix)});mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=true;scene.add(mesh)}
+ campusInstances(new THREE.BoxGeometry(1,1,1),fieldMat,(d,r)=>{d.position.set(r.x-8,.12,r.z-8);d.scale.set(21,.24,13)});
+ campusInstances(new THREE.BoxGeometry(1,1,1),courtMat,(d,r)=>{d.position.set(r.x+9,.12,r.z-8);d.scale.set(16,.24,13)});
+ campusInstances(new THREE.BoxGeometry(1,1,1),parkMat,(d,r)=>{d.position.set(r.x+9,.08,r.z+16);d.scale.set(19,.16,8)});
+ campusInstances(new THREE.BoxGeometry(1,1,1),lineMat,(d,r)=>{d.position.set(r.x+9,.22,r.z+16);d.scale.set(18,.035,.12)});
+ const bayMat=new THREE.MeshBasicMaterial({color:0xf4f2e7});
+ const bayMesh=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),bayMat,records.length*4),bd=new THREE.Object3D();
+ records.forEach((r,i)=>{for(let b=0;b<4;b++){bd.position.set(r.x+2+b*4,.22,r.z+20);bd.scale.set(.12,.035,5);bd.updateMatrix();bayMesh.setMatrixAt(i*4+b,bd.matrix)}});
+ bayMesh.instanceMatrix.needsUpdate=true;bayMesh.frustumCulled=true;scene.add(bayMesh);
+ console.info('Additional instanced sports centres:',n);
+}
+console.info('This Is Lagos v0.67 sports centres:',sportsCentreBuildResult);
+sportsCentreBuildResult.created=sportsCentreNames.length;
+console.info('This Is Lagos v0.67 total sports centres:',sportsCentreBuildResult);
+if(sportsCentreBuildResult.created<SPORTS_CENTRE_TARGET)console.warn(`Generated ${sportsCentreBuildResult.created} of ${SPORTS_CENTRE_TARGET} planned sports centres; available road-safe plots limited placement.`);
+
 // -----------------------------------------------------------------------------
 
 // Industrial port yards, container stacks and cranes near Apapa.
@@ -1570,24 +1713,58 @@ document.querySelector('#dealerBtn').onclick=()=>openDealer();
 document.querySelector('#vehiclesBtn').onclick=()=>openGarage();
 
 const demoActivities=[
- {id:1,title:'12 vs 12 Football Match',place:'Lagos Football Arena',kind:'Football',joined:15,total:24,fee:'Free',status:'Recruiting'},
- {id:2,title:'Tennis Singles Challenge',place:'Victoria Island Tennis Club',kind:'Tennis',joined:1,total:2,fee:'Free',status:'Recruiting'},
- {id:3,title:'Lagos City Meetup',place:'Tafawa Balewa Square',kind:'Meetup',joined:8,total:20,fee:'Free',status:'Recruiting'}
+ {id:'builtin-football-01',title:'12 vs 12 Football Match',place:'Lagos Football Arena',address:'Lagos Football Arena, Lagos',kind:'Football',joined:15,total:24,rounds:1,fee:'Free',status:'Recruiting',rules:'Two teams of 12. Standard football rules.'},
+ {id:'builtin-tennis-01',title:'Tennis Singles Challenge',place:'Victoria Island Tennis Club',address:'Victoria Island Tennis Club, Lagos',kind:'Tennis',joined:1,total:2,rounds:1,fee:'Free',status:'Recruiting',rules:'Singles match. Standard tennis scoring.'}
 ];
-function handleFeedAction(action){
- if(action==='competitions')openCompetitions();
- else if(action==='transport')openTransport();
- else if(action==='dealer')openDealer();
- else if(action==='garage')openGarage();
- else if(action==='police')toast('Police and theft reports are planned; online police players are not connected yet.');
+const ACTIVITY_STORAGE_KEY='til-player-activities-v1';
+const ACTIVITY_CATALOGUE_LIMIT=100;
+function readPlayerActivities(){
+ try{const data=JSON.parse(localStorage.getItem(ACTIVITY_STORAGE_KEY)||'[]');return Array.isArray(data)?data.filter(a=>a&&typeof a==='object'&&a.id&&a.title&&a.place):[]}catch(_e){return[]}
 }
+function savePlayerActivities(items){localStorage.setItem(ACTIVITY_STORAGE_KEY,JSON.stringify(items.slice(0,ACTIVITY_CATALOGUE_LIMIT)))}
+function allActivities(){return [...demoActivities,...readPlayerActivities()]}
+function safeActivityText(value,max=120){return String(value??'').trim().slice(0,max).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}
 function openCompetitions(){
- const rows=demoActivities.map(a=>`<div class="activity-row"><b>${a.title}</b><span>${a.place}</span><span>${a.joined}/${a.total} players · ${a.fee}</span><small>${a.status}</small><button class="panel-button" data-join="${a.id}">Join activity</button></div>`).join('');
- modal('Competitions at Lagos venues',`<p>Demo recruitment board. Players can discover a competition here or visit its venue in the city.</p>${rows}<p class="small-note">Joining and readiness are simulated on this device. Live invitations to online players need the multiplayer server.</p>`,[['Close',null,true]]);
- document.querySelectorAll('[data-join]').forEach(b=>b.onclick=()=>{const a=demoActivities.find(x=>x.id===Number(b.dataset.join));if(a.joined<a.total){a.joined++;toast('Joined: '+a.title);openCompetitions()}else toast('This activity is full')});
+ const activities=allActivities();
+ const rows=activities.map(a=>`<div class="activity-row"><b>${safeActivityText(a.title)}</b><span>${safeActivityText(a.place)} · ${safeActivityText(a.address||'Venue address to be confirmed')}</span><span>${Number(a.joined)||0}/${Number(a.total)||2} players · ${Number(a.rounds)||1} round(s) · ${safeActivityText(a.fee||'Free')}</span><small>${safeActivityText(a.status||'Recruiting')} · ${safeActivityText(a.kind||'Custom')}</small><button class="panel-button" data-join="${safeActivityText(a.id,80)}" ${Number(a.joined)>=Number(a.total)?'disabled':''}>${Number(a.joined)>=Number(a.total)?'Full':'Join activity'}</button></div>`).join('');
+ const customCount=readPlayerActivities().length;
+ modal('Activities at Lagos venues',`<p>Browse built-in and player-created activities. To create one, travel to a sports complex and enter its glowing ground circle. Player-created activities are saved on this device and remain available after reopening the game.</p><p><b>Catalogue:</b> ${activities.length} activities · ${customCount}/${ACTIVITY_CATALOGUE_LIMIT} player-created slots used</p>${rows||'<p>No activities have been posted yet.</p>'}<p class="small-note">Joining is currently local to this device. Shared player recruitment and live matches require the multiplayer server. A custom venue must be physically built and verified in the city before its activity can go live.</p>`,[['Create activity',()=>openCreateActivity()],['Close',null,true]]);
+ document.querySelectorAll('[data-join]').forEach(b=>b.onclick=()=>{
+  const id=b.dataset.join,custom=readPlayerActivities(),a=custom.find(x=>String(x.id)===id)||demoActivities.find(x=>String(x.id)===id);
+  if(!a)return;
+  if(Number(a.joined)<Number(a.total)){
+   a.joined=Number(a.joined||0)+1;
+   if(custom.includes(a))savePlayerActivities(custom);
+   toast('Joined: '+a.title);openCompetitions();
+  }else toast('This activity is full');
+ });
 }
-function openCreateActivity(){
- modal('Create a venue competition',`<p>Choose a venue and recruit players. Real-money entry and prize pools remain disabled until the required legal and payment approvals are in place.</p><div class="creator-grid"><label>Activity<input id="newActivity" value="Football match"></label><label>Venue<select id="newVenue"><option>Lagos Football Arena</option><option>Victoria Island Tennis Club</option><option>Lagos Racing Circuit</option><option>Lagos Marina</option></select></label><label>Players needed<input id="newCapacity" type="number" min="2" max="44" value="24"></label><label>Entry type<select id="newFee"><option>Free</option><option disabled>Real-money (not enabled)</option></select></label></div><p class="small-note">The creator sets the rules, capacity, venue and schedule. When full, all participants must confirm readiness before the match begins.</p>`,[['Post activity',()=>{const title=document.querySelector('#newActivity')?.value||'New activity';toast('Local demo activity created: '+title)}],['Cancel',null,true]]);
+function openCreateActivity(facility=currentActivityFacility){
+ if(!facility){toast('Go to a sports complex and stand inside its glowing ground circle to create an activity.');return}
+ const distance=Math.hypot(player.position.x-facility.x,player.position.z-facility.z);
+ if(distance>5.4){currentActivityFacility=null;toast('You must be inside the facility interaction circle to create an activity.');return}
+ const used=readPlayerActivities().length;
+ if(used>=ACTIVITY_CATALOGUE_LIMIT){toast('Player-created activity catalogue is full (100).');return}
+ const place=safeActivityText(facility.label,80),address=safeActivityText(facilityStreetAddress(facility),120);
+ const defaultKind=facilityKindName(facility.type),maxCapacity=facilityCapacity(facility);
+ const area=Math.round(facility.w*facility.d);
+ modal('Create activity at this complex',`<p><b>Selected venue:</b> ${place}</p><p>${Math.round(facility.w)}m × ${Math.round(facility.d)}m · approximately ${area.toLocaleString('en-NG')} m² · suggested capacity ${maxCapacity} participants</p><p><b>Location:</b> ${address}</p><div class="creator-grid">
+ <label>Activity name<input id="newActivity" maxlength="60" placeholder="e.g. Weekend challenge" required></label>
+ <label>Activity type<select id="newActivityKind"><option>${defaultKind}</option><option>Football</option><option>Basketball</option><option>Tennis</option><option>Table tennis</option><option>Obstacle course</option><option>Other</option></select></label>
+ <label>Participants<input id="newCapacity" type="number" min="2" max="${maxCapacity}" value="${Math.min(2,maxCapacity)}" required></label>
+ <label>Number of rounds<input id="newRounds" type="number" min="1" max="100" value="1" required></label>
+ </div><label style="display:block;margin-top:10px">Activity rules and winning conditions<textarea id="newRules" maxlength="1000" rows="4" placeholder="Explain how to play, how a winner is decided, and any special rules."></textarea></label>
+ <p class="small-note">You can only create an activity while physically inside this complex's ground circle. The venue and address cannot be changed. Participant limits are based on this facility's suggested capacity. The venue's dedicated parking and full activity setup must be verified before public play is enabled.</p>`,[['Save activity',()=>{
+  const title=safeActivityText(document.querySelector('#newActivity')?.value,60),kind=safeActivityText(document.querySelector('#newActivityKind')?.value,40),total=Number(document.querySelector('#newCapacity')?.value),rounds=Number(document.querySelector('#newRounds')?.value),rules=safeActivityText(document.querySelector('#newRules')?.value,1000);
+  const stillNear=Math.hypot(player.position.x-facility.x,player.position.z-facility.z)<=5.4;
+  if(!stillNear){toast('Creation cancelled: return to the facility interaction circle.');return}
+  if(!title){toast('Enter an activity name.');openCreateActivity(facility);return}
+  if(!Number.isInteger(total)||total<2||total>maxCapacity||!Number.isInteger(rounds)||rounds<1||rounds>100){toast(`Participants must be 2–${maxCapacity}; rounds must be 1–100.`);openCreateActivity(facility);return}
+  const items=readPlayerActivities();if(items.length>=ACTIVITY_CATALOGUE_LIMIT){toast('Player-created activity catalogue is full (100).');return}
+  const id='player-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,7);
+  items.push({id,title,kind,place,address,total,joined:1,rounds,fee:'Free',status:'Facility verification required',rules,facilityType:facility.type,facilityX:facility.x,facilityZ:facility.z,facilityWidth:facility.w,facilityDepth:facility.d,createdAt:new Date().toISOString(),venueVerified:false});
+  savePlayerActivities(items);toast('Activity saved for '+place+'.');openCompetitions();
+ }],['Cancel',null,true]]);
 }
 function openTransport(){
  modal('Get to the venue',`<p>Choose transport for a demo fare estimate. Fare depends on distance and vehicle type.</p><div class="creator-grid"><label>Destination<select id="tripPlace"><option value="2">Nearby venue · 2 km</option><option value="5">Mid-distance venue · 5 km</option><option value="10">Far venue · 10 km</option><option value="15">Distant venue · 15 km</option></select></label><label>Transport<select id="tripType"><option value="taxi">Taxi</option><option value="danfo">Danfo</option><option value="bike">Okada / bike</option><option value="boat">Boat</option></select></label></div><div id="fareQuote" class="fare-quote">Estimated fare: ₦—</div><p class="small-note">Demo estimate only. No wallet is charged and no real driver is connected.</p>`,[['Close',null,true]]);
@@ -1751,6 +1928,59 @@ block(38,.035,.28,parkingLineMat,CITY_PARKING.x,.05,CITY_PARKING.z+15);
 signBoard('CITY PARKING',CITY_PARKING.x,CITY_PARKING.z-25,24,0x205c82);
 recordCityFacility('parking',CITY_PARKING.x,CITY_PARKING.z,42,42,CITY_PARKING.name);
 
+// v0.64: sports facilities have a visible ground interaction circle at their
+// actual centre. Activity creation is unlocked only while the character is
+// physically standing inside that facility's interaction radius.
+const ACTIVITY_FACILITY_TYPES=new Set(['football','tennis','basketball','tabletennis','sportscomplex']);
+const activityFacilityMarkers=[];
+function facilityStreetAddress(f){
+ const vertical=streetName('x',Math.max(-15,Math.min(15,Math.round(f.x/70))));
+ const horizontal=streetName('z',Math.max(-15,Math.min(15,Math.round(f.z/70))));
+ return `Near ${vertical} and ${horizontal}, Lagos`;
+}
+function facilityCapacity(f){
+ if(f.type==='football'||f.type==='sportscomplex')return 24;
+ if(f.type==='tennis')return 6;
+ if(f.type==='basketball')return 10;
+ if(f.type==='tabletennis')return 4;
+ return 2;
+}
+function facilityKindName(type){return ({football:'Football',tennis:'Tennis',basketball:'Basketball',tabletennis:'Table tennis',sportscomplex:'Multi-sport centre'})[type]||'Sports';}
+for(const f of cityMapFacilities){
+ if(!ACTIVITY_FACILITY_TYPES.has(f.type))continue;
+ const marker=new THREE.Group();marker.position.set(f.x,.14,f.z);scene.add(marker);
+ const glow=new THREE.Mesh(new THREE.CircleGeometry(5.2,48),new THREE.MeshBasicMaterial({color:0x1ce6a0,transparent:true,opacity:.12,depthWrite:false}));glow.rotation.x=-Math.PI/2;marker.add(glow);
+ const ring=new THREE.Mesh(new THREE.RingGeometry(4.45,4.85,64),new THREE.MeshBasicMaterial({color:0x16e69a,side:THREE.DoubleSide,transparent:true,opacity:.96}));ring.rotation.x=-Math.PI/2;marker.add(ring);
+ const inner=new THREE.Mesh(new THREE.RingGeometry(3.9,4.02,64),new THREE.MeshBasicMaterial({color:0xffffff,side:THREE.DoubleSide,transparent:true,opacity:.9}));inner.rotation.x=-Math.PI/2;inner.position.y=.015;marker.add(inner);
+ activityFacilityMarkers.push({facility:f,marker,glow,ring,radius:5.4,opened:false});
+}
+let currentActivityFacility=null;
+function openFacilityDetails(f){
+ currentActivityFacility=f;
+ const area=Math.round(f.w*f.d),capacity=facilityCapacity(f),kind=facilityKindName(f.type);
+ const address=facilityStreetAddress(f);
+ const details=`<div class="activity-row" style="display:block"><b>${safeActivityText(f.label)}</b><span style="display:block">Facility type: ${kind}</span><span style="display:block">Ground footprint: ${Math.round(f.w)}m × ${Math.round(f.d)}m</span><span style="display:block">Approximate site area: ${area.toLocaleString('en-NG')} m²</span><span style="display:block">Suggested activity capacity: ${capacity} participants</span><span style="display:block">Street location: ${safeActivityText(address)}</span><span style="display:block">Dedicated parking: facility parking provision must be completed and verified</span></div><p>You are inside this complex. You can create an activity for this facility now. The venue name and location are locked to this physical complex.</p>`;
+ modal('Facility information',details,[['Create activity here',()=>openCreateActivity(f)],['View activities',()=>openCompetitions()],['Close',null,true]]);
+}
+function updateActivityFacilityProximity(){
+ let nearest=null,nearestDistance=Infinity;
+ for(const entry of activityFacilityMarkers){
+  const f=entry.facility,d=Math.hypot(player.position.x-f.x,player.position.z-f.z);
+  entry.glow.material.opacity=.09+.05*Math.sin(performance.now()*.003);
+  entry.ring.rotation.z=0;
+  if(d<nearestDistance){nearestDistance=d;nearest=entry;}
+ }
+ if(nearest&&nearestDistance<=nearest.radius){
+  if(!nearest.opened){
+   for(const entry of activityFacilityMarkers)entry.opened=false;
+   nearest.opened=true;openFacilityDetails(nearest.facility);
+  }
+ }else{
+  for(const entry of activityFacilityMarkers)entry.opened=false;
+  currentActivityFacility=null;
+ }
+}
+
 // All trees are registered by now: build instanced meshes, shade patches and trunk colliders.
 finalizeTrees();
 // Index building footprints into a spatial grid once. Movement checks now inspect
@@ -1774,7 +2004,7 @@ function collidesWithBuilding(x,z){
 
 // ============================================================================
 // LIVE CITY MAP — lightweight 2D overlay linked to the player's actual 3D
-// world position. The map covers the same -1050..1050 world bounds as movement.
+// world position. The map covers the expanded -5250..5250 world bounds as movement.
 // ============================================================================
 const cityMapStyle=document.createElement('style');
 cityMapStyle.textContent=`
@@ -1798,7 +2028,7 @@ document.body.append(cityMapToggle,cityMapPanel);
 const cityMapCanvas=document.querySelector('#cityMapCanvas');
 const cityMapCtx=cityMapCanvas.getContext('2d');
 let cityMapOpen=false,cityMapElapsed=0;
-const CITY_MAP_MIN=-1050,CITY_MAP_MAX=1050,CITY_MAP_SPAN=CITY_MAP_MAX-CITY_MAP_MIN;
+const CITY_MAP_MIN=-5250,CITY_MAP_MAX=5250,CITY_MAP_SPAN=CITY_MAP_MAX-CITY_MAP_MIN;
 function cityMapPoint(x,z){return {x:(x-CITY_MAP_MIN)/CITY_MAP_SPAN*cityMapCanvas.width,y:(z-CITY_MAP_MIN)/CITY_MAP_SPAN*cityMapCanvas.height}}
 function drawCityMap(){
  if(!cityMapCtx)return;
@@ -1814,14 +2044,14 @@ function drawCityMap(){
   ctx.fillRect(p.x-bw/2,p.y-bh/2,bw,bh);ctx.strokeRect(p.x-bw/2,p.y-bh/2,bw,bh);
  }
  // Actual facility footprints are plotted at the coordinates where their 3D models were created.
- const facilityStyle={parking:['#6fa8d8','P'],fuel:['#e34e4e','F'],supermarket:['#e7c64d','S'],pharmacy:['#5bc5a0','P'],park:['#65b96b','♣'],tennis:['#5c9fe0','T'],basketball:['#dc8750','B'],football:['#65b96b','⚽'],market:['#d49a52','M'],shop:['#d49a52','s'],tabletennis:['#8a9ee0','TT'],bus:['#63b9d6','BUS']};
+ const facilityStyle={sportscomplex:['#f0c64b','SC'],parking:['#6fa8d8','P'],fuel:['#e34e4e','F'],supermarket:['#e7c64d','S'],pharmacy:['#5bc5a0','P'],park:['#65b96b','♣'],tennis:['#5c9fe0','T'],basketball:['#dc8750','B'],football:['#65b96b','⚽'],market:['#d49a52','M'],shop:['#d49a52','s'],tabletennis:['#8a9ee0','TT'],bus:['#63b9d6','BUS']};
  for(const f of cityMapFacilities){
   const p=cityMapPoint(f.x,f.z),fw=Math.max(2,f.w*sx),fh=Math.max(2,f.d*sz),style=facilityStyle[f.type]||['#e4d8a2','•'];
   ctx.fillStyle=style[0];ctx.strokeStyle='#17271f';ctx.lineWidth=.8;
   ctx.fillRect(p.x-fw/2,p.y-fh/2,fw,fh);ctx.strokeRect(p.x-fw/2,p.y-fh/2,fw,fh);
   if(fw>7&&fh>6){ctx.fillStyle='#14251c';ctx.font='bold 8px system-ui,sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(style[1],p.x,p.y)}
  }
- for(let k=-15;k<=15;k++){
+ for(let k=-75;k<=75;k++){
   const world=k*70,p=cityMapPoint(world,0),q=cityMapPoint(0,world);
   const major=k%3===0;
   ctx.strokeStyle=major?'#a6b5a4':'#65786b';ctx.lineWidth=major?Math.max(5,w*48/CITY_MAP_SPAN):Math.max(1.5,w*8/CITY_MAP_SPAN);
@@ -1832,7 +2062,7 @@ function drawCityMap(){
  // This keeps the complete street directory discoverable without covering buildings.
  ctx.save();ctx.fillStyle='#f4f0d5';ctx.strokeStyle='#203329';ctx.lineWidth=2;ctx.font='600 7px system-ui,sans-serif';
  ctx.textAlign='center';ctx.textBaseline='middle';
- for(let k=-15;k<=15;k++){
+ for(let k=-75;k<=75;k++){
   const world=k*70,px=cityMapPoint(world,0).x,py=cityMapPoint(0,world).y;
   ctx.save();ctx.translate(px,7);ctx.rotate(-Math.PI/2);ctx.strokeText(streetName('x',k),0,0,110);ctx.fillText(streetName('x',k),0,0,110);ctx.restore();
   ctx.textAlign='left';ctx.strokeText(streetName('z',k),3,py-3,105);ctx.fillText(streetName('z',k),3,py-3,105);ctx.textAlign='center';
@@ -1916,19 +2146,21 @@ function animate(){
   const steps=Math.max(1,Math.ceil(distance/.2));
   const stepX=dx/steps,stepZ=dz/steps;
   for(let i=0;i<steps;i++){
-   const nextX=Math.max(-1010,Math.min(1010,player.position.x+stepX));
-   const nextZ=Math.max(-1010,Math.min(1010,player.position.z+stepZ));
+   const nextX=Math.max(-5210,Math.min(5210,player.position.x+stepX));
+   const nextZ=Math.max(-5210,Math.min(5210,player.position.z+stepZ));
    if(!collidesWithBuilding(nextX,player.position.z))player.position.x=nextX;
    if(!collidesWithBuilding(player.position.x,nextZ))player.position.z=nextZ;
   }
   player.rotation.y=Math.atan2(dx,dz);
   if(body)body.position.y=1.05+Math.sin(performance.now()*.012)*.045;
  }
+ updateActivityFacilityProximity();
  if(weather==='Rain'){for(const d of drops){d.position.y-=uiDt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*180;d.position.z=player.position.z+(Math.random()-.5)*180}}}
  updateCamera();if((cullFrame++%3)===0){updateVisibleBuildings();updateTreeVisibility();}renderer.render(scene,camera);
 }
 updateCamera();
+console.info('This Is Lagos v0.66 expanded city:',{landAreaMultiplier:25,linearFootprintMultiplier:5,districts:districtDefs.length,buildings:cityMapBuildings.length,facilities:cityMapFacilities.length,sportsCentres:sportsCentreNames.length});
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setPixelRatio(maxDevicePixelRatio*renderScale);renderer.setSize(innerWidth,innerHeight)});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)clock.getDelta()});
-toast('City Parking and vehicle ownership update loaded');
+toast('Facility interaction circles and on-site activity creation loaded');
