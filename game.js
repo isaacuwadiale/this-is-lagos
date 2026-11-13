@@ -337,10 +337,9 @@ const cityGroundMat=mat(0x789b70), asphaltMat=mat(0x303735), laneMat=mat(0xe8dfc
       curbMat=mat(0xbfc8b9), sandMat=mat(0xc7ad83), lagoonMat=new THREE.MeshStandardMaterial({color:0x3f8f9a,roughness:.35,metalness:.12}),
       roofMat=mat(0x8e5140), concreteMat=mat(0xb9b7a9), marketMat=mat(0xd5b46e),
       sportGreen=mat(0x287b43), sportBlue=mat(0x276a9a), sportRed=mat(0xb74b3b);
-// v0.69 z-fight fix: ground is pushed back, asphalt pulled forward, lane blocks pulled further forward
+// v0.69 z-fight fix: ground pushed back, asphalt pulled forward. (The laneMat blocks below are buried 3.5cm under the asphalt and are deliberately NOT offset, or they poke through at grazing angles.)
 cityGroundMat.polygonOffset=true;cityGroundMat.polygonOffsetFactor=2;cityGroundMat.polygonOffsetUnits=2;
 asphaltMat.polygonOffset=true;asphaltMat.polygonOffsetFactor=-1;asphaltMat.polygonOffsetUnits=-1;
-laneMat.polygonOffset=true;laneMat.polygonOffsetFactor=-2;laneMat.polygonOffsetUnits=-2;
 block(10500,.35,10500,cityGroundMat,0,-.42,0);
 
 // Lagos-style lagoon/waterfront on the south-eastern edge with a sandy shore.
@@ -381,13 +380,8 @@ const aveSpans=junctionSpans('avenue',false,STOP_OFF), aveDashSpans=junctionSpan
 for(let p=-5040;p<=5040;p+=210){
   block(48,.18,10500,asphaltMat,p,-.12,0);
   block(10500,.18,48,asphaltMat,0,-.12,p);
-  for(const [a,b] of freeRuns(-5250,5250,aveSpans)){
-    const m=(a+b)/2,l=b-a;
-    block(1,.025,l,laneMat,p-12,.0,m);
-    block(1,.025,l,laneMat,p+12,.0,m);
-    block(l,.025,1,laneMat,m,.0,p-12);
-    block(l,.025,1,laneMat,m,.0,p+12);
-  }
+  // v0.69: removed the old 1m laneMat strips at p+-12. They sat 3.5cm UNDER the asphalt (top .025 vs asphalt .06), so they only ever
+  // showed as z-fighting streaks / flashing white lines. The lane dividers are the painted dashes in the paint section below.
 }
 for(let p=-5180;p<=5180;p+=70){
   if(Math.abs(p%210)<1) continue;
@@ -489,10 +483,10 @@ buildSidewalkNetwork();
 
 // Realistic road paint: avenue centre lines, broken lane dividers, edge lines,
 // turn arrows and stop bars. All paint sits slightly above the asphalt.
-const PAINT_OFFSET={polygonOffset:true,polygonOffsetFactor:-4,polygonOffsetUnits:-4};
+const PAINT_OFFSET={polygonOffset:true,polygonOffsetFactor:-2,polygonOffsetUnits:-2};
 const paintWhite=new THREE.MeshBasicMaterial({color:0xf4f2df,...PAINT_OFFSET});
 const paintYellow=new THREE.MeshBasicMaterial({color:0xf1c84b,...PAINT_OFFSET});
-const paintArrow=new THREE.MeshBasicMaterial({color:0xf4f2df,side:THREE.DoubleSide,polygonOffset:true,polygonOffsetFactor:-6,polygonOffsetUnits:-6});
+const paintArrow=new THREE.MeshBasicMaterial({color:0xf4f2df,side:THREE.DoubleSide,polygonOffset:true,polygonOffsetFactor:-3,polygonOffsetUnits:-3});
 const roadPaintBatches=new Map(),roadArrowRecords=[];
 function roadPaint(w,d,x,z,material=paintWhite,y=.018){
  let batch=roadPaintBatches.get(material);if(!batch){batch=[];roadPaintBatches.set(material,batch)}
@@ -516,10 +510,12 @@ for(let p=-5040;p<=5040;p+=210){
    roadPaint(l,.22,m,p+offset,paintYellow,.08);
   }
  }
- for(let q=-5190;q<5190;q+=18){
-  if(!dashClear(q,7,aveDashSpans))continue;
-  roadPaint(.16,7,p-12,q,paintWhite,.08);roadPaint(.16,7,p+12,q,paintWhite,.08);
-  roadPaint(7,.16,q,p-12,paintWhite,.08);roadPaint(7,.16,q,p+12,paintWhite,.08);
+ // Lane dividers: thin (.15m) BROKEN white lines, 4m dash then 10m gap.
+ const DASH_LEN=4,DASH_PERIOD=14;
+ for(let q=-5190;q<5190;q+=DASH_PERIOD){
+  if(!dashClear(q,DASH_LEN,aveDashSpans))continue;
+  roadPaint(.15,DASH_LEN,p-12,q,paintWhite,.08);roadPaint(.15,DASH_LEN,p+12,q,paintWhite,.08);
+  roadPaint(DASH_LEN,.15,q,p-12,paintWhite,.08);roadPaint(DASH_LEN,.15,q,p+12,paintWhite,.08);
  }
  // Kerb/edge lines on both sides of each main avenue; gaps at junctions and side-street mouths.
  for(const side of [-1,1]){
