@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.60 — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
+// THIS IS LAGOS v0.60 — Lagos street names, physical street signs and Grand Dealership on Isaac Uwadiale Road — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -27,6 +27,24 @@ const buildingColliders=[];
 // Exact world-space footprints used by the live 2D map.
 const cityMapBuildings=[];
 const cityMapFacilities=[];
+// v0.60: named Lagos street grid. The same registry drives street signs and map labels.
+const verticalStreetNames=[
+ 'Badagry Expressway','Murtala Muhammed Way','Agege Motor Road','Ikorodu Road','Herbert Macaulay Way',
+ 'Yaba Road','Oshodi-Apapa Expressway','Western Avenue','Funsho Williams Avenue','Eko Bridge Approach',
+ 'Marina Street','Broad Street','Nnamdi Azikiwe Street','Idumagbo Avenue','Balogun Street',
+ 'Isaac Uwadiale Road','Igbosere Road','Bourdillon Road','Alexander Road','Awolowo Road',
+ 'Adeola Odeku Street','Ahmadu Bello Way','Ozumba Mbadiwe Avenue','Akin Adesola Street','Ligali Ayorinde Street',
+ 'Ajose Adeogun Street','Sanusi Fafunwa Street','Bishop Oluwole Street','Admiralty Way','Fola Osibo Road','Lekki-Epe Expressway'
+];
+const horizontalStreetNames=[
+ 'Ojo-Igbede Road','Festac Link Road','Amuwo Odofin Road','Mile 2 Road','Apapa-Oshodi Expressway',
+ 'Ijora Causeway','Eko Bridge Road','Carter Bridge Road','Tinubu Street','Martins Street',
+ 'Lagos Island Road','Campbell Street','Kofo Abayomi Street','Onikan Road','King George V Road',
+ 'Oniru Estate Road','Thompson Avenue','Gerrard Road','Ikoyi Crescent','Queens Drive',
+ 'Admiralty Road','Freedom Way','Jakande Roundabout Road','Chevron Drive','Orchid Road',
+ 'Allen Avenue','Opebi Road','Obafemi Awolowo Way','Adeniyi Jones Avenue','Mobolaji Bank Anthony Way','Ikeja Along Road'
+];
+function streetName(axis,index){const names=axis==='x'?verticalStreetNames:horizontalStreetNames;return names[index+15]||`${axis==='x'?'Lagos North-South':'Lagos East-West'} Street ${index+15}`;}
 function recordCityFacility(type,x,z,w,d,label){cityMapFacilities.push({type,x,z,w,d,label:label||type.toUpperCase()});}
 // Shared reserved footprints prevent later buildings from occupying sports courts or amenities.
 const amenityColliders=[];
@@ -725,6 +743,28 @@ function signBoard(text,x,z,width=22,color=0x176b43){
  const tex=new THREE.CanvasTexture(canvas);const mesh=new THREE.Mesh(new THREE.PlaneGeometry(width,5),new THREE.MeshBasicMaterial({map:tex,transparent:false,side:THREE.DoubleSide}));
  mesh.position.set(x,7,z);scene.add(mesh);return mesh;
 }
+// Physical street-name signs at key junctions; the Isaac Uwadiale road is the
+// Grand Dealership corridor (the centre north-south street in this city grid).
+function addStreetNameSign(name,x,z,axis){
+ const postMat=mat(0x59645d),post=new THREE.Mesh(new THREE.CylinderGeometry(.13,.17,5.2,7),postMat);
+ post.position.set(x,2.6,z);scene.add(post);
+ const boardW=Math.min(17,Math.max(10,name.length*.48));
+ const board=signBoard(name.toUpperCase(),x,z,boardW,0x174f78);
+ board.position.set(x,5.35,z);
+ if(axis==='z')board.rotation.y=Math.PI/2;
+ return board;
+}
+function buildStreetNameSigns(){
+ for(let k=-15;k<=15;k++){
+  const road=k*70,half=(k%3===0)?24:4;
+  // One visible sign for each north-south and east-west street, positioned on pavement.
+  const vx=road+half+2.0,vz=-455;
+  addStreetNameSign(streetName('x',k),vx,vz,'x');
+  const hx=-455,hz=road+half+2.0;
+  addStreetNameSign(streetName('z',k),hx,hz,'z');
+ }
+}
+buildStreetNameSigns();
 function palmTree(x,z,scale=1){addTree(x,z,scale*1.15,'palm')}
 function fencedPitch(cx,cz,name='FOOTBALL PITCH',surface=sportGreen){
  const g=new THREE.Group();g.position.set(cx,0,cz);scene.add(g);
@@ -1340,43 +1380,8 @@ function openTransport(){
  const calc=()=>{const km=Number(document.querySelector('#tripPlace')?.value||2),type=document.querySelector('#tripType')?.value||'taxi';const rate={taxi:180,danfo:55,bike:110,boat:220}[type];document.querySelector('#fareQuote').textContent='Estimated fare: ₦'+Math.max(100,Math.round(km*rate/50)*50).toLocaleString('en-NG')+' · '+km+' km'};
  document.querySelector('#tripPlace').onchange=calc;document.querySelector('#tripType').onchange=calc;calc();
 }
-// GRAND GARAGE INVENTORY — local prototype data layer.
-// This adapter is intentionally isolated so it can be replaced by a secure online API.
-const GRAND_GARAGE_KEY='til-grand-garage-inventory-v1';
-const starterGarage=[
- {id:'TIL-CAR-0001',name:'City compact car',type:'Car',price:8500000,topSpeed:160,acceleration:12,handling:55,braking:50,power:110,totalStock:12,soldCount:0,active:true},
- {id:'TIL-CAR-0002',name:'Family SUV',type:'Car',price:18000000,topSpeed:190,acceleration:9,handling:62,braking:60,power:180,totalStock:8,soldCount:0,active:true},
- {id:'TIL-BUS-0001',name:'Commercial danfo',type:'Bus',price:12000000,topSpeed:120,acceleration:18,handling:42,braking:45,power:150,totalStock:20,soldCount:0,active:true},
- {id:'TIL-BIKE-0001',name:'Okada motorcycle',type:'Bike',price:1200000,topSpeed:115,acceleration:5,handling:78,braking:55,power:18,totalStock:30,soldCount:0,active:true},
- {id:'TIL-BOAT-0001',name:'Passenger speedboat',type:'Boat',price:25000000,topSpeed:95,acceleration:8,handling:70,braking:50,power:250,totalStock:5,soldCount:0,active:true}
-];
-function readGarageInventory(){try{const saved=JSON.parse(localStorage.getItem(GRAND_GARAGE_KEY)||'null');if(Array.isArray(saved))return saved}catch(_e){};localStorage.setItem(GRAND_GARAGE_KEY,JSON.stringify(starterGarage));return starterGarage.map(v=>({...v}))}
-function saveGarageInventory(items){localStorage.setItem(GRAND_GARAGE_KEY,JSON.stringify(items))}
-function garageMoney(n){return '₦'+Number(n||0).toLocaleString('en-NG')}
-function garageId(){return 'TIL-'+Date.now().toString(36).toUpperCase()+'-'+Math.random().toString(36).slice(2,6).toUpperCase()}
-function getGarageVehicle(id){return readGarageInventory().find(v=>v.id===id)}
-function openDealer(){
- const items=readGarageInventory().filter(v=>v.active).map(v=>{const available=Math.max(0,Number(v.totalStock||0)-Number(v.soldCount||0));return `<div class="activity-row" style="display:block;margin:9px 0;padding:12px"><b>${escapeVehicleText(v.name)}</b><span style="display:block">${escapeVehicleText(v.type)} · ${garageMoney(v.price)}</span><span style="display:block">Top speed ${Number(v.topSpeed)||0} km/h · ${available} available</span><button class="panel-button" data-vehicle="${escapeVehicleText(v.id)}" ${available<1?'disabled':''}>View vehicle</button></div>`}).join('');
- modal('Grand Garage — official dealership',`<p>All vehicles for sale enter the game through the Grand Garage. Browse the available stock and vehicle performance.</p>${items||'<p>No vehicles are currently listed for sale.</p>'}<p class="small-note">Prototype catalogue: inventory is saved in this browser only. Purchases, payments and stock deductions are not enabled yet; a secure shared backend is required before players can buy.</p>`,[['Close',null,true]]);
- document.querySelectorAll('[data-vehicle]').forEach(b=>b.onclick=()=>{const v=getGarageVehicle(b.dataset.vehicle);if(!v)return;const available=Math.max(0,v.totalStock-v.soldCount);modal('Vehicle details',`<p><b>${escapeVehicleText(v.name)}</b></p><p>${escapeVehicleText(v.id)} · ${escapeVehicleText(v.type)}</p><p>Price: <b>${garageMoney(v.price)}</b></p><p>Top speed: ${v.topSpeed} km/h · Acceleration: ${v.acceleration}s (0–100 km/h)</p><p>Handling: ${v.handling}/100 · Braking: ${v.braking}/100 · Engine: ${v.power} HP</p><p>Available stock: ${available}</p><p class="small-note">Purchase is a preview only. No wallet is charged and no vehicle is transferred.</p>`,[['Back to Grand Garage',()=>openDealer(),true]])});
-}
-function openGarageAdmin(){
- const items=readGarageInventory();
- const rows=items.map(v=>{const available=Math.max(0,Number(v.totalStock||0)-Number(v.soldCount||0));return `<div class="activity-row" style="display:block;margin:9px 0;padding:12px"><b>${escapeVehicleText(v.name)}</b><span style="display:block">${escapeVehicleText(v.id)} · ${escapeVehicleText(v.type)}</span><span style="display:block">${garageMoney(v.price)} · ${v.topSpeed} km/h · ${available} available / ${v.totalStock} total</span><span style="display:block">${v.active?'Listed for sale':'Not listed'} · ${v.soldCount} sold</span><div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:8px"><button class="panel-button" data-edit-stock="${escapeVehicleText(v.id)}">Edit vehicle</button><button class="panel-button" data-toggle-stock="${escapeVehicleText(v.id)}">${v.active?'Unlist':'List for sale'}</button></div></div>`}).join('');
- modal('Grand Garage — admin inventory',`<p><b>Vehicle catalogue and stock control</b></p><p>Create each vehicle once, then increase its total stock whenever more units are added. Existing sales and ownership records must remain intact.</p>${rows}<button class="panel-button" id="addGarageVehicle" style="width:100%;margin:10px 0">＋ Create new vehicle</button><p class="small-note">ADMIN PROTOTYPE: this screen is not password-protected and data is saved only on this device. Do not use it as a live multiplayer admin panel. Online authentication, roles and server-side inventory controls are required before deployment.</p>`,[['Close',null,true]]);
- document.querySelector('#addGarageVehicle')?.addEventListener('click',()=>openGarageVehicleEditor());
- document.querySelectorAll('[data-edit-stock]').forEach(b=>b.onclick=()=>openGarageVehicleEditor(getGarageVehicle(b.dataset.editStock)));
- document.querySelectorAll('[data-toggle-stock]').forEach(b=>b.onclick=()=>{const all=readGarageInventory(),v=all.find(x=>x.id===b.dataset.toggleStock);if(v){v.active=!v.active;saveGarageInventory(all);openGarageAdmin()}});
-}
-function openGarageVehicleEditor(vehicle=null){
- const v=vehicle||{name:'',type:'Car',price:0,topSpeed:160,acceleration:10,handling:50,braking:50,power:100,totalStock:1,soldCount:0};
- const isNew=!vehicle;
- const body=`<p>${isNew?'Create a new vehicle listing.':'Edit vehicle details and inventory.'}</p><div class="creator-grid"><label>Vehicle name<input id="ggName" maxlength="60" value="${escapeVehicleText(v.name)}"></label><label>Vehicle type<select id="ggType">${['Car','SUV','Bus','Bike','Boat','Truck','Van'].map(t=>`<option ${v.type===t?'selected':''}>${t}</option>`).join('')}</select></label><label>Price (₦)<input id="ggPrice" type="number" min="0" value="${v.price}"></label><label>Top speed (km/h)<input id="ggSpeed" type="number" min="1" value="${v.topSpeed}"></label><label>0–100 km/h (seconds)<input id="ggAccel" type="number" min="0" step="0.1" value="${v.acceleration}"></label><label>Handling (0–100)<input id="ggHandling" type="number" min="0" max="100" value="${v.handling}"></label><label>Braking (0–100)<input id="ggBraking" type="number" min="0" max="100" value="${v.braking}"></label><label>Engine power (HP)<input id="ggPower" type="number" min="0" value="${v.power}"></label><label>Total stock units<input id="ggStock" type="number" min="${Number(v.soldCount||0)}" value="${v.totalStock}"></label></div><p class="small-note">Total stock cannot be lower than the number already sold (${Number(v.soldCount||0)}). Increase this number later to add more units.</p>`;
- modal(isNew?'Create vehicle':'Edit vehicle',body,[['Save vehicle',()=>{const name=document.querySelector('#ggName')?.value.trim();const price=Number(document.querySelector('#ggPrice')?.value),speed=Number(document.querySelector('#ggSpeed')?.value),stock=Number(document.querySelector('#ggStock')?.value);if(!name||!Number.isFinite(price)||price<0||!Number.isFinite(speed)||speed<1||!Number.isInteger(stock)||stock<Number(v.soldCount||0)){toast('Check the vehicle name, price, speed and stock');openGarageVehicleEditor(vehicle);return}const all=readGarageInventory();const updated={...v,id:isNew?garageId():v.id,name,type:document.querySelector('#ggType').value,price,topSpeed:speed,acceleration:Number(document.querySelector('#ggAccel').value)||0,handling:Math.max(0,Math.min(100,Number(document.querySelector('#ggHandling').value)||0)),braking:Math.max(0,Math.min(100,Number(document.querySelector('#ggBraking').value)||0)),power:Number(document.querySelector('#ggPower').value)||0,totalStock:stock,soldCount:Number(v.soldCount||0),active:true};if(isNew)all.push(updated);else{const i=all.findIndex(x=>x.id===v.id);if(i>=0)all[i]=updated}saveGarageInventory(all);toast(isNew?'Vehicle created and saved':'Vehicle updated and saved');openGarageAdmin()}],['Cancel',()=>openGarageAdmin(),true]]);
-}
-// Admin inventory controls are intentionally not injected into the player game UI.
-// Use the separate admin-control.html page on the same origin for this local prototype.
-const demoStock=readGarageInventory().map(v=>[v.name,v.type,garageMoney(v.price)]);
+const demoStock=[['City compact car','Car','₦8,500,000'],['Family SUV','Car','₦18,000,000'],['Commercial danfo','Bus','₦12,000,000'],['Okada motorcycle','Bike','₦1,200,000'],['Passenger speedboat','Boat','₦25,000,000']];
+function openDealer(){const items=demoStock.map((v,i)=>`<div class="activity-row"><b>${v[0]}</b><span>${v[1]} · ${v[2]}</span><button class="panel-button" data-vehicle="${i}">View purchase</button></div>`).join('');modal('Grand Dealership · Isaac Uwadiale Road',`<p><b>Location:</b> Isaac Uwadiale Road, Lagos. Vehicles and prices are set by the game operator. A player may buy for themselves or choose another player as recipient.</p>${items}<p class="small-note">Catalogue prices are illustrative placeholders. Purchases and real-money payment are not enabled in this prototype.</p>`,[['Close',null,true]]);document.querySelectorAll('[data-vehicle]').forEach(b=>b.onclick=()=>{const v=demoStock[Number(b.dataset.vehicle)];modal('Vehicle purchase preview',`<p><b>${v[0]}</b></p><p>Listed demo price: ${v[2]}</p><label class="recipient-label">Recipient player<input id="vehicleRecipient" placeholder="Enter player name" value="Your character"></label><p class="small-note">No payment will be taken in this preview.</p>`,[['Confirm preview',()=>toast('Purchase flow previewed; no charge made.')],['Back',()=>openDealer(),true]])})}
 // Vehicle ownership registry — local prototype only. A secure server must become authoritative
 // before ownership, unlock credentials, theft reports or purchases are used in multiplayer.
 const VEHICLE_REGISTRY_KEY='til-owned-vehicles-v1';
@@ -1388,16 +1393,43 @@ function createUnlockCode(){return String(Math.floor(100000+Math.random()*900000
 function registerDemoVehicle(model,type){
  const records=readOwnedVehicles();
  const name=String(avatarSettings?.name||'New Lagosian').slice(0,24);
- const record={id:createVehicleId(),model,type,ownerName:name,ownerId:'local-player',unlockCode:createUnlockCode(),locked:true,status:'registered',createdAt:new Date().toISOString(),prototype:true};
+ const record={id:createVehicleId(),model,type,ownerName:name,ownerId:'local-player',unlockCode:createUnlockCode(),locked:true,status:'registered',parkedAt:null,createdAt:new Date().toISOString(),prototype:true};
  records.push(record);saveOwnedVehicles(records);toast('Test vehicle registered to '+name);openGarage();
 }
+function isAtCityParking(){return Math.hypot(player.position.x-CITY_PARKING.x,player.position.z-CITY_PARKING.z)<=CITY_PARKING.radius}
+function parkOwnedVehicle(vehicleId){
+ const records=readOwnedVehicles(),v=records.find(x=>x.id===vehicleId);
+ if(!v||v.ownerId!=='local-player'){toast('Only vehicles registered to this character can be parked.');return}
+ if(!isAtCityParking()){toast('Walk to the marked City Parking area first.');return}
+ if(v.status==='parked'){toast('This vehicle is already parked.');return}
+ v.status='parked';v.parkedAt={name:CITY_PARKING.name,x:CITY_PARKING.x,z:CITY_PARKING.z,at:new Date().toISOString()};
+ saveOwnedVehicles(records);toast(v.model+' parked in City Parking.');openCityParking();
+}
+function retrieveOwnedVehicle(vehicleId){
+ const records=readOwnedVehicles(),v=records.find(x=>x.id===vehicleId);
+ if(!v||v.ownerId!=='local-player'){toast('Only the registered owner can retrieve this vehicle.');return}
+ if(!isAtCityParking()){toast('Walk to City Parking to retrieve this vehicle.');return}
+ if(v.status!=='parked'){toast('This vehicle is not parked here.');return}
+ v.status='registered';v.parkedAt=null;saveOwnedVehicles(records);
+ toast(v.model+' retrieved.');openCityParking();
+}
+function openCityParking(){
+ const records=readOwnedVehicles().filter(v=>v.ownerId==='local-player');
+ const nearby=isAtCityParking();
+ const rows=records.length?records.map((v,i)=>`<div class="activity-row" style="display:block;margin:10px 0;padding:12px"><b>${escapeVehicleText(v.model)}</b><span style="display:block">${escapeVehicleText(v.type)} · ${escapeVehicleText(v.id)}</span><span style="display:block">Status: <b>${v.status==='parked'?'Parked here':'Not parked'}</b></span>${v.status==='parked'?`<button class="panel-button" data-retrieve-vehicle="${i}" ${nearby?'':'disabled'}>Retrieve vehicle</button>`:`<button class="panel-button" data-park-vehicle="${i}" ${nearby?'':'disabled'}>Park vehicle</button>`}</div>`).join(''):'<p>You do not have any vehicles registered to this character yet.</p>';
+ const distance=Math.round(Math.hypot(player.position.x-CITY_PARKING.x,player.position.z-CITY_PARKING.z));
+ modal('Public City Parking',`<p><b>${CITY_PARKING.name}</b></p><p>${nearby?'You are inside the parking area.':'Walk to the marked parking area to park or retrieve a vehicle.'} ${nearby?'':`Approx. ${distance}m away.`}</p><p>Only vehicles owned by your character can be parked or retrieved. Dealer display vehicles remain in dealer garages.</p>${rows}<p class="small-note">Parking records are saved on this device. Vehicle models are not yet spawned as drivable 3D cars; this update connects parking status to registered ownership.</p>`,[['Back to my garage',()=>openGarage(),true],['Close',null,true]]);
+ document.querySelectorAll('[data-park-vehicle]').forEach(b=>b.addEventListener('click',()=>parkOwnedVehicle(records[Number(b.dataset.parkVehicle)]?.id)));
+ document.querySelectorAll('[data-retrieve-vehicle]').forEach(b=>b.addEventListener('click',()=>retrieveOwnedVehicle(records[Number(b.dataset.retrieveVehicle)]?.id)));
+}
 function openGarage(){
- const records=readOwnedVehicles();
- const rows=records.length?records.map((v,i)=>`<div class="activity-row" style="display:block;margin:10px 0;padding:12px"><b>${escapeVehicleText(v.model)}</b><span style="display:block">${escapeVehicleText(v.type)} · ${escapeVehicleText(v.id)}</span><span style="display:block">Owner: ${escapeVehicleText(v.ownerName)} · ${v.locked?'Locked':'Unlocked'}</span><span style="display:block;font-size:12px;opacity:.8">Unlock code: <b id="vehicleCode-${i}">••••••</b></span><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="panel-button" data-reveal-code="${i}">Show code</button><button class="panel-button" data-copy-code="${i}">Copy code</button></div><small style="display:block;margin-top:7px">Local test record · not a paid or server-verified vehicle</small></div>`).join(''):'<p>No vehicles are registered to this character yet.</p>';
- modal('Vehicle garage & ownership',`<p><b>Your registered vehicles</b></p>${rows}<button class="panel-button" id="registerTestVehicle" style="width:100%;margin:10px 0">＋ Register a test vehicle</button><p>Each vehicle receives a unique vehicle ID, registered owner and six-digit unlock code. The owner is taken from the current character profile.</p><p class="small-note">This is a local prototype: records are saved only in this browser and are not shared with other players. Unlock codes are prototype credentials, not secure anti-theft keys. Physical-touch locking/unlocking will be connected when drivable vehicle objects are added to the world. No payment or real-money wallet is connected.</p>`,[['Close',null,true]]);
+ const records=readOwnedVehicles().filter(v=>v.ownerId==='local-player');
+ const rows=records.length?records.map((v,i)=>`<div class="activity-row" style="display:block;margin:10px 0;padding:12px"><b>${escapeVehicleText(v.model)}</b><span style="display:block">${escapeVehicleText(v.type)} · ${escapeVehicleText(v.id)}</span><span style="display:block">Owner: ${escapeVehicleText(v.ownerName)} · ${v.locked?'Locked':'Unlocked'}</span><span style="display:block">Parking: ${v.status==='parked'?'Parked at '+escapeVehicleText(v.parkedAt?.name||CITY_PARKING.name):'Not parked'}</span><span style="display:block;font-size:12px;opacity:.8">Unlock code: <b id="vehicleCode-${i}">••••••</b></span><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="panel-button" data-reveal-code="${i}">Show code</button><button class="panel-button" data-copy-code="${i}">Copy code</button></div><small style="display:block;margin-top:7px">Local test record · not a paid or server-verified vehicle</small></div>`).join(''):'<p>No vehicles are registered to this character yet.</p>';
+ modal('Vehicle garage & ownership',`<p><b>Your registered vehicles</b></p>${rows}<button class="panel-button" id="openCityParking" style="width:100%;margin:10px 0">Open City Parking</button><button class="panel-button" id="registerTestVehicle" style="width:100%;margin:10px 0">＋ Register a test vehicle</button><p>Each vehicle has a unique vehicle ID, registered owner and six-digit unlock code. The owner is taken from the current character profile.</p><p class="small-note">This is a local prototype: records are saved only in this browser and are not shared with other players. Unlock codes are prototype credentials, not secure anti-theft keys. No payment or real-money wallet is connected.</p>`,[['Close',null,true]]);
+ document.querySelector('#openCityParking')?.addEventListener('click',openCityParking);
  document.querySelector('#registerTestVehicle')?.addEventListener('click',()=>{
-  const currentStock=readGarageInventory();const opts=currentStock.map((v,i)=>`<option value="${i}">${escapeVehicleText(v.name)} · ${escapeVehicleText(v.type)}</option>`).join('');
-  modal('Register a test vehicle',`<p>Select a vehicle model to create a local ownership record. This does not purchase or spawn a drivable vehicle.</p><label>Vehicle model<select id="testVehicleModel">${opts}</select></label>`,[['Register test record',()=>{const v=readGarageInventory()[Number(document.querySelector('#testVehicleModel')?.value)||0];registerDemoVehicle(v.name,v.type)}],['Cancel',()=>openGarage(),true]]);
+  const opts=demoStock.map((v,i)=>`<option value="${i}">${escapeVehicleText(v[0])} · ${escapeVehicleText(v[1])}</option>`).join('');
+  modal('Register a test vehicle',`<p>Select a vehicle model to create a local ownership record. This does not purchase or spawn a drivable vehicle.</p><label>Vehicle model<select id="testVehicleModel">${opts}</select></label>`,[['Register test record',()=>{const v=demoStock[Number(document.querySelector('#testVehicleModel')?.value)||0];registerDemoVehicle(v[0],v[1])}],['Cancel',()=>openGarage(),true]]);
  });
  document.querySelectorAll('[data-reveal-code]').forEach(b=>b.addEventListener('click',()=>{const i=Number(b.dataset.revealCode),el=document.querySelector('#vehicleCode-'+i);if(el){el.textContent=records[i]?.unlockCode||'Unavailable';b.textContent='Code shown'}}));
  document.querySelectorAll('[data-copy-code]').forEach(b=>b.addEventListener('click',async()=>{const code=records[Number(b.dataset.copyCode)]?.unlockCode;if(!code)return;try{await navigator.clipboard.writeText(code);toast('Unlock code copied')}catch(_e){toast('Copy is unavailable in this browser; reveal the code instead')}}));
@@ -1426,7 +1458,7 @@ document.querySelector('#profileBtn').onclick=()=>{
     }],['Cancel',null,true]]
   );
 };
-document.querySelector('#menuBtn').onclick=()=>modal('THIS IS LAGOS','<p>Welcome to the Lagos city prototype.</p><p><b>Prototype controls</b><br>WASD / arrow keys: move<br>Drag: look around<br>C: switch camera<br>Weather button: clear / rain</p><p>This v0.58 build is a local interface prototype. Vehicle ownership records are stored on this device only; shared ownership, secure vehicle keys, purchases, live multiplayer and real-money wallet payments require a secure online backend.</p>',[['Continue',null]]);
+document.querySelector('#menuBtn').onclick=()=>modal('THIS IS LAGOS','<p>Welcome to the Lagos city prototype.</p><p><b>Prototype controls</b><br>WASD / arrow keys: move<br>Drag: look around<br>C: switch camera<br>Weather button: clear / rain</p><p>This v0.59 build is a local interface prototype. Vehicle ownership records are stored on this device only; shared ownership, secure vehicle keys, purchases, live multiplayer and real-money wallet payments require a secure online backend.</p>',[['Continue',null]]);
 window.addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;if(e.key.toLowerCase()==='c')document.querySelector('#cameraBtn').click()});window.addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
 // Reliable camera controls: capture drag on the canvas and track globally.
 let pointer=null;
@@ -1493,6 +1525,18 @@ function updateVisibleBuildings(){
   }
  }
 }
+// Public city parking: a dedicated, walk-in parking area separate from dealer garages.
+// It is placed in a clear city block and registered on the live map.
+const CITY_PARKING={name:'Public City Parking',x:105,z:105,radius:34};
+amenityColliders.push({minX:CITY_PARKING.x-22,maxX:CITY_PARKING.x+22,minZ:CITY_PARKING.z-22,maxZ:CITY_PARKING.z+22});
+block(42,.16,42,asphaltMat,CITY_PARKING.x,-.12,CITY_PARKING.z);
+const parkingLineMat=mat(0xe8e8dc);
+for(let i=0;i<=6;i++){const x=CITY_PARKING.x-18+i*6;block(.22,.035,28,parkingLineMat,x,.05,CITY_PARKING.z+1);}
+block(38,.035,.28,parkingLineMat,CITY_PARKING.x,.05,CITY_PARKING.z-13);
+block(38,.035,.28,parkingLineMat,CITY_PARKING.x,.05,CITY_PARKING.z+15);
+signBoard('CITY PARKING',CITY_PARKING.x,CITY_PARKING.z-25,24,0x205c82);
+recordCityFacility('parking',CITY_PARKING.x,CITY_PARKING.z,42,42,CITY_PARKING.name);
+
 // All trees are registered by now: build instanced meshes, shade patches and trunk colliders.
 finalizeTrees();
 // Index building footprints into a spatial grid once. Movement checks now inspect
@@ -1535,7 +1579,7 @@ cityMapStyle.textContent=`
 document.head.appendChild(cityMapStyle);
 const cityMapToggle=document.createElement('button');cityMapToggle.id='cityMapToggle';cityMapToggle.type='button';cityMapToggle.textContent='MAP';cityMapToggle.setAttribute('aria-expanded','false');cityMapToggle.setAttribute('aria-controls','cityMapPanel');
 const cityMapPanel=document.createElement('section');cityMapPanel.id='cityMapPanel';cityMapPanel.setAttribute('aria-label','Lagos city map');
-cityMapPanel.innerHTML='<div id="cityMapHead"><strong>LAGOS CITY MAP</strong><button id="cityMapClose" type="button" aria-label="Close map">×</button></div><canvas id="cityMapCanvas" width="620" height="500" aria-label="Map showing roads, districts and your live position"></canvas><div id="cityMapFoot"><span>▲ NORTH</span><span id="cityMapPosition">Locating player…</span></div><div id="cityMapLegend">Buildings · Shops · Fuel · Markets · Parks · Bus stops · Sports</div>';
+cityMapPanel.innerHTML='<div id="cityMapHead"><strong>LAGOS CITY MAP</strong><button id="cityMapClose" type="button" aria-label="Close map">×</button></div><canvas id="cityMapCanvas" width="620" height="500" aria-label="Map showing roads, districts and your live position"></canvas><div id="cityMapFoot"><span>▲ NORTH</span><span id="cityMapPosition">Locating player…</span></div><div id="cityMapLegend">Buildings · Shops · Parking · Fuel · Markets · Parks · Bus stops · Sports · Named Lagos streets</div>';
 document.body.append(cityMapToggle,cityMapPanel);
 const cityMapCanvas=document.querySelector('#cityMapCanvas');
 const cityMapCtx=cityMapCanvas.getContext('2d');
@@ -1556,7 +1600,7 @@ function drawCityMap(){
   ctx.fillRect(p.x-bw/2,p.y-bh/2,bw,bh);ctx.strokeRect(p.x-bw/2,p.y-bh/2,bw,bh);
  }
  // Actual facility footprints are plotted at the coordinates where their 3D models were created.
- const facilityStyle={fuel:['#e34e4e','F'],supermarket:['#e7c64d','S'],pharmacy:['#5bc5a0','P'],park:['#65b96b','♣'],tennis:['#5c9fe0','T'],basketball:['#dc8750','B'],football:['#65b96b','⚽'],market:['#d49a52','M'],shop:['#d49a52','s'],tabletennis:['#8a9ee0','TT'],bus:['#63b9d6','BUS']};
+ const facilityStyle={parking:['#6fa8d8','P'],fuel:['#e34e4e','F'],supermarket:['#e7c64d','S'],pharmacy:['#5bc5a0','P'],park:['#65b96b','♣'],tennis:['#5c9fe0','T'],basketball:['#dc8750','B'],football:['#65b96b','⚽'],market:['#d49a52','M'],shop:['#d49a52','s'],tabletennis:['#8a9ee0','TT'],bus:['#63b9d6','BUS']};
  for(const f of cityMapFacilities){
   const p=cityMapPoint(f.x,f.z),fw=Math.max(2,f.w*sx),fh=Math.max(2,f.d*sz),style=facilityStyle[f.type]||['#e4d8a2','•'];
   ctx.fillStyle=style[0];ctx.strokeStyle='#17271f';ctx.lineWidth=.8;
@@ -1570,6 +1614,16 @@ function drawCityMap(){
   ctx.beginPath();ctx.moveTo(p.x,0);ctx.lineTo(p.x,h);ctx.stroke();
   ctx.beginPath();ctx.moveTo(0,q.y);ctx.lineTo(w,q.y);ctx.stroke();
  }
+ // Street names: every named road is labelled along the top or left map edge.
+ // This keeps the complete street directory discoverable without covering buildings.
+ ctx.save();ctx.fillStyle='#f4f0d5';ctx.strokeStyle='#203329';ctx.lineWidth=2;ctx.font='600 7px system-ui,sans-serif';
+ ctx.textAlign='center';ctx.textBaseline='middle';
+ for(let k=-15;k<=15;k++){
+  const world=k*70,px=cityMapPoint(world,0).x,py=cityMapPoint(0,world).y;
+  ctx.save();ctx.translate(px,7);ctx.rotate(-Math.PI/2);ctx.strokeText(streetName('x',k),0,0,110);ctx.fillText(streetName('x',k),0,0,110);ctx.restore();
+  ctx.textAlign='left';ctx.strokeText(streetName('z',k),3,py-3,105);ctx.fillText(streetName('z',k),3,py-3,105);ctx.textAlign='center';
+ }
+ ctx.restore();
  // District names and location markers use the same coordinates as the 3D city.
  ctx.textAlign='center';ctx.textBaseline='middle';
  for(const d of districtDefs){
@@ -1663,4 +1717,4 @@ updateCamera();
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setPixelRatio(maxDevicePixelRatio*renderScale);renderer.setSize(innerWidth,innerHeight)});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)clock.getDelta()});
-toast('Lagos vehicle ownership update v0.60 loaded');
+toast('City Parking and vehicle ownership update loaded');
