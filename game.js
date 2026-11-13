@@ -6,7 +6,7 @@ const mount=document.querySelector('#game');
 const scene=new THREE.Scene();
 scene.background=new THREE.Color(0x9fc9d4);
 scene.fog=new THREE.Fog(0x9fc9d4,700,3200);   // v0.68: haze now closes in before the far-cull distance so distant cells never visibly pop
-const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,.1,16000);
+const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,.3,4500);
 camera.position.set(0,5,9);
 const renderer=new THREE.WebGLRenderer({antialias:true, powerPreference:'high-performance'});
 // Start crisp, then reduce resolution only when sustained low FPS requires it.
@@ -337,6 +337,10 @@ const cityGroundMat=mat(0x789b70), asphaltMat=mat(0x303735), laneMat=mat(0xe8dfc
       curbMat=mat(0xbfc8b9), sandMat=mat(0xc7ad83), lagoonMat=new THREE.MeshStandardMaterial({color:0x3f8f9a,roughness:.35,metalness:.12}),
       roofMat=mat(0x8e5140), concreteMat=mat(0xb9b7a9), marketMat=mat(0xd5b46e),
       sportGreen=mat(0x287b43), sportBlue=mat(0x276a9a), sportRed=mat(0xb74b3b);
+// v0.69 z-fight fix: ground is pushed back, asphalt pulled forward, lane blocks pulled further forward
+cityGroundMat.polygonOffset=true;cityGroundMat.polygonOffsetFactor=2;cityGroundMat.polygonOffsetUnits=2;
+asphaltMat.polygonOffset=true;asphaltMat.polygonOffsetFactor=-1;asphaltMat.polygonOffsetUnits=-1;
+laneMat.polygonOffset=true;laneMat.polygonOffsetFactor=-2;laneMat.polygonOffsetUnits=-2;
 block(10500,.35,10500,cityGroundMat,0,-.42,0);
 
 // Lagos-style lagoon/waterfront on the south-eastern edge with a sandy shore.
@@ -485,13 +489,14 @@ buildSidewalkNetwork();
 
 // Realistic road paint: avenue centre lines, broken lane dividers, edge lines,
 // turn arrows and stop bars. All paint sits slightly above the asphalt.
-const paintWhite=new THREE.MeshBasicMaterial({color:0xf4f2df});
-const paintYellow=new THREE.MeshBasicMaterial({color:0xf1c84b});
-const paintArrow=new THREE.MeshBasicMaterial({color:0xf4f2df,side:THREE.DoubleSide});
+const PAINT_OFFSET={polygonOffset:true,polygonOffsetFactor:-4,polygonOffsetUnits:-4};
+const paintWhite=new THREE.MeshBasicMaterial({color:0xf4f2df,...PAINT_OFFSET});
+const paintYellow=new THREE.MeshBasicMaterial({color:0xf1c84b,...PAINT_OFFSET});
+const paintArrow=new THREE.MeshBasicMaterial({color:0xf4f2df,side:THREE.DoubleSide,polygonOffset:true,polygonOffsetFactor:-6,polygonOffsetUnits:-6});
 const roadPaintBatches=new Map(),roadArrowRecords=[];
 function roadPaint(w,d,x,z,material=paintWhite,y=.018){
  let batch=roadPaintBatches.get(material);if(!batch){batch=[];roadPaintBatches.set(material,batch)}
- batch.push({w,d,x,z,y});
+ batch.push({w,d,x,z,y:y>.05?y+.015:y+.012});   // lift paint clear of the asphalt top (avenue .06 / street -.04)
 }
 function flushRoadPaint(){
  for(const [material,records] of roadPaintBatches){
@@ -541,7 +546,7 @@ function flushRoadArrows(){
  const shape=new THREE.Shape();shape.moveTo(0,3.2);shape.lineTo(-1.1,1.2);shape.lineTo(-.38,1.2);shape.lineTo(-.38,-2.2);shape.lineTo(.38,-2.2);shape.lineTo(.38,1.2);shape.lineTo(1.1,1.2);shape.closePath();
  const mesh=new THREE.InstancedMesh(new THREE.ShapeGeometry(shape),paintArrow,roadArrowRecords.length);
  const dummy=new THREE.Object3D();
- roadArrowRecords.forEach((r,i)=>{dummy.position.set(r.x,.085,r.z);dummy.rotation.set(-Math.PI/2,r.rotation,0);dummy.scale.set(1,1,1);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix)});
+ roadArrowRecords.forEach((r,i)=>{dummy.position.set(r.x,.115,r.z);dummy.rotation.set(-Math.PI/2,r.rotation,0);dummy.scale.set(1,1,1);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix)});
  mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;scene.add(mesh);
 }
 // Add clear directional arrows on the four approaches to every major junction (kept behind the stop line).
