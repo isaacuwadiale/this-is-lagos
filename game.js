@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.68 — v0.67 plus: every building / sports centre / landmark fitted inside its city block (nothing on roads or pavements); view-only rendering (chunked instancing + distance/frustum cell culling). Earlier notes: v0.67 — v0.66 startup and shelter-placement performance fixes; 25x city land area and 25x city content quantity — 100 sports centres, existing two-pole district gateways retained — Lagos street names, physical street signs and Grand Dealership on Isaac Uwadiale Road — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
+// THIS IS LAGOS v0.70 (memory-lean: streamed street palms, lazy half-size sign textures, canvases released after GPU upload; nothing removed) — previous: v0.68 — v0.67 plus: every building / sports centre / landmark fitted inside its city block (nothing on roads or pavements); view-only rendering (chunked instancing + distance/frustum cell culling). Earlier notes: v0.67 — v0.66 startup and shelter-placement performance fixes; 25x city land area and 25x city content quantity — 100 sports centres, existing two-pole district gateways retained — Lagos street names, physical street signs and Grand Dealership on Isaac Uwadiale Road — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -17,6 +17,8 @@ renderer.shadowMap.enabled=false;
 renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;mount.appendChild(renderer.domElement);
 scene.add(new THREE.HemisphereLight(0xe7fff0,0x71856d,2));
 const sun=new THREE.DirectionalLight(0xfff2d5,2.5);sun.position.set(-35,55,25);sun.castShadow=false;scene.add(sun);
+// v0.70 MEMORY: a canvas-drawn texture frees its 2D canvas (CPU copy) as soon as the GPU has its own copy.
+function canvasTex(cv){const t=new THREE.CanvasTexture(cv);t.onUpdate=()=>{t.onUpdate=null;cv.width=cv.height=0};return t}
 const mat=(color,roughness=.85)=>new THREE.MeshStandardMaterial({color,roughness});
 const grass=mat(0x7eaa78),road=mat(0x343d3b),sidewalk=mat(0xc9d2c8),white=mat(0xf1f5e9),green=mat(0x18824a),glassMat=new THREE.MeshStandardMaterial({color:0x8eb8b4,roughness:.25,metalness:.15}),dark=mat(0x263a31);
 function block(w,h,d,m,x,y,z){const o=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m);o.position.set(x,y+h/2,z);o.castShadow=true;o.receiveShadow=true;scene.add(o);return o}
@@ -227,96 +229,159 @@ const shadeTex=(()=>{
  g.fillStyle=gr;g.fillRect(0,0,128,128);
  g.globalCompositeOperation='destination-out';
  for(let i=0;i<46;i++){const a=treeRand()*Math.PI*2,r=Math.sqrt(treeRand())*50;g.fillStyle='rgba(0,0,0,'+(.18+treeRand()*.3)+')';g.beginPath();g.arc(64+Math.cos(a)*r,64+Math.sin(a)*r,1.5+treeRand()*3.5,0,Math.PI*2);g.fill()}
- return new THREE.CanvasTexture(cv);
+ return canvasTex(cv);
 })();
 const shadeMat=new THREE.MeshBasicMaterial({map:shadeTex,transparent:true,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-2,polygonOffsetUnits:-2});
 const shadePlane=new THREE.PlaneGeometry(2,2);shadePlane.rotateX(-Math.PI/2);
 
 const TREE_CHUNK=160,TREE_CHUNK_R=144,TREE_NEAR_DIST=110,TREE_VIEW_DIST=900,TREE_SHADE_DIST=500;
-const treeChunks=new Map(),treeSpots=[];
+// v0.70 MEMORY: the ~500,000 street palms are no longer all built and kept in memory at once. Their positions are
+// generated deterministically per 160 m chunk (identical to before) and the chunk meshes are streamed in around the
+// player and released again when far away. Trunk collisions are computed from the same per-chunk positions.
+const treeChunks=new Map(),treeSpots=[];   // treeChunks = chunks currently streamed in; treeSpots = only the few hand-placed palms until finalizeTrees()
+const TREE_LOAD_DIST=TREE_VIEW_DIST+TREE_CHUNK_R+60,TREE_UNLOAD_DIST=TREE_LOAD_DIST+260;
+const treeRoot=new THREE.Group();
 // True when (x,z) lies on any carriageway or its pavement (plus a trunk margin). Trees are rejected there.
 function treeOnRoad(x,z,margin=3.4){
  const gx=Math.max(-5180,Math.min(5180,Math.round(x/70)*70)),gz=Math.max(-5180,Math.min(5180,Math.round(z/70)*70));
  const hx=Math.abs(gx%210)<1?24:4,hz=Math.abs(gz%210)<1?24:4;
  return Math.abs(x-gx)<hx+margin||Math.abs(z-gz)<hz+margin;
 }
+function makeTreeSpot(x,z,scale){
+ const h=treeHash(x,z),type=Math.floor(h*2)%2,s=scale*(.88+treeHash(x,z,3)*.28);
+ return {x,z,type,s,r:.55*s*TREE_TYPES[type].base+.35,rot:treeHash(x,z,4)*Math.PI*2,tr:.9+treeHash(x,z,5)*.14,tg:.92+treeHash(x,z,6)*.14,tb:.88+treeHash(x,z,7)*.16};
+}
 // Every tree is a palm (the kind argument is kept for older call sites). Returns false on a road.
 function addTree(x,z,scale=1,kind='palm',margin=3.4){
  if(treeOnRoad(x,z,margin))return false;
- const h=treeHash(x,z),type=Math.floor(h*2)%2;
- treeSpots.push({x,z,type,s:scale*(.88+treeHash(x,z,3)*.28),rot:treeHash(x,z,4)*Math.PI*2,tr:.9+treeHash(x,z,5)*.14,tg:.92+treeHash(x,z,6)*.14,tb:.88+treeHash(x,z,7)*.16});
+ treeSpots.push(makeTreeSpot(x,z,scale));
  return true;
 }
 // Continuous rows of palms on BOTH sides of every avenue and every local street, for the full length of each road.
 // The only gaps are where another road crosses; trees also keep clear of the very few streetlight poles and of
 // any building or amenity footprint.
-function addStreetTrees(){
+let treeFreeIdx=null;
+const treeExplicit=new Map(),treeSpotCache=new Map();
+function treeFreeAt(x,z,m){const a=treeFreeIdx.get(Math.floor(x/40)+','+Math.floor(z/40));if(!a)return true;for(const c of a)if(x+m>c.minX&&x-m<c.maxX&&z+m>c.minZ&&z-m<c.maxZ)return false;return true}
+// Trees for ONE chunk (same rules and same hash positions as the old whole-city pass).
+function treeSpotsFor(kx,kz){
+ const key=kx+','+kz;let spots=treeSpotCache.get(key);if(spots)return spots;
+ spots=(treeExplicit.get(key)||[]).slice();
+ if(treeFreeIdx){
+  const x0=kx*TREE_CHUNK,x1=x0+TREE_CHUNK,z0=kz*TREE_CHUNK,z1=z0+TREE_CHUNK;
+  for(const axis of ['z','x']){
+   const a0=axis==='z'?z0:x0,a1=axis==='z'?z1:x1,c0=axis==='z'?x0:z0,c1=axis==='z'?x1:z1;
+   for(let k=Math.max(-74,Math.ceil((c0-30)/70));k<=Math.min(74,Math.floor((c1+30)/70));k++){
+    const g=k*70,avenue=Math.abs(g%210)<1,half=avenue?24:4,SP=avenue?6.5:7.5;
+    for(const side of [-1,1]){
+     const qb=-5140+(side>0?SP/2:0);
+     const nLo=Math.max(0,Math.ceil((a0-1.2-qb)/SP)),nHi=Math.floor((Math.min(5140,a1+1.2)-qb)/SP);
+     for(let n=nLo;n<=nHi;n++){
+      const q=qb+n*SP;
+      if(q>5140)break;
+      if(avenue){const r=((q+5145)%105+105)%105;if(Math.min(r,105-r)<1.5)continue}   // streetlight poles
+      const jq=q+(treeHash(g,q,11+side)-.5)*1.6,off=g+side*(half+3.5+treeHash(q,g,13)*.4);
+      const x=axis==='z'?off:jq,z=axis==='z'?jq:off;
+      if(Math.floor(x/TREE_CHUNK)!==kx||Math.floor(z/TREE_CHUNK)!==kz)continue;
+      if(treeOnRoad(x,z,3.5)||!treeFreeAt(x,z,.6)||nearStreetlight(x,z,1.8))continue;
+      spots.push(makeTreeSpot(x,z,.8+treeHash(x,z,9)*.35));
+     }
+    }
+   }
+  }
+ }
+ treeSpotCache.set(key,spots);
+ if(treeSpotCache.size>400)treeSpotCache.delete(treeSpotCache.keys().next().value);
+ return spots;
+}
+// Trunk collision (replaces the half-million trunk boxes that used to sit in the collision grid).
+function collidesWithTree(x,z){
+ const a=Math.floor((x-1.6)/TREE_CHUNK),b=Math.floor((x+1.6)/TREE_CHUNK),c=Math.floor((z-1.6)/TREE_CHUNK),d=Math.floor((z+1.6)/TREE_CHUNK);
+ for(let i=a;i<=b;i++)for(let j=c;j<=d;j++){
+  const sp=treeSpotsFor(i,j);
+  for(let n=0;n<sp.length;n++){const t=sp[n];if(x>t.x-t.r&&x<t.x+t.r&&z>t.z-t.r&&z<t.z+t.r)return true}
+ }
+ return false;
+}
+// Called once everything else is placed: index the footprints trees must keep clear of.
+function finalizeTrees(){
  const CS=40,idx=new Map();
  for(const list of [buildingColliders,amenityColliders])for(const c of list){
   for(let ix=Math.floor((c.minX-2)/CS);ix<=Math.floor((c.maxX+2)/CS);ix++)for(let iz=Math.floor((c.minZ-2)/CS);iz<=Math.floor((c.maxZ+2)/CS);iz++){
    const k=ix+','+iz;let a=idx.get(k);if(!a)idx.set(k,a=[]);a.push(c);
   }
  }
- const free=(x,z,m)=>{const a=idx.get(Math.floor(x/CS)+','+Math.floor(z/CS));if(!a)return true;for(const c of a)if(x+m>c.minX&&x-m<c.maxX&&z+m>c.minZ&&z-m<c.maxZ)return false;return true};
- for(let g=-5180;g<=5180;g+=70){
-  const avenue=Math.abs(g%210)<1,half=avenue?24:4,SP=avenue?6.5:7.5;
-  for(const side of [-1,1]){
-   for(let q=-5140+(side>0?SP/2:0);q<=5140;q+=SP){
-    if(avenue){const r=((q+5145)%105+105)%105;if(Math.min(r,105-r)<1.5)continue}   // streetlight poles
-    for(const axis of ['z','x']){
-     const jq=q+(treeHash(g,q,11+side)-.5)*1.6,off=g+side*(half+3.5+treeHash(q,g,13)*.4);
-     const x=axis==='z'?off:jq,z=axis==='z'?jq:off;
-     if(treeOnRoad(x,z,3.5)||!free(x,z,.6)||nearStreetlight(x,z,1.8))continue;
-     addTree(x,z,.8+treeHash(x,z,9)*.35,'palm',3.5);
-    }
-   }
-  }
- }
-}
-function finalizeTrees(){
- addStreetTrees();
+ treeFreeIdx=idx;
  for(const t of treeSpots){
   const key=Math.floor(t.x/TREE_CHUNK)+','+Math.floor(t.z/TREE_CHUNK);
-  let ch=treeChunks.get(key);
-  if(!ch){const cx=(Math.floor(t.x/TREE_CHUNK)+.5)*TREE_CHUNK,cz=(Math.floor(t.z/TREE_CHUNK)+.5)*TREE_CHUNK;ch={cx,cz,trees:TREE_TYPES.map(()=>[]),all:[],sphere:new THREE.Sphere(new THREE.Vector3(cx,12,cz),TREE_CHUNK_R),near:null,far:null,decals:null};treeChunks.set(key,ch)}
-  ch.trees[t.type].push(t);ch.all.push(t);
-  const tr=.55*t.s*TREE_TYPES[t.type].base+.35;   // trunk collider
-  buildingColliders.push({minX:t.x-tr,maxX:t.x+tr,minZ:t.z-tr,maxZ:t.z+tr});
+  let a=treeExplicit.get(key);if(!a)treeExplicit.set(key,a=[]);a.push(t);
  }
- const dummy=new THREE.Object3D(),col=new THREE.Color();
- for(const ch of treeChunks.values()){
-  const near=new THREE.Group(),decals=[];
-  TREE_TYPES.forEach((T,ti)=>{
-   const list=ch.trees[ti];if(!list.length)return;
-   const mesh=new THREE.InstancedMesh(T.geo,treeMat,list.length);
-   list.forEach((t,i)=>{
-    const sc=t.s*T.base;
-    dummy.position.set(t.x,0,t.z);dummy.rotation.set(0,t.rot,0);dummy.scale.setScalar(sc);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix);
-    col.setRGB(t.tr,t.tg,t.tb);mesh.setColorAt(i,col);
-    const h=T.crownY*sc,ox=-TREE_SUN.x/TREE_SUN.y*h,oz=-TREE_SUN.z/TREE_SUN.y*h;
-    decals.push({x:t.x+ox,z:t.z+oz,r:T.shade*sc*.75,rot:Math.atan2(-oz,ox)});
-   });
-   mesh.instanceMatrix.needsUpdate=true;if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true;
-   mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;near.add(mesh);
+ treeSpots.length=0;
+}
+const treeDummy=new THREE.Object3D(),treeCol=new THREE.Color();
+function loadTreeChunk(kx,kz){
+ const spots=treeSpotsFor(kx,kz),cx=(kx+.5)*TREE_CHUNK,cz=(kz+.5)*TREE_CHUNK;
+ const ch={cx,cz,kx,kz,sphere:new THREE.Sphere(new THREE.Vector3(cx,12,cz),TREE_CHUNK_R),near:null,far:null,decals:null};
+ treeChunks.set(kx+','+kz,ch);
+ if(!spots.length)return ch;
+ const byType=TREE_TYPES.map(()=>[]);for(const t of spots)byType[t.type].push(t);
+ const near=new THREE.Group(),decals=[],dummy=treeDummy,col=treeCol;
+ TREE_TYPES.forEach((T,ti)=>{
+  const list=byType[ti];if(!list.length)return;
+  const mesh=new THREE.InstancedMesh(T.geo,treeMat,list.length);
+  list.forEach((t,i)=>{
+   const sc=t.s*T.base;
+   dummy.position.set(t.x,0,t.z);dummy.rotation.set(0,t.rot,0);dummy.scale.setScalar(sc);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix);
+   col.setRGB(t.tr,t.tg,t.tb);mesh.setColorAt(i,col);
+   const h=T.crownY*sc,ox=-TREE_SUN.x/TREE_SUN.y*h,oz=-TREE_SUN.z/TREE_SUN.y*h;
+   decals.push({x:t.x+ox,z:t.z+oz,r:T.shade*sc*.75,rot:Math.atan2(-oz,ox)});
   });
-  const far=new THREE.InstancedMesh(TREE_FAR_GEO,treeMat,ch.all.length);
-  ch.all.forEach((t,i)=>{
-   const sc=t.s*TREE_TYPES[t.type].base,st=TREE_FAR_STRETCH[t.type];
-   dummy.position.set(t.x,0,t.z);dummy.rotation.set(0,t.rot,0);dummy.scale.set(sc*st[0],sc*st[1],sc*st[0]);dummy.updateMatrix();far.setMatrixAt(i,dummy.matrix);
-   col.setRGB(t.tr,t.tg,t.tb);far.setColorAt(i,col);
-  });
-  far.instanceMatrix.needsUpdate=true;if(far.instanceColor)far.instanceColor.needsUpdate=true;far.frustumCulled=false;
-  const dm=new THREE.InstancedMesh(shadePlane,shadeMat,decals.length);
-  decals.forEach((d,i)=>{dummy.position.set(d.x,.16,d.z);dummy.rotation.set(0,d.rot,0);dummy.scale.set(d.r*1.2,1,d.r);dummy.updateMatrix();dm.setMatrixAt(i,dummy.matrix)});
-  dm.instanceMatrix.needsUpdate=true;dm.frustumCulled=false;dm.renderOrder=2;
-  near.visible=far.visible=dm.visible=false;
-  ch.near=near;ch.far=far;ch.decals=dm;scene.add(near);scene.add(far);scene.add(dm);
+  mesh.instanceMatrix.needsUpdate=true;if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true;
+  mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;near.add(mesh);
+ });
+ const far=new THREE.InstancedMesh(TREE_FAR_GEO,treeMat,spots.length);
+ spots.forEach((t,i)=>{
+  const sc=t.s*TREE_TYPES[t.type].base,st=TREE_FAR_STRETCH[t.type];
+  dummy.position.set(t.x,0,t.z);dummy.rotation.set(0,t.rot,0);dummy.scale.set(sc*st[0],sc*st[1],sc*st[0]);dummy.updateMatrix();far.setMatrixAt(i,dummy.matrix);
+  col.setRGB(t.tr,t.tg,t.tb);far.setColorAt(i,col);
+ });
+ far.instanceMatrix.needsUpdate=true;if(far.instanceColor)far.instanceColor.needsUpdate=true;far.frustumCulled=false;
+ const dm=new THREE.InstancedMesh(shadePlane,shadeMat,decals.length);
+ decals.forEach((d,i)=>{dummy.position.set(d.x,.16,d.z);dummy.rotation.set(0,d.rot,0);dummy.scale.set(d.r*1.2,1,d.r);dummy.updateMatrix();dm.setMatrixAt(i,dummy.matrix)});
+ dm.instanceMatrix.needsUpdate=true;dm.frustumCulled=false;dm.renderOrder=2;
+ near.visible=far.visible=dm.visible=false;
+ ch.near=near;ch.far=far;ch.decals=dm;treeRoot.add(near,far,dm);
+ return ch;
+}
+function unloadTreeChunk(key,ch){
+ if(ch.near){
+  for(const m of ch.near.children)if(m.dispose)m.dispose();
+  if(ch.far.dispose)ch.far.dispose();if(ch.decals.dispose)ch.decals.dispose();
+  treeRoot.remove(ch.near,ch.far,ch.decals);
  }
+ treeChunks.delete(key);
+}
+// Loads chunks around the player (nearest first) and releases far ones. all=true builds everything in range at once.
+function streamTrees(all){
+ const px=player.position.x,pz=player.position.z;
+ const kx0=Math.floor((px-TREE_LOAD_DIST)/TREE_CHUNK),kx1=Math.floor((px+TREE_LOAD_DIST)/TREE_CHUNK),kz0=Math.floor((pz-TREE_LOAD_DIST)/TREE_CHUNK),kz1=Math.floor((pz+TREE_LOAD_DIST)/TREE_CHUNK);
+ const need=[];
+ for(let kx=kx0;kx<=kx1;kx++)for(let kz=kz0;kz<=kz1;kz++){
+  if(treeChunks.has(kx+','+kz))continue;
+  const d=Math.hypot((kx+.5)*TREE_CHUNK-px,(kz+.5)*TREE_CHUNK-pz);
+  if(d<TREE_LOAD_DIST)need.push([d,kx,kz]);
+ }
+ need.sort((a,b)=>a[0]-b[0]);
+ let budget=all?1e9:2;
+ for(const [,kx,kz] of need){if(budget--<=0)break;loadTreeChunk(kx,kz)}
+ for(const [key,ch] of Array.from(treeChunks)){if(Math.hypot(ch.cx-px,ch.cz-pz)>TREE_UNLOAD_DIST)unloadTreeChunk(key,ch)}
 }
 // Chunk-level frustum + distance culling with two levels of detail (called with the building culling pass).
 function updateTreeVisibility(){
+ streamTrees(false);
  const px=player.position.x,pz=player.position.z;
  for(const ch of treeChunks.values()){
+  if(!ch.near)continue;
   const d=Math.hypot(ch.cx-px,ch.cz-pz),inView=viewFrustum.intersectsSphere(ch.sphere);
   const isNear=d<TREE_NEAR_DIST;
   ch.near.visible=inView&&isNear;
@@ -619,7 +684,7 @@ function removeStreetlightsInRect(x,z,halfX,halfZ){
  const rcv=document.createElement('canvas');rcv.width=rcv.height=256;const rc=rcv.getContext('2d');
  const rg=rc.createRadialGradient(128,128,0,128,128,128);
  rg.addColorStop(0,'rgba(255,255,255,1)');rg.addColorStop(.22,'rgba(255,255,255,.6)');rg.addColorStop(.55,'rgba(255,255,255,.2)');rg.addColorStop(1,'rgba(255,255,255,0)');
- rc.fillStyle=rg;rc.fillRect(0,0,256,256);const radialTex=new THREE.CanvasTexture(rcv);
+ rc.fillStyle=rg;rc.fillRect(0,0,256,256);const radialTex=canvasTex(rcv);
  slPoolMat=new THREE.MeshBasicMaterial({map:radialTex,color:0xffc46e,transparent:true,opacity:0,blending:THREE.AdditiveBlending,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-4,polygonOffsetUnits:-4});
  const poolGeo=new THREE.PlaneGeometry(1,1);poolGeo.rotateX(-Math.PI/2);
  slPools=new THREE.InstancedMesh(poolGeo,slPoolMat,N);slPools.frustumCulled=false;slPools.renderOrder=2;slPools.visible=false;scene.add(slPools);slMeshes.push(slPools);
@@ -868,10 +933,15 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
  return obj;
 }
 function signBoard(text,x,z,width=22,color=0x176b43){
- const canvas=document.createElement('canvas');canvas.width=512;canvas.height=128;
- const ctx=canvas.getContext('2d');ctx.fillStyle='#'+color.toString(16).padStart(6,'0');ctx.fillRect(0,0,512,128);
- ctx.fillStyle='#ffffff';ctx.font='bold 42px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,256,64,480);
- const tex=new THREE.CanvasTexture(canvas);const mesh=new THREE.Mesh(new THREE.PlaneGeometry(width,5),new THREE.MeshBasicMaterial({map:tex,transparent:false,side:THREE.DoubleSide}));
+ const sm=new THREE.MeshBasicMaterial({transparent:false,side:THREE.DoubleSide});sm.userData.lazy=1;
+ const mesh=new THREE.Mesh(new THREE.PlaneGeometry(width,5),sm);
+ mesh.onBeforeRender=()=>{   // v0.70: drawn on first render only
+  if(sm.map)return;
+  const canvas=document.createElement('canvas');canvas.width=512;canvas.height=128;
+  const ctx=canvas.getContext('2d');ctx.fillStyle='#'+color.toString(16).padStart(6,'0');ctx.fillRect(0,0,512,128);
+  ctx.fillStyle='#ffffff';ctx.font='bold 42px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,256,64,480);
+  sm.map=canvasTex(canvas);sm.needsUpdate=true;
+ };
  mesh.position.set(x,7,z);scene.add(mesh);return mesh;
 }
 // Physical street-name signs (v0.61): modern two-line boards, 60% smaller than before, mounted parallel to the
@@ -891,7 +961,7 @@ function splitStreetName(name){
 }
 function makeStreetSignTexture(name,aspect){
  const [main,suffix]=splitStreetName(name);
- const cw=1024,ch=Math.round(cw/aspect);
+ const cw=512,ch=Math.round(cw/aspect);
  const cv=document.createElement('canvas');cv.width=cw;cv.height=ch;
  const c=cv.getContext('2d');
  // Deep navy panel with a crisp white inset border and a cyan accent rail on the left.
@@ -913,7 +983,7 @@ function makeStreetSignTexture(name,aspect){
   if('letterSpacing' in c)c.letterSpacing=`${ch*.035}px`;
   c.fillText(suffix,cw/2+ch*.05,ch*.74);
  }
- const tex=new THREE.CanvasTexture(cv);
+ const tex=canvasTex(cv);
  tex.anisotropy=renderer.capabilities.getMaxAnisotropy();
  return tex;
 }
@@ -933,12 +1003,13 @@ function addStreetNameSign(name,x,z,axis){
  }
  const frame=new THREE.Mesh(new THREE.BoxGeometry(boardW+.14,boardH+.14,.1),streetSignFrameMat);
  frame.position.set(0,boardY,0);g.add(frame);
- const tex=makeStreetSignTexture(name,boardW/boardH);
- const faceMat=new THREE.MeshBasicMaterial({map:tex});
+ const faceMat=new THREE.MeshBasicMaterial();faceMat.userData.lazy=1;   // v0.70: the board texture is drawn the first time the sign is actually rendered
+ const fillSign=()=>{if(faceMat.map)return;faceMat.map=makeStreetSignTexture(name,boardW/boardH);faceMat.needsUpdate=true};
  const front=new THREE.Mesh(new THREE.PlaneGeometry(boardW,boardH),faceMat);
  front.position.set(0,boardY,.056);g.add(front);
  const back=new THREE.Mesh(new THREE.PlaneGeometry(boardW,boardH),faceMat);
- back.rotation.y=Math.PI;back.position.set(0,boardY,-.056);g.add(back);   // reads correctly from both sides
+ back.rotation.y=Math.PI;back.position.set(0,boardY,-.056);g.add(back);
+ front.onBeforeRender=fillSign;back.onBeforeRender=fillSign;   // reads correctly from both sides
  return g;
 }
 function buildStreetNameSigns(){
@@ -976,7 +1047,7 @@ function makeDistrictTexture(name,aspect){
  if('letterSpacing' in c)c.letterSpacing=`${size*.06}px`;
  while(c.measureText(text).width>cw*.7&&size>10){size-=2;c.font=`800 ${size}px ${fam}`;if('letterSpacing' in c)c.letterSpacing=`${size*.06}px`;}
  c.fillStyle='#ffffff';c.fillText(text,cw/2,ch*.53);
- const tex=new THREE.CanvasTexture(cv);tex.anisotropy=renderer.capabilities.getMaxAnisotropy();return tex;
+ const tex=canvasTex(cv);tex.anisotropy=renderer.capabilities.getMaxAnisotropy();return tex;
 }
 function districtGatewayPlacement(cx,cz){
  const mod=(a,n)=>((a%n)+n)%n;
@@ -1336,7 +1407,7 @@ function addBusRoadMark(roadAxis,road,side,along){
   if(!busMarkMat){
     const cv=document.createElement('canvas');cv.width=cv.height=256;const g=cv.getContext('2d');
     g.fillStyle='#f4f2df';g.font='900 230px "Arial Black", Arial, sans-serif';g.textAlign='center';g.textBaseline='middle';g.fillText('BUS',128,136,236);
-    const tex=new THREE.CanvasTexture(cv);tex.anisotropy=4;
+    const tex=canvasTex(cv);tex.anisotropy=4;
     busMarkMat=new THREE.MeshBasicMaterial({map:tex,transparent:true,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-3,polygonOffsetUnits:-3});
     busMarkGeo=new THREE.PlaneGeometry(4.4,9);busMarkGeo.rotateX(-Math.PI/2);
   }
@@ -1383,7 +1454,7 @@ function addBusStop(x,z,rotation=0,zScale=1){
   signCtx.fillRect(86,121,36,28);signCtx.fillRect(134,121,36,28);
   signCtx.fillStyle='#ffffff';
   signCtx.beginPath();signCtx.arc(94,183,10,0,Math.PI*2);signCtx.arc(162,183,10,0,Math.PI*2);signCtx.fill();
-  const signTexture=new THREE.CanvasTexture(signCanvas);
+  const signTexture=canvasTex(signCanvas);
   const circularSign=new THREE.Mesh(
     new THREE.CircleGeometry(1.2,32),
     new THREE.MeshBasicMaterial({map:signTexture,side:THREE.DoubleSide})
@@ -2046,9 +2117,8 @@ for(const b of buildingColliders){
 }
 function collidesWithBuilding(x,z){
  const list=collisionGrid.get(collisionCellKey(Math.floor(x/COLLISION_CELL_SIZE),Math.floor(z/COLLISION_CELL_SIZE)));
- if(!list)return false;
- for(const b of list){if(x>b.minX&&x<b.maxX&&z>b.minZ&&z<b.maxZ)return true;}
- return false;
+ if(list){for(const b of list){if(x>b.minX&&x<b.maxX&&z>b.minZ&&z<b.maxZ)return true;}}
+ return collidesWithTree(x,z);
 }
 
 // ============================================================================
@@ -2204,7 +2274,31 @@ function chunkInstanced(src,forceCls,master){
  scene.remove(src);
  return made;
 }
+// v0.70 MEMORY: thousands of meshes were each built with their own copy of an identical box / ring / circle / plane / cylinder.
+// Meshes with byte-identical built-in geometry now share one copy (fewer GPU buffers, much less JS memory; nothing looks different).
+function shareIdenticalGeometries(){
+ const SHAREABLE=['BoxGeometry','PlaneGeometry','CircleGeometry','RingGeometry','CylinderGeometry','SphereGeometry'];
+ const canon=new Map(),mapped=new Map();let before=0,after=0;
+ scene.traverse(o=>{
+  if(!o.isMesh||!o.geometry)return;
+  const g=o.geometry;before++;
+  let c=mapped.get(g);
+  if(!c){
+   c=g;
+   if(g.parameters&&SHAREABLE.includes(g.type)&&g.attributes.position){
+    const p=g.attributes.position.array;let sum=0;for(let i=0;i<p.length;i++)sum+=(i+1)*p[i];
+    const key=g.type+JSON.stringify(g.parameters)+'|'+p.length+'|'+(g.index?g.index.count:0)+'|'+sum.toFixed(4);
+    const hit=canon.get(key);if(hit)c=hit;else canon.set(key,g);
+   }
+   mapped.set(g,c);
+  }
+  if(c!==g){o.geometry=c;}
+ });
+ for(const [g,c] of mapped)if(g!==c)g.dispose();
+ console.info('This Is Lagos v0.70 shared geometries:',{meshGeometriesBefore:mapped.size,after:canon.size});
+}
 function optimizeWorldForView(){
+ shareIdenticalGeometries();
  scene.updateMatrixWorld(true);                       // settle every matrix once, then freeze static cells
  const keep=new Set([player,rainGroup,camera]);
  let chunks=0,grouped=0,rootKept=0;
@@ -2332,6 +2426,7 @@ function animate(){
 updateCamera();
 console.info('This Is Lagos v0.66 expanded city:',{landAreaMultiplier:25,linearFootprintMultiplier:5,districts:districtDefs.length,buildings:cityMapBuildings.length,facilities:cityMapFacilities.length,sportsCentres:sportsCentreNames.length});
 optimizeWorldForView();
+scene.add(treeRoot);streamTrees(true);   // v0.70: trees are streamed in around the player (added after the world culling pass on purpose)
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setPixelRatio(maxDevicePixelRatio*renderScale);renderer.setSize(innerWidth,innerHeight)});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)clock.getDelta()});
