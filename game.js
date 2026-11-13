@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.60 — Lagos street names, physical street signs and Grand Dealership on Isaac Uwadiale Road — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
+// THIS IS LAGOS v0.61 — Lagos street names, physical street signs and Grand Dealership on Isaac Uwadiale Road — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -743,21 +743,78 @@ function signBoard(text,x,z,width=22,color=0x176b43){
  const tex=new THREE.CanvasTexture(canvas);const mesh=new THREE.Mesh(new THREE.PlaneGeometry(width,5),new THREE.MeshBasicMaterial({map:tex,transparent:false,side:THREE.DoubleSide}));
  mesh.position.set(x,7,z);scene.add(mesh);return mesh;
 }
-// Physical street-name signs at key junctions; the Isaac Uwadiale road is the
-// Grand Dealership corridor (the centre north-south street in this city grid).
+// Physical street-name signs (v0.61): modern two-line boards, 60% smaller than before, mounted parallel to the
+// street they name on two poles (0.25x the bus-shelter height) so nothing hangs over the carriageway.
+const BUS_SHELTER_HEIGHT=18.33;                          // addBusStop roof: base 18.15 + 0.18 thickness
+const STREET_SIGN_POLE_HEIGHT=BUS_SHELTER_HEIGHT*.25;    // two poles, 0.25x the shelter height (~4.6 units)
+const STREET_SIGN_SCALE=.4;                              // 60% reduction of the old board (was 10-17 x 5)
+const STREET_SUFFIXES=['Road','Street','Avenue','Expressway','Way','Causeway','Drive','Crescent','Approach'];
+const streetSignPoleGeo=new THREE.CylinderGeometry(.11,.15,STREET_SIGN_POLE_HEIGHT,10);
+const streetSignPoleMat=mat(0x2b3640);
+const streetSignFrameMat=mat(0x1b242c);
+// Splits "Herbert Macaulay Way" into ["HERBERT MACAULAY","WAY"] so the street name itself can be set large.
+function splitStreetName(name){
+ const words=name.split(' ');
+ if(words.length>1&&STREET_SUFFIXES.includes(words[words.length-1]))
+  return [words.slice(0,-1).join(' ').toUpperCase(),words[words.length-1].toUpperCase()];
+ return [name.toUpperCase(),''];
+}
+function makeStreetSignTexture(name,aspect){
+ const [main,suffix]=splitStreetName(name);
+ const cw=1024,ch=Math.round(cw/aspect);
+ const cv=document.createElement('canvas');cv.width=cw;cv.height=ch;
+ const c=cv.getContext('2d');
+ // Deep navy panel with a crisp white inset border and a cyan accent rail on the left.
+ const bg=c.createLinearGradient(0,0,0,ch);bg.addColorStop(0,'#10446f');bg.addColorStop(1,'#0a2c4b');
+ c.fillStyle=bg;c.fillRect(0,0,cw,ch);
+ c.strokeStyle='#ffffff';c.lineWidth=Math.max(5,ch*.025);
+ c.beginPath();c.roundRect(ch*.06,ch*.06,cw-ch*.12,ch*.88,ch*.09);c.stroke();
+ c.fillStyle='#35c4ff';c.fillRect(ch*.14,ch*.2,ch*.035,ch*.6);
+ c.textAlign='center';c.textBaseline='middle';
+ const hasSuffix=suffix.length>0,maxW=cw-ch*.5;
+ // Street name: largest bold size that fits the board, so it stays readable at small board sizes.
+ let size=ch*(hasSuffix?.46:.56);
+ const fam='"Segoe UI","Helvetica Neue",Arial,sans-serif';
+ c.font=`800 ${size}px ${fam}`;
+ while(c.measureText(main).width>maxW&&size>10){size-=2;c.font=`800 ${size}px ${fam}`;}
+ c.fillStyle='#ffffff';c.fillText(main,cw/2+ch*.05,ch*(hasSuffix?.42:.52));
+ if(hasSuffix){
+  c.font=`600 ${ch*.2}px ${fam}`;c.fillStyle='#8fdcff';
+  if('letterSpacing' in c)c.letterSpacing=`${ch*.035}px`;
+  c.fillText(suffix,cw/2+ch*.05,ch*.74);
+ }
+ const tex=new THREE.CanvasTexture(cv);
+ tex.anisotropy=renderer.capabilities.getMaxAnisotropy();
+ return tex;
+}
+// axis 'x' = a north-south street (runs along Z); axis 'z' = an east-west street (runs along X).
 function addStreetNameSign(name,x,z,axis){
- const postMat=mat(0x59645d),post=new THREE.Mesh(new THREE.CylinderGeometry(.13,.17,5.2,7),postMat);
- post.position.set(x,2.6,z);scene.add(post);
- const boardW=Math.min(17,Math.max(10,name.length*.48));
- const board=signBoard(name.toUpperCase(),x,z,boardW,0x174f78);
- board.position.set(x,5.35,z);
- if(axis==='z')board.rotation.y=Math.PI/2;
- return board;
+ const boardW=Math.min(17,Math.max(10,name.length*.48))*STREET_SIGN_SCALE;
+ const boardH=5*STREET_SIGN_SCALE;
+ const g=new THREE.Group();g.position.set(x,0,z);
+ // Board faces are flat to the kerb, with the long side PARALLEL to the road it names.
+ g.rotation.y=axis==='x'?Math.PI/2:0;
+ scene.add(g);
+ const topY=STREET_SIGN_POLE_HEIGHT,boardY=topY-boardH/2-.12;
+ // Two poles at the ends of the board, running the full 0.25x-shelter height.
+ for(const sx of [-1,1]){
+  const pole=new THREE.Mesh(streetSignPoleGeo,streetSignPoleMat);
+  pole.position.set(sx*(boardW/2-.28),STREET_SIGN_POLE_HEIGHT/2,0);g.add(pole);
+ }
+ const frame=new THREE.Mesh(new THREE.BoxGeometry(boardW+.14,boardH+.14,.1),streetSignFrameMat);
+ frame.position.set(0,boardY,0);g.add(frame);
+ const tex=makeStreetSignTexture(name,boardW/boardH);
+ const faceMat=new THREE.MeshBasicMaterial({map:tex});
+ const front=new THREE.Mesh(new THREE.PlaneGeometry(boardW,boardH),faceMat);
+ front.position.set(0,boardY,.056);g.add(front);
+ const back=new THREE.Mesh(new THREE.PlaneGeometry(boardW,boardH),faceMat);
+ back.rotation.y=Math.PI;back.position.set(0,boardY,-.056);g.add(back);   // reads correctly from both sides
+ return g;
 }
 function buildStreetNameSigns(){
  for(let k=-15;k<=15;k++){
   const road=k*70,half=(k%3===0)?24:4;
-  // One visible sign for each north-south and east-west street, positioned on pavement.
+  // One sign per street, standing on the pavement beside the road (never over the carriageway).
   const vx=road+half+2.0,vz=-455;
   addStreetNameSign(streetName('x',k),vx,vz,'x');
   const hx=-455,hz=road+half+2.0;
