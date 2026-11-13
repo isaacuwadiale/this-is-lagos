@@ -1,11 +1,11 @@
-// THIS IS LAGOS v0.67 — v0.66 startup and shelter-placement performance fixes; 25x city land area and 25x city content quantity — 100 sports centres, existing two-pole district gateways retained — Lagos street names, physical street signs and Grand Dealership on Isaac Uwadiale Road — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
+// THIS IS LAGOS v0.68 — v0.67 plus: every building / sports centre / landmark fitted inside its city block (nothing on roads or pavements); view-only rendering (chunked instancing + distance/frustum cell culling). Earlier notes: v0.67 — v0.66 startup and shelter-placement performance fixes; 25x city land area and 25x city content quantity — 100 sports centres, existing two-pole district gateways retained — Lagos street names, physical street signs and Grand Dealership on Isaac Uwadiale Road — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const mount=document.querySelector('#game');
 const scene=new THREE.Scene();
 scene.background=new THREE.Color(0x9fc9d4);
-scene.fog=new THREE.Fog(0x9fc9d4,700,6500);
+scene.fog=new THREE.Fog(0x9fc9d4,700,3200);   // v0.68: haze now closes in before the far-cull distance so distant cells never visibly pop
 const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,.1,16000);
 camera.position.set(0,5,9);
 const renderer=new THREE.WebGLRenderer({antialias:true, powerPreference:'high-performance'});
@@ -232,7 +232,7 @@ const shadeTex=(()=>{
 const shadeMat=new THREE.MeshBasicMaterial({map:shadeTex,transparent:true,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-2,polygonOffsetUnits:-2});
 const shadePlane=new THREE.PlaneGeometry(2,2);shadePlane.rotateX(-Math.PI/2);
 
-const TREE_CHUNK=160,TREE_CHUNK_R=144,TREE_NEAR_DIST=160,TREE_VIEW_DIST=900,TREE_SHADE_DIST=500;
+const TREE_CHUNK=160,TREE_CHUNK_R=144,TREE_NEAR_DIST=110,TREE_VIEW_DIST=900,TREE_SHADE_DIST=500;
 const treeChunks=new Map(),treeSpots=[];
 // True when (x,z) lies on any carriageway or its pavement (plus a trunk margin). Trees are rejected there.
 function treeOnRoad(x,z,margin=3.4){
@@ -396,6 +396,35 @@ for(let p=-5180;p<=5180;p+=70){
 function roadHalfWidthAt(value){
  const grid=Math.round(value/70)*70;
  return Math.abs(grid%210)===0?24:4;
+}
+// v0.68 BLOCK FITTING: every city block lies between two parallel roads. Anything built in a block is
+// fitted into the free ground between the two roads, held back 5.6m from each asphalt edge (kerb + 2.5m pavement
+// + the row of street palms), and centred in that free ground, so nothing touches a carriageway, pavement or tree.
+const BLOCK_SETBACK=5.6;
+function blockSpan(v){
+ const a=Math.floor(v/70)*70,b=a+70;
+ return [a+roadHalfWidthAt(a)+BLOCK_SETBACK,b-roadHalfWidthAt(b)-BLOCK_SETBACK];
+}
+function fitToBlock(x,z,w,d){
+ const [x0,x1]=blockSpan(x),[z0,z1]=blockSpan(z);
+ const fw=Math.min(w,x1-x0),fd=Math.min(d,z1-z0);
+ return {x:(x0+x1)/2,z:(z0+z1)/2,w:fw,d:fd};
+}
+// Blocks claimed by fixed landmarks (pitch, tennis, basketball) so filler buildings never share them.
+const claimedBlocks=new Set(),sportsLayout=new Map();
+function claimOpenBlock(x,z,minW,minD){
+ const bx0=Math.floor(x/70),bz0=Math.floor(z/70),cands=[];
+ for(let i=-7;i<=7;i++)for(let j=-7;j<=7;j++){
+  const bx=bx0+i,bz=bz0+j,key=bx+','+bz;
+  if(claimedBlocks.has(key))continue;
+  const [x0,x1]=blockSpan(bx*70+35),[z0,z1]=blockSpan(bz*70+35);
+  if(x1-x0<minW||z1-z0<minD)continue;
+  const cx=(x0+x1)/2,cz=(z0+z1)/2;
+  cands.push({key,cx,cz,x0,x1,z0,z1,w:x1-x0,d:z1-z0,dist:Math.hypot(cx-x,cz-z)});
+ }
+ cands.sort((a,b)=>a.dist-b.dist);
+ const c=cands[0];if(!c)return null;
+ claimedBlocks.add(c.key);return c;
 }
 function clearBuildingPlot(x,z,w,d,extra=1){
  // Reserve the complete footprint plus kerbs and pavements, not just asphalt.
@@ -988,8 +1017,8 @@ function addDistrictGateway(name,cx,cz){
 }
 function buildDistrictGateways(){for(const d of districtDefs)addDistrictGateway(d[0],d[1],d[2]);}
 function palmTree(x,z,scale=1){addTree(x,z,scale*1.15,'palm')}
-function fencedPitch(cx,cz,name='FOOTBALL PITCH',surface=sportGreen){
- const g=new THREE.Group();g.position.set(cx,0,cz);scene.add(g);
+function fencedPitch(cx,cz,name='FOOTBALL PITCH',surface=sportGreen,s=1){
+ const g=new THREE.Group();g.position.set(cx,0,cz);g.scale.setScalar(s);scene.add(g);
  const field=new THREE.Mesh(new THREE.BoxGeometry(82,.22,48),surface);field.position.y=.04;g.add(field);
  const lineMat=new THREE.MeshBasicMaterial({color:0xffffff});
  function line(w,h,x,z){const m=new THREE.Mesh(new THREE.BoxGeometry(w,.035,h),lineMat);m.position.set(x,.17,z);g.add(m)}
@@ -1001,17 +1030,17 @@ function fencedPitch(cx,cz,name='FOOTBALL PITCH',surface=sportGreen){
  for(const x of [-44,44]){const f=new THREE.Mesh(new THREE.BoxGeometry(.25,3,58),fenceMat);f.position.set(x,1.5,0);g.add(f)}
  for(const z of [-29,29]){const f=new THREE.Mesh(new THREE.BoxGeometry(92,3,.25),fenceMat);f.position.set(0,1.5,z);g.add(f)}
  for(const x of [-48,48])for(const z of [-31,31]){const pole=new THREE.Mesh(new THREE.CylinderGeometry(.16,.22,13,8),dark);pole.position.set(x,6.5,z);g.add(pole);const lamp=new THREE.Mesh(new THREE.BoxGeometry(2,.4,1),white);lamp.position.set(x,13,z);g.add(lamp)}
- signBoard(name,cx,cz-34,26,0x176b43);
- recordCityFacility('football',cx,cz,92,58,name);
+ signBoard(name,cx,cz-34*s,26*Math.max(.6,s),0x176b43);
+ recordCityFacility('football',cx,cz,92*s,58*s,name);
 }
-function tennisCentre(cx,cz){
- const g=new THREE.Group();g.position.set(cx,0,cz);scene.add(g);
+function tennisCentre(cx,cz,s=1){
+ const g=new THREE.Group();g.position.set(cx,0,cz);g.scale.setScalar(s);scene.add(g);
  for(let c=0;c<3;c++){const z=(c-1)*30;const court=new THREE.Mesh(new THREE.BoxGeometry(22,.2,12),sportBlue);court.position.set(0,.06,z);g.add(court);
   const ln=new THREE.MeshBasicMaterial({color:0xffffff});
   for(const x of [-10.5,10.5]){const m=new THREE.Mesh(new THREE.BoxGeometry(.18,.04,11),ln);m.position.set(x,.19,z);g.add(m)}
   const net=new THREE.Mesh(new THREE.BoxGeometry(.15,1,12),mat(0xe8e8df));net.position.set(0,.65,z);g.add(net)}
- signBoard('LAGOS TENNIS CENTRE',cx,cz-65,28,0x245f94);
- recordCityFacility('tennis',cx,cz,30,72,'Tennis centre');
+ signBoard('LAGOS TENNIS CENTRE',cx,cz-Math.min(36*s+4,24),28*Math.max(.6,s),0x245f94);
+ recordCityFacility('tennis',cx,cz,30*s,72*s,'Tennis centre');
 }
 function basketballCentre(cx,cz){
  const court=new THREE.Mesh(new THREE.BoxGeometry(38,.2,23),sportRed);court.position.set(cx,.05,cz);scene.add(court);
@@ -1020,9 +1049,18 @@ function basketballCentre(cx,cz){
  recordCityFacility('basketball',cx,cz,38,23,'Basketball court');
 }
 function marketCluster(cx,cz,label='LOCAL MARKET'){
- for(let i=0;i<7;i++){const x=cx+(i%4)*13-20,z=cz+Math.floor(i/4)*15;const shop=makeBuilding(x,z,10,10,4,'market',i);if(shop){const canopy=new THREE.Mesh(new THREE.BoxGeometry(10,.35,10),marketMat);canopy.position.set(x,4.4,z);scene.add(canopy)}}
- signBoard(label,cx,cz-18,30,0x9a5b23);
- recordCityFacility('market',cx,cz,78,30,label);
+ // v0.68: canopies follow the road-safe position each shop was actually given.
+ const placed=[];
+ for(let i=0;i<7;i++){const x=cx+(i%4)*13-20,z=cz+Math.floor(i/4)*15;const shop=makeBuilding(x,z,10,10,4,'market',i);if(shop){const canopy=new THREE.Mesh(new THREE.BoxGeometry(10,.35,10),marketMat);canopy.position.set(shop.position.x,4.4,shop.position.z);scene.add(canopy);placed.push(shop.position)}}
+ // Shops that had to be pushed far away (no room nearby) are not part of the cluster's sign/map footprint.
+ const near=placed.filter(p=>Math.hypot(p.x-cx,p.z-cz)<170);
+ let mx=cx,mz=cz,w=78,d=30;
+ if(near.length){
+  const x0=Math.min(...near.map(p=>p.x)),x1=Math.max(...near.map(p=>p.x)),z0=Math.min(...near.map(p=>p.z)),z1=Math.max(...near.map(p=>p.z));
+  mx=(x0+x1)/2;mz=(z0+z1)/2;w=x1-x0+24;d=z1-z0+24;
+ }else{const f=fitToBlock(cx,cz,40,24);mx=f.x;mz=f.z;w=f.w;d=f.d}
+ signBoard(label,mx,mz-18,30,0x9a5b23);
+ recordCityFacility('market',mx,mz,w,d,label);
 }
 function compound(cx,cz,kind='residential',seed=0){
  if(!clearBuildingPlot(cx,cz,42,42,1)) return;
@@ -1047,9 +1085,9 @@ function buildDistrict(name,cx,cz,type,seed){
   marketCluster(cx,cz,name.toUpperCase());
   for(let i=0;i<12;i++)makeBuilding(cx+(i%4)*29-44,cz+70+Math.floor(i/4)*25,18,18,8+(i%3)*3,'shop',seed+i);
  }else if(type==='sports'){
-  fencedPitch(cx,cz,name.toUpperCase()+' FOOTBALL ARENA');
-  tennisCentre(cx+135,cz+5);basketballCentre(cx-135,cz+8);
-  makeBuilding(cx,cz+110,55,32,12,'mixed',seed);signBoard('SPORTS & RECREATION COMPLEX',cx,cz+88,35,0x176b43);
+  const L=sportsLayout.get(name);
+  if(L){fencedPitch(L.pitch.cx,L.pitch.cz,name.toUpperCase()+' FOOTBALL ARENA',sportGreen,L.pitch.s);tennisCentre(L.tennis.cx,L.tennis.cz,L.tennis.s);basketballCentre(L.basket.cx,L.basket.cz);}
+  const hall=makeBuilding(cx,cz+110,55,32,12,'mixed',seed);if(hall)signBoard('SPORTS & RECREATION COMPLEX',hall.position.x,hall.position.z-28,35,0x176b43);
  }else if(type==='civic'){
   makeBuilding(cx-35,cz,45,38,22,'office',seed);makeBuilding(cx+35,cz,42,36,18,'office',seed+1);
   makeBuilding(cx,cz+58,88,28,8,'mixed',seed+2);
@@ -1095,16 +1133,18 @@ for(let tx=-2;tx<=2;tx++)for(let tz=-2;tz<=2;tz++){
  for(const d of baseDistrictDefs)districtDefs.push([`${d[0]} DISTRICT ${String(tileNo).padStart(2,'0')}`,d[1]+tx*2100,d[2]+tz*2100,d[3]]);
 }
 // Reserve every fixed sports venue BEFORE any district buildings are generated.
-// This prevents buildings in earlier or later districts from landing on courts.
-for(const d of districtDefs){
+// v0.68: each venue is placed in its own road-free city block (nearest open block to its district centre)
+// and scaled down only if the block is smaller than the venue. Whole blocks are reserved.
+for(const d of baseDistrictDefs){
  if(d[3]!=='sports')continue;
- const cx=d[1],cz=d[2];
- // Three adjacent tennis courts (22 x 12 each, spaced 18 units apart).
- amenityColliders.push({minX:cx+135-17,maxX:cx+135+17,minZ:cz+5-42,maxZ:cz+5+42});
- // Basketball court plus run-off area.
- amenityColliders.push({minX:cx-135-27,maxX:cx-135+27,minZ:cz+8-18,maxZ:cz+8+18});
- // Football pitch and safety perimeter.
- amenityColliders.push({minX:cx-52,maxX:cx+52,minZ:cz-38,maxZ:cz+38});
+ const cx=d[1],cz=d[2],L={};
+ const pitch=claimOpenBlock(cx,cz,50,50),tennis=claimOpenBlock(cx+135,cz+5,50,50),basket=claimOpenBlock(cx-135,cz+8,50,50);
+ if(!pitch||!tennis||!basket)continue;
+ L.pitch={cx:pitch.cx,cz:pitch.cz,s:Math.min(1,pitch.w/100,pitch.d/66)};
+ L.tennis={cx:tennis.cx,cz:tennis.cz,s:Math.min(1,tennis.w/30,tennis.d/74)};
+ L.basket={cx:basket.cx,cz:basket.cz,s:Math.min(1,basket.w/40,basket.d/28)};
+ sportsLayout.set(d[0],L);
+ for(const b of [pitch,tennis,basket])amenityColliders.push({minX:b.x0-1,maxX:b.x1+1,minZ:b.z0-1,maxZ:b.z1+1});
 }
 baseDistrictDefs.forEach((d,i)=>buildDistrict(d[0],d[1],d[2],d[3],i*13));
 buildDistrictGateways();
@@ -1124,14 +1164,17 @@ for(let gx=-5145;gx<=5145;gx+=70){
   if(blockIndex%7===0)continue;
   const nearLandmark=baseDistrictDefs.some(d=>Math.hypot(gx-d[1],gz-d[2])<105);
   if(nearLandmark)continue;
+  if(claimedBlocks.has(Math.floor(gx/70)+','+Math.floor(gz/70)))continue;
   const kind=(blockIndex%5)<3?((blockIndex%4===0)?'office':'apartment'):(['mixed','residential','tenement','shop'][Math.abs(blockIndex)%4]);
   const width=(kind==='shop'?8:10)*(kind==='office'?1.22:1.14)*4;
   const depth=(kind==='shop'?9:12)*(kind==='office'?1.22:1.14)*4;
   const height=(kind==='office'?([20,25,30,35,40][Math.abs(blockIndex)%5]*3.2):(kind==='apartment'?([25,30,35,40][Math.abs(blockIndex)%4]*3.2):([5,7,10,12][Math.abs(blockIndex)%4]*3.1)))*4;
   const color=kind==='office'?0x9ab8c4:(kind==='apartment'?0xc5b9a0:(kind==='shop'?0xd5a86c:(kind==='tenement'?0xb9a99a:0xb8c8b2)));
-  expandedBuildingRecords.push({x:gx,z:gz,w:width,d:depth,h:height,kind,color,seed:citySeed++});
-  buildingColliders.push({minX:gx-width/2-1,maxX:gx+width/2+1,minZ:gz-depth/2-1,maxZ:gz+depth/2+1});
-  cityMapBuildings.push({x:gx,z:gz,w:width,d:depth,kind});
+  // v0.68: shrink the footprint to the free ground of its block and centre it there (pushed clear of every road).
+  const fit=fitToBlock(gx,gz,width,depth);
+  expandedBuildingRecords.push({x:fit.x,z:fit.z,w:fit.w,d:fit.d,h:height,kind,color,seed:citySeed++});
+  buildingColliders.push({minX:fit.x-fit.w/2-1,maxX:fit.x+fit.w/2+1,minZ:fit.z-fit.d/2-1,maxZ:fit.z+fit.d/2+1});
+  cityMapBuildings.push({x:fit.x,z:fit.z,w:fit.w,d:fit.d,kind});
  }
 }
 // Split instanced buildings into 25 geographic chunks for frustum-friendly rendering.
@@ -1482,6 +1525,8 @@ function nearestDistrictFor(x,z){
 }
 function sportsCentreSiteFree(x,z){
  const w=44,d=44;
+ // v0.68: the 100 fully detailed campuses only use blocks wide enough for the whole 44m campus between pavements.
+ {const [x0,x1]=blockSpan(x),[z0,z1]=blockSpan(z);if(x1-x0<46||z1-z0<46)return false;}
  if(!amenityPlotFree(x,z,w,d))return false;
  // Keep a little breathing room between campuses without consuming an entire block.
  return !sportsCentreNames.some(s=>Math.abs(x-s.x)<49&&Math.abs(z-s.z)<49);
@@ -1552,21 +1597,24 @@ const sportsCentreBuildResult=buildOneHundredSportsCentres();
  const target=SPORTS_CENTRE_TARGET-sportsCentreNames.length,records=[],used=new Set(sportsCentreNames.map(s=>Math.round((s.x+5145)/70)+','+Math.round((s.z+5145)/70)));
  const courtMat=new THREE.MeshStandardMaterial({color:0x276a9a,roughness:.8}),fieldMat=new THREE.MeshStandardMaterial({color:0x287b43,roughness:.9}),parkMat=new THREE.MeshStandardMaterial({color:0x303735,roughness:.9}),lineMat=new THREE.MeshBasicMaterial({color:0xf4f2e7});
  let n=0;for(let ix=-73;ix<=73&&n<target;ix++)for(let iz=-73;iz<=73&&n<target;iz++){
-  const x=35+ix*70,z=35+iz*70,key=Math.round((x+5145)/70)+','+Math.round((z+5145)/70);
+  const bx=35+ix*70,bz=35+iz*70,key=Math.round((bx+5145)/70)+','+Math.round((bz+5145)/70);
   if(((ix+74)*148+(iz+74))%7!==0||used.has(key))continue;
-  if(expandedBuildingOverlap(x,z,44,44,2)||amenityColliders.some(c=>x+23>c.minX&&x-23<c.maxX&&z+23>c.minZ&&z-23<c.maxZ))continue;
+  // v0.68: centre the campus in the free ground of its block; scale it down only where the block is narrower than 46m.
+  const [bx0,bx1]=blockSpan(bx),[bz0,bz1]=blockSpan(bz);
+  const sc=Math.min(1,(bx1-bx0)/46,(bz1-bz0)/46),x=(bx0+bx1)/2,z=(bz0+bz1)/2,sz=44*sc;
+  if(expandedBuildingOverlap(x,z,sz,sz,2)||amenityColliders.some(c=>x+sz/2+1>c.minX&&x-sz/2-1<c.maxX&&z+sz/2+1>c.minZ&&z-sz/2-1<c.maxZ))continue;
   const label=`SPORTS CENTRE ${String(sportsCentreNames.length+1).padStart(4,'0')}`;
-  records.push({x,z,label});sportsCentreNames.push({x,z,label,district:nearestDistrictFor(x,z)[0]});
-  recordCityFacility('sportscomplex',x,z,44,44,label);amenityColliders.push({minX:x-22,maxX:x+22,minZ:z-22,maxZ:z+22});used.add(key);n++;
+  records.push({x,z,s:sc,label});sportsCentreNames.push({x,z,label,district:nearestDistrictFor(x,z)[0]});
+  recordCityFacility('sportscomplex',x,z,sz,sz,label);amenityColliders.push({minX:x-sz/2,maxX:x+sz/2,minZ:z-sz/2,maxZ:z+sz/2});used.add(key);n++;
  }
  function campusInstances(geometry,material,fn){const mesh=new THREE.InstancedMesh(geometry,material,records.length),d=new THREE.Object3D();records.forEach((r,i)=>{fn(d,r);d.updateMatrix();mesh.setMatrixAt(i,d.matrix)});mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=true;scene.add(mesh)}
- campusInstances(new THREE.BoxGeometry(1,1,1),fieldMat,(d,r)=>{d.position.set(r.x-8,.12,r.z-8);d.scale.set(21,.24,13)});
- campusInstances(new THREE.BoxGeometry(1,1,1),courtMat,(d,r)=>{d.position.set(r.x+9,.12,r.z-8);d.scale.set(16,.24,13)});
- campusInstances(new THREE.BoxGeometry(1,1,1),parkMat,(d,r)=>{d.position.set(r.x+9,.08,r.z+16);d.scale.set(19,.16,8)});
- campusInstances(new THREE.BoxGeometry(1,1,1),lineMat,(d,r)=>{d.position.set(r.x+9,.22,r.z+16);d.scale.set(18,.035,.12)});
+ campusInstances(new THREE.BoxGeometry(1,1,1),fieldMat,(d,r)=>{d.position.set(r.x-8*r.s,.12,r.z-8*r.s);d.scale.set(21*r.s,.24,13*r.s)});
+ campusInstances(new THREE.BoxGeometry(1,1,1),courtMat,(d,r)=>{d.position.set(r.x+9*r.s,.12,r.z-8*r.s);d.scale.set(16*r.s,.24,13*r.s)});
+ campusInstances(new THREE.BoxGeometry(1,1,1),parkMat,(d,r)=>{d.position.set(r.x+9*r.s,.08,r.z+16*r.s);d.scale.set(19*r.s,.16,8*r.s)});
+ campusInstances(new THREE.BoxGeometry(1,1,1),lineMat,(d,r)=>{d.position.set(r.x+9*r.s,.22,r.z+16*r.s);d.scale.set(18*r.s,.035,.12)});
  const bayMat=new THREE.MeshBasicMaterial({color:0xf4f2e7});
  const bayMesh=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),bayMat,records.length*4),bd=new THREE.Object3D();
- records.forEach((r,i)=>{for(let b=0;b<4;b++){bd.position.set(r.x+2+b*4,.22,r.z+20);bd.scale.set(.12,.035,5);bd.updateMatrix();bayMesh.setMatrixAt(i*4+b,bd.matrix)}});
+ records.forEach((r,i)=>{for(let b=0;b<4;b++){bd.position.set(r.x+(2+b*4)*r.s,.22,r.z+20*r.s);bd.scale.set(.12,.035,5*r.s);bd.updateMatrix();bayMesh.setMatrixAt(i*4+b,bd.matrix)}});
  bayMesh.instanceMatrix.needsUpdate=true;bayMesh.frustumCulled=true;scene.add(bayMesh);
  console.info('Additional instanced sports centres:',n);
 }
@@ -1707,7 +1755,7 @@ document.querySelector('#weatherBtn').onclick=()=>{weather=weather==='Clear'?'Ra
 document.querySelector('#activityBtn').onclick=()=>{document.querySelector('#activityPanel').classList.toggle('panel-open')};
 document.querySelector('#feedClose').onclick=()=>document.querySelector('#activityPanel').classList.remove('panel-open');
 document.querySelector('#feedCreate').onclick=()=>openCreateActivity();
-document.querySelectorAll('[data-feed-action]').forEach(b=>b.addEventListener('click',()=>handleFeedAction(b.dataset.feedAction)));
+document.querySelectorAll('[data-feed-action]').forEach(b=>b.addEventListener('click',()=>{if(typeof handleFeedAction==='function')handleFeedAction(b.dataset.feedAction)}));
 document.querySelector('#transportBtn').onclick=()=>openTransport();
 document.querySelector('#dealerBtn').onclick=()=>openDealer();
 document.querySelector('#vehiclesBtn').onclick=()=>openGarage();
@@ -2092,6 +2140,128 @@ document.querySelector('#cityMapClose').addEventListener('click',()=>setCityMapO
 window.addEventListener('keydown',e=>{if(e.key==='Escape'&&cityMapOpen)setCityMapOpen(false)});
 let uiUpdateElapsed=0;
 // Adaptive render resolution: if frame rate drops, lower pixel count without restarting.
+// ============================================================================
+// v0.68 VIEW-ONLY RENDERING
+// Nothing was removed from the city. Instead, everything static is grouped into 300m cells and only the
+// cells that are inside the camera frustum AND within draw distance are drawn:
+//  * the city-wide instanced meshes (560,000 road-paint dashes, 176,000 pavement/kerb slabs, 19,600 street
+//    lamps x5 parts, lamp glow) are split per cell, so the GPU only draws the instances around the player;
+//  * ~30,000 individual meshes/groups are parked in per-cell groups whose whole subtree is skipped when
+//    the cell is hidden, and whose matrices are frozen (no per-frame matrix work for static scenery).
+// Draw distance is graded by object size: small detail 800m, mid-size 1500m, big structures 2600m.
+// ============================================================================
+const CULL_CELL=300,CULL_SPHERE_R=470,CULL_SPHERE_Y=250;
+const CULL_DIST={near:800,mid:1500,far:2600,pool:800,glow:800};
+const cullCells=[],cullCellMap=new Map();
+const cellFrustum=new THREE.Frustum(),cellProj=new THREE.Matrix4(),cullBox=new THREE.Box3(),cullSize=new THREE.Vector3(),cullCtr=new THREE.Vector3(),cullCol=new THREE.Color(),camWorld=new THREE.Vector3();
+function getCullCell(cls,cx,cz,master=null){
+ const key=cls+':'+cx+','+cz;let c=cullCellMap.get(key);
+ if(!c){
+  const group=new THREE.Group();group.matrixAutoUpdate=false;
+  group.updateMatrixWorld=function(){};     // frozen subtree: static scenery needs no per-frame matrix work
+  const mx=(cx+.5)*CULL_CELL,mz=(cz+.5)*CULL_CELL;
+  c={group,cx:mx,cz:mz,dist:CULL_DIST[cls]||CULL_DIST.far,master,sphere:new THREE.Sphere(new THREE.Vector3(mx,CULL_SPHERE_Y,mz),CULL_SPHERE_R)};
+  cullCellMap.set(key,c);cullCells.push(c);scene.add(group);
+ }
+ return c;
+}
+function cullClassFromSize(a,b,c){
+ const m=[a,b,c].sort((p,q)=>p-q)[1];       // median dimension separates slabs/paint/poles from buildings
+ return m<3?'near':(m<25?'mid':'far');
+}
+function chunkInstanced(src,forceCls,master){
+ const n=src.count,arr=src.instanceMatrix.array,col=src.instanceColor?src.instanceColor.array:null;
+ const dead=o=>arr[o]===0&&arr[o+5]===0&&arr[o+10]===0;       // removed lamps are zero-scaled
+ let cls=forceCls;
+ if(!cls){
+  let k=0;while(k<n&&dead(k*16))k++;
+  if(k>=n){scene.remove(src);return 0}
+  if(!src.geometry.boundingBox)src.geometry.computeBoundingBox();
+  const bb=src.geometry.boundingBox,o=k*16;
+  const sx=Math.hypot(arr[o],arr[o+1],arr[o+2]),sy=Math.hypot(arr[o+4],arr[o+5],arr[o+6]),sz=Math.hypot(arr[o+8],arr[o+9],arr[o+10]);
+  cls=cullClassFromSize((bb.max.x-bb.min.x)*sx,(bb.max.y-bb.min.y)*sy,(bb.max.z-bb.min.z)*sz);
+ }
+ const buckets=new Map();
+ for(let i=0;i<n;i++){
+  const o=i*16;if(dead(o))continue;
+  const cx=Math.floor(arr[o+12]/CULL_CELL),cz=Math.floor(arr[o+14]/CULL_CELL),key=cx+','+cz;
+  let b=buckets.get(key);if(!b)buckets.set(key,b={cx,cz,idx:[]});b.idx.push(i);
+ }
+ let made=0;
+ for(const b of buckets.values()){
+  const m=new THREE.InstancedMesh(src.geometry,src.material,b.idx.length),dst=m.instanceMatrix.array;
+  for(let j=0;j<b.idx.length;j++)dst.set(arr.subarray(b.idx[j]*16,b.idx[j]*16+16),j*16);
+  if(col){
+   m.setColorAt(0,cullCol.setRGB(1,1,1));const dc=m.instanceColor.array;
+   for(let j=0;j<b.idx.length;j++){const q=b.idx[j]*3;dc[j*3]=col[q];dc[j*3+1]=col[q+1];dc[j*3+2]=col[q+2]}
+   m.instanceColor.needsUpdate=true;
+  }
+  m.instanceMatrix.needsUpdate=true;m.renderOrder=src.renderOrder;m.castShadow=false;m.receiveShadow=false;
+  if(typeof m.computeBoundingSphere==='function'){m.computeBoundingSphere();m.frustumCulled=true}else m.frustumCulled=false;
+  getCullCell(cls,b.cx,b.cz,master).group.add(m);made++;
+ }
+ scene.remove(src);
+ return made;
+}
+function optimizeWorldForView(){
+ scene.updateMatrixWorld(true);                       // settle every matrix once, then freeze static cells
+ const keep=new Set([player,rainGroup,camera]);
+ let chunks=0,grouped=0,rootKept=0;
+ for(const L of slRealLights)keep.add(L);
+ // Trees keep their own per-chunk LOD/visibility logic; their chunk objects are simply parked in the same cells
+ // so that hidden cells skip them entirely (their own .visible flags still work inside a visible cell).
+ for(const ch of treeChunks.values()){
+  const cell=getCullCell('near',Math.floor(ch.cx/CULL_CELL),Math.floor(ch.cz/CULL_CELL));
+  for(const t of [ch.near,ch.far,ch.decals]){cell.group.add(t);grouped++}
+ }
+ const glowSrc=slGlow,glowAttr=slGlowAttr,glowMat=slGlowMat,poolSrc=slPools;
+ const glowFlag={visible:false},poolFlag={visible:false};
+ for(const o of scene.children.slice()){
+  if(keep.has(o)||o.isLight||o.isCamera)continue;
+  if(glowSrc&&o===glowSrc){
+   const pos=glowAttr.array,N=glowAttr.count,bk=new Map();
+   for(let i=0;i<N;i++){
+    if(pos[i*3+1]<-1000)continue;                    // removed lamps
+    const cx=Math.floor(pos[i*3]/CULL_CELL),cz=Math.floor(pos[i*3+2]/CULL_CELL),key=cx+','+cz;
+    let b=bk.get(key);if(!b)bk.set(key,b={cx,cz,idx:[]});b.idx.push(i);
+   }
+   for(const b of bk.values()){
+    const a=new Float32Array(b.idx.length*3);
+    b.idx.forEach((i,j)=>{a[j*3]=pos[i*3];a[j*3+1]=pos[i*3+1];a[j*3+2]=pos[i*3+2]});
+    const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.BufferAttribute(a,3));geo.computeBoundingSphere();
+    const pts=new THREE.Points(geo,glowMat);pts.renderOrder=glowSrc.renderOrder;
+    getCullCell('glow',b.cx,b.cz,glowFlag).group.add(pts);chunks++;
+   }
+   scene.remove(o);continue;
+  }
+  if(o.isInstancedMesh){chunks+=chunkInstanced(o,o===poolSrc?'pool':null,o===poolSrc?poolFlag:null);continue}
+  if(o.isPoints||o.isLine||o.isSprite)continue;
+  cullBox.setFromObject(o);
+  if(cullBox.isEmpty())continue;
+  cullBox.getSize(cullSize);
+  if(cullSize.x>CULL_CELL*.9||cullSize.z>CULL_CELL*.9){rootKept++;continue}   // roads, ground, water: few, huge, always handled by frustum culling
+  cullBox.getCenter(cullCtr);
+  const cell=getCullCell(cullClassFromSize(cullSize.x,cullSize.y,cullSize.z),Math.floor(cullCtr.x/CULL_CELL),Math.floor(cullCtr.z/CULL_CELL));
+  cell.group.add(o);grouped++;
+ }
+ // The street-light module toggles these flags at dusk/dawn; they now switch whole sets of chunked pools / glow points.
+ slPools=poolFlag;slGlow=glowFlag;
+ console.info('This Is Lagos v0.68 view culling:',{cells:cullCells.length,instancedChunks:chunks,objectsParkedInCells:grouped,hugeObjectsKeptAtRoot:rootKept,sceneRootChildren:scene.children.length});
+ updateCullCells();
+}
+function updateCullCells(){
+ camera.updateMatrixWorld();
+ cellProj.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);cellFrustum.setFromProjectionMatrix(cellProj);
+ camera.getWorldPosition(camWorld);
+ const px=camWorld.x,pz=camWorld.z;
+ for(const c of cullCells){
+  const dx=c.cx-px,dz=c.cz-pz,reach=c.dist+250;
+  let vis=dx*dx+dz*dz<reach*reach;
+  if(vis&&c.master)vis=c.master.visible!==false;
+  if(vis)vis=cellFrustum.intersectsSphere(c.sphere);
+  c.group.visible=vis;
+ }
+}
 let fpsSampleTime=0,fpsFrames=0,slowSamples=0,fastSamples=0;
 function animate(){
  requestAnimationFrame(animate);
@@ -2156,10 +2326,11 @@ function animate(){
  }
  updateActivityFacilityProximity();
  if(weather==='Rain'){for(const d of drops){d.position.y-=uiDt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*180;d.position.z=player.position.z+(Math.random()-.5)*180}}}
- updateCamera();if((cullFrame++%3)===0){updateVisibleBuildings();updateTreeVisibility();}renderer.render(scene,camera);
+ updateCamera();updateCullCells();if((cullFrame++%3)===0){updateVisibleBuildings();updateTreeVisibility();}renderer.render(scene,camera);
 }
 updateCamera();
 console.info('This Is Lagos v0.66 expanded city:',{landAreaMultiplier:25,linearFootprintMultiplier:5,districts:districtDefs.length,buildings:cityMapBuildings.length,facilities:cityMapFacilities.length,sportsCentres:sportsCentreNames.length});
+optimizeWorldForView();
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setPixelRatio(maxDevicePixelRatio*renderScale);renderer.setSize(innerWidth,innerHeight)});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)clock.getDelta()});
