@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.61 — Lagos street names, physical street signs and Grand Dealership on Isaac Uwadiale Road — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
+// THIS IS LAGOS v0.62 — Lagos street names, physical street signs and Grand Dealership on Isaac Uwadiale Road — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -822,6 +822,71 @@ function buildStreetNameSigns(){
  }
 }
 buildStreetNameSigns();
+
+// District gateways (v0.62): the blue district name board (Victoria Island, Yaba, ...) now spans the full width of
+// the nearest 48m avenue, carried high above the carriageway on two poles, one on each side of the road.
+const DISTRICT_POLE_HEIGHT=BUS_SHELTER_HEIGHT*1.5;       // 1.5x the bus-shelter height (~27.5 units)
+const DISTRICT_POLE_OFFSET=27.6;                          // pavement strip just outside the 24m half-width of an avenue
+const DISTRICT_BOARD_H=6;
+const districtPoleGeo=new THREE.CylinderGeometry(.5,.7,DISTRICT_POLE_HEIGHT,12);
+const districtPoleMat=mat(0x2b3640);
+const districtFrameMat=mat(0x16202a);
+function makeDistrictTexture(name,aspect){
+ const cw=2048,ch=Math.round(cw/aspect);
+ const cv=document.createElement('canvas');cv.width=cw;cv.height=ch;
+ const c=cv.getContext('2d');
+ const bg=c.createLinearGradient(0,0,0,ch);bg.addColorStop(0,'#2a72a8');bg.addColorStop(1,'#16456c');
+ c.fillStyle=bg;c.fillRect(0,0,cw,ch);
+ c.strokeStyle='#ffffff';c.lineWidth=Math.max(5,ch*.03);
+ c.beginPath();c.roundRect(ch*.07,ch*.07,cw-ch*.14,ch*.86,ch*.12);c.stroke();
+ c.fillStyle='#35c4ff';c.fillRect(ch*.2,ch*.22,cw*.012,ch*.56);c.fillRect(cw-ch*.2-cw*.012,ch*.22,cw*.012,ch*.56);
+ c.textAlign='center';c.textBaseline='middle';
+ const fam='"Segoe UI","Helvetica Neue",Arial,sans-serif',text=name.toUpperCase();
+ let size=ch*.62;c.font=`800 ${size}px ${fam}`;
+ if('letterSpacing' in c)c.letterSpacing=`${size*.06}px`;
+ while(c.measureText(text).width>cw*.7&&size>10){size-=2;c.font=`800 ${size}px ${fam}`;if('letterSpacing' in c)c.letterSpacing=`${size*.06}px`;}
+ c.fillStyle='#ffffff';c.fillText(text,cw/2,ch*.53);
+ const tex=new THREE.CanvasTexture(cv);tex.anisotropy=renderer.capabilities.getMaxAnisotropy();return tex;
+}
+function districtGatewayPlacement(cx,cz){
+ const mod=(a,n)=>((a%n)+n)%n;
+ const avenueNear=v=>Math.max(-840,Math.min(840,Math.round(v/210)*210));   // outermost avenue of the grid is at +/-840
+ const midBlock=v=>{   // mid-block points (35 + 70n) that are not on a streetlight spot (multiples of 105)
+  let best=null;
+  for(let n=Math.floor(v/70)-4;n<=Math.floor(v/70)+4;n++){
+   const q=n*70+35,r=mod(q,105);
+   if(Math.min(r,105-r)<6)continue;
+   if(best===null||Math.abs(q-v)<Math.abs(best-v))best=q;
+  }
+  return best;
+ };
+ const ax=avenueNear(cx),az=avenueNear(cz);
+ // Choose the avenue closest to the district centre; the gateway crosses it at right angles.
+ return Math.abs(ax-cx)<=Math.abs(az-cz)
+  ?{x:ax,z:midBlock(cz),alongZ:true}      // north-south avenue: board runs along X
+  :{x:midBlock(cx),z:az,alongZ:false};    // east-west avenue: board runs along Z
+}
+function addDistrictGateway(name,cx,cz){
+ const pl=districtGatewayPlacement(cx,cz);
+ const span=DISTRICT_POLE_OFFSET*2,boardW=span-1.4;
+ const g=new THREE.Group();g.position.set(pl.x,0,pl.z);g.rotation.y=pl.alongZ?0:Math.PI/2;scene.add(g);
+ for(const sx of [-1,1]){
+  const pole=new THREE.Mesh(districtPoleGeo,districtPoleMat);
+  pole.position.set(sx*DISTRICT_POLE_OFFSET,DISTRICT_POLE_HEIGHT/2,0);g.add(pole);
+  const base=new THREE.Mesh(new THREE.BoxGeometry(2.2,.5,2.2),districtFrameMat);base.position.set(sx*DISTRICT_POLE_OFFSET,.25,0);g.add(base);
+ }
+ const boardY=DISTRICT_POLE_HEIGHT-DISTRICT_BOARD_H/2-.4;
+ const frame=new THREE.Mesh(new THREE.BoxGeometry(boardW+.3,DISTRICT_BOARD_H+.3,.4),districtFrameMat);frame.position.set(0,boardY,0);g.add(frame);
+ const faceMat=new THREE.MeshBasicMaterial({map:makeDistrictTexture(name,boardW/DISTRICT_BOARD_H)});
+ const front=new THREE.Mesh(new THREE.PlaneGeometry(boardW,DISTRICT_BOARD_H),faceMat);front.position.set(0,boardY,.22);g.add(front);
+ const back=new THREE.Mesh(new THREE.PlaneGeometry(boardW,DISTRICT_BOARD_H),faceMat);back.rotation.y=Math.PI;back.position.set(0,boardY,-.22);g.add(back);
+ // Keep bus shelters and street trees away from the two pole bases.
+ for(const sx of [-1,1]){
+  const px=pl.alongZ?pl.x+sx*DISTRICT_POLE_OFFSET:pl.x,pz=pl.alongZ?pl.z:pl.z+sx*DISTRICT_POLE_OFFSET;
+  amenityColliders.push({minX:px-2,maxX:px+2,minZ:pz-2,maxZ:pz+2});
+ }
+}
+function buildDistrictGateways(){for(const d of districtDefs)addDistrictGateway(d[0],d[1],d[2]);}
 function palmTree(x,z,scale=1){addTree(x,z,scale*1.15,'palm')}
 function fencedPitch(cx,cz,name='FOOTBALL PITCH',surface=sportGreen){
  const g=new THREE.Group();g.position.set(cx,0,cz);scene.add(g);
@@ -877,7 +942,7 @@ function buildDistrict(name,cx,cz,type,seed){
  // arterial frontage, varied block fabric and a signature landmark per district.
  if(type==='island'){
   for(let i=0;i<10;i++){makeBuilding(cx+(i%5)*34-68,cz+Math.floor(i/5)*45-18,27,29,32,'office',seed+i)}
-  makeBuilding(cx,cz+90,76,40,64,'office',seed+20);signBoard(name.toUpperCase(),cx,cz-80,34,0x145b3c);
+  makeBuilding(cx,cz+90,76,40,64,'office',seed+20);
  }else if(type==='market'){
   marketCluster(cx,cz,name.toUpperCase());
   for(let i=0;i<12;i++)makeBuilding(cx+(i%4)*29-44,cz+70+Math.floor(i/4)*25,18,18,8+(i%3)*3,'shop',seed+i);
@@ -887,7 +952,7 @@ function buildDistrict(name,cx,cz,type,seed){
   makeBuilding(cx,cz+110,55,32,12,'mixed',seed);signBoard('SPORTS & RECREATION COMPLEX',cx,cz+88,35,0x176b43);
  }else if(type==='civic'){
   makeBuilding(cx-35,cz,45,38,22,'office',seed);makeBuilding(cx+35,cz,42,36,18,'office',seed+1);
-  makeBuilding(cx,cz+58,88,28,8,'mixed',seed+2);signBoard(name.toUpperCase(),cx,cz-48,34,0x205c82);
+  makeBuilding(cx,cz+58,88,28,8,'mixed',seed+2);
  }else{
   const isMainland=/YABA|SURULERE|OSHODI|MUSHIN|AGEGE|FESTAC/i.test(name);
   const isLuxury=/LEKKI|AJAH|IKOYI/i.test(name);
@@ -909,7 +974,6 @@ function buildDistrict(name,cx,cz,type,seed){
    }else compound(x,z,houseKind,seed+i);
   }
   for(let i=0;i<7;i++)makeBuilding(cx+(i%4)*36-54,cz-100+Math.floor(i/4)*28,24,18,5+(i%2)*2,'shop',seed+i);
-  signBoard(name.toUpperCase(),cx,cz-135,28,0x24613d);
  }
 }
 // Districts distributed around the enlarged, connected city. Names are inspired
@@ -934,6 +998,7 @@ for(const d of districtDefs){
  amenityColliders.push({minX:cx-52,maxX:cx+52,minZ:cz-38,maxZ:cz+38});
 }
 districtDefs.forEach((d,i)=>buildDistrict(d[0],d[1],d[2],d[3],i*13));
+buildDistrictGateways();
 
 // v0.35: denser city infill with a 60% tall-building target.
 // One substantial building is placed near the centre of each available block;
