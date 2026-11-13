@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.62 — Lagos street names, physical street signs and Grand Dealership on Isaac Uwadiale Road — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
+// THIS IS LAGOS v0.63 — Lagos street names, physical street signs and Grand Dealership on Isaac Uwadiale Road — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -266,7 +266,7 @@ function addStreetTrees(){
     for(const axis of ['z','x']){
      const jq=q+(treeHash(g,q,11+side)-.5)*1.6,off=g+side*(half+3.5+treeHash(q,g,13)*.4);
      const x=axis==='z'?off:jq,z=axis==='z'?jq:off;
-     if(treeOnRoad(x,z,3.5)||!free(x,z,.6))continue;
+     if(treeOnRoad(x,z,3.5)||!free(x,z,.6)||nearStreetlight(x,z,1.8))continue;
      addTree(x,z,.8+treeHash(x,z,9)*.35,'palm',3.5);
     }
    }
@@ -524,23 +524,116 @@ for(let p=-840;p<=840;p+=210){for(let q=-840;q<=840;q+=210){
  addRoadArrow(p+AO,q-6,Math.PI/2);    // approach from the east, travel east-to-west
 }}
 
-// Lagos-style streetlights: galvanized poles, outreach arms and warm LED heads.
-// The lamps are placed on the outer verge, clear of the carriageway.
-const poleMat=mat(0x59645e,.55), lampGlow=new THREE.MeshStandardMaterial({color:0xffe7ad,emissive:0xffc66b,emissiveIntensity:1.6,roughness:.3});
-function streetlight(x,z,rotation=0,scale=1){
- const g=new THREE.Group();g.position.set(x,0,z);g.rotation.y=rotation;scene.add(g);
- const pole=new THREE.Mesh(new THREE.CylinderGeometry(.13*scale,.2*scale,8*scale,9),poleMat);pole.position.y=4*scale;pole.castShadow=true;g.add(pole);
- const arm=new THREE.Mesh(new THREE.CylinderGeometry(.075*scale,.09*scale,2.2*scale,8),poleMat);arm.rotation.z=Math.PI/2;arm.position.set(.88*scale,7.65*scale,0);g.add(arm);
- const head=new THREE.Mesh(new THREE.BoxGeometry(1.25*scale,.22*scale,.48*scale),lampGlow);head.position.set(1.85*scale,7.55*scale,0);g.add(head);
- const hood=new THREE.Mesh(new THREE.BoxGeometry(1.45*scale,.12*scale,.62*scale),poleMat);hood.position.set(1.85*scale,7.72*scale,0);g.add(hood);
- return g;
+// Lagos-style streetlights (v0.63): tall galvanized poles (1.5x the bus-shelter height) with long outreach arms that
+// hold the lamp head out over the edge of the carriageway. Poles stand on the pavement verge, never on the road.
+// All lamps are drawn as instanced meshes; at night each one gets a bright light pool on the road, a halo, and the
+// lamps nearest the player also cast real light onto buildings, cars and people.
+const BUS_SHELTER_HEIGHT=18.33;                          // addBusStop roof: base 18.15 + 0.18 thickness
+const STREETLIGHT_HEIGHT=BUS_SHELTER_HEIGHT*1.5;         // ~27.5 units
+const poleMat=mat(0x59645e,.55), lampGlow=new THREE.MeshStandardMaterial({color:0xffe7ad,emissive:0xffc66b,emissiveIntensity:.15,roughness:.3});
+const avenueLamps=[];                                    // every lamp; a bus shelter removes any lamp inside its footprint
+const slCells=new Map();                                 // spatial hash so street trees keep clear of the poles
+const slMeshes=[];
+let slPools=null,slPoolMat=null,slGlow=null,slGlowMat=null,slGlowAttr=null;
+const slRealLights=[];
+function nearStreetlight(x,z,m){
+ const cx=Math.floor(x/16),cz=Math.floor(z/16);
+ for(let i=-1;i<=1;i++)for(let j=-1;j<=1;j++){const a=slCells.get((cx+i)+','+(cz+j));if(a)for(const l of a)if(Math.abs(l.x-x)<m&&Math.abs(l.z-z)<m)return true;}
+ return false;
 }
-const avenueLamps=[];   // kept so a bus shelter can replace a lamp that stands inside its footprint
-for(let p=-840;p<=840;p+=210){
- for(let q=-945;q<=945;q+=105){avenueLamps.push({g:streetlight(p-27.2,q,0,.9),x:p-27.2,z:q});avenueLamps.push({g:streetlight(q,p+27.2,Math.PI/2,.9),x:q,z:p+27.2});}
+function removeStreetlight(l){
+ if(l.removed)return;l.removed=true;
+ const zero=new THREE.Matrix4().makeScale(0,0,0);
+ for(const m of slMeshes){m.setMatrixAt(l.i,zero);m.instanceMatrix.needsUpdate=true;}
+ slGlowAttr.setY(l.i,-5000);slGlowAttr.needsUpdate=true;
 }
-// Local-street lights are shifted to the outer edge of the new pavement.
-for(let p=-980;p<=980;p+=140){if(Math.abs(p%210)<1)continue;for(let q=-910;q<=910;q+=210){streetlight(p-27.2,q,0,.68);streetlight(q,p+27.2,Math.PI/2,.68);}}
+{
+ const H=STREETLIGHT_HEIGHT,specs=[];
+ const roadHalf=c=>(Math.round(c/70)%3===0)?24:4;      // every 3rd road is a 48m avenue, the rest are 8m streets
+ const onCarriageway=(x,z)=>{const rx=Math.round(x/70)*70,rz=Math.round(z/70)*70;return Math.abs(x-rx)<roadHalf(rx)+1.2||Math.abs(z-rz)<roadHalf(rz)+1.2;};
+ // Any lamp whose pole would stand on asphalt (or its kerb) is simply not built.
+ const add=(x,z,rot,arm)=>{if(Math.abs(x)>1000||Math.abs(z)>1000||onCarriageway(x,z))return;specs.push({x,z,rot,arm});};
+ // Avenues: both verges, every 105 units (spots that fall inside a crossing avenue are dropped by the filter).
+ for(let p=-840;p<=840;p+=210)for(let q=-945;q<=945;q+=105){
+  add(p-27.2,q,0,5.8);add(p+27.2,q,Math.PI,5.8);                  // north-south avenue
+  add(q,p+27.2,Math.PI/2,5.8);add(q,p-27.2,-Math.PI/2,5.8);       // east-west avenue
+ }
+ // Local streets: lamps on the pavement beside the street, alternating sides, mid-block every 210 units.
+ let li=0;
+ for(let c=-980;c<=980;c+=70){
+  if(Math.round(c/70)%3===0)continue;
+  for(let n=-14;n<=13;n++){
+   if(((n%3)+3)%3!==0)continue;
+   const q=35+70*n;if(Math.abs(q)>945)continue;
+   const side=(li++%2)?1:-1;
+   add(c+side*6.2,q,side<0?0:Math.PI,5.2);
+   add(q,c+side*6.2,side<0?-Math.PI/2:Math.PI/2,5.2);
+  }
+ }
+ const N=specs.length;
+ const poleGeo=new THREE.CylinderGeometry(.3,.52,H,10);poleGeo.translate(0,H/2,0);
+ const armGeo=new THREE.CylinderGeometry(.16,.22,1,8);armGeo.rotateZ(-Math.PI/2);armGeo.translate(.5,H-.7,0);   // unit arm, scaled per lamp
+ const headGeo=new THREE.BoxGeometry(2.6,.42,1.0);headGeo.translate(0,H-.5,0);
+ const hoodGeo=new THREE.BoxGeometry(2.9,.22,1.2);hoodGeo.translate(0,H-.2,0);
+ const mk=(geo,material)=>{const m=new THREE.InstancedMesh(geo,material,N);m.frustumCulled=false;scene.add(m);slMeshes.push(m);return m;};
+ const poles=mk(poleGeo,poleMat),arms=mk(armGeo,poleMat),heads=mk(headGeo,lampGlow),hoods=mk(hoodGeo,poleMat);
+ // Soft radial texture for the light pool and halo.
+ const rcv=document.createElement('canvas');rcv.width=rcv.height=256;const rc=rcv.getContext('2d');
+ const rg=rc.createRadialGradient(128,128,0,128,128,128);
+ rg.addColorStop(0,'rgba(255,255,255,1)');rg.addColorStop(.22,'rgba(255,255,255,.6)');rg.addColorStop(.55,'rgba(255,255,255,.2)');rg.addColorStop(1,'rgba(255,255,255,0)');
+ rc.fillStyle=rg;rc.fillRect(0,0,256,256);const radialTex=new THREE.CanvasTexture(rcv);
+ slPoolMat=new THREE.MeshBasicMaterial({map:radialTex,color:0xffc46e,transparent:true,opacity:0,blending:THREE.AdditiveBlending,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-4,polygonOffsetUnits:-4});
+ const poolGeo=new THREE.PlaneGeometry(1,1);poolGeo.rotateX(-Math.PI/2);
+ slPools=new THREE.InstancedMesh(poolGeo,slPoolMat,N);slPools.frustumCulled=false;slPools.renderOrder=2;slPools.visible=false;scene.add(slPools);slMeshes.push(slPools);
+ const glowPos=new Float32Array(N*3);
+ slGlowAttr=new THREE.BufferAttribute(glowPos,3);
+ const glowGeo=new THREE.BufferGeometry();glowGeo.setAttribute('position',slGlowAttr);
+ slGlowMat=new THREE.PointsMaterial({map:radialTex,color:0xffd8a0,size:10,sizeAttenuation:true,transparent:true,opacity:0,blending:THREE.AdditiveBlending,depthWrite:false});
+ slGlow=new THREE.Points(glowGeo,slGlowMat);slGlow.frustumCulled=false;slGlow.visible=false;scene.add(slGlow);
+ const d=new THREE.Object3D();
+ specs.forEach((sp,i)=>{
+  const hOff=sp.arm-.6,hx=sp.x+Math.cos(sp.rot)*hOff,hz=sp.z-Math.sin(sp.rot)*hOff;
+  d.rotation.set(0,sp.rot,0);d.scale.set(1,1,1);
+  d.position.set(sp.x,0,sp.z);d.updateMatrix();poles.setMatrixAt(i,d.matrix);
+  d.scale.set(sp.arm,1,1);d.updateMatrix();arms.setMatrixAt(i,d.matrix);
+  d.scale.set(1,1,1);d.position.set(hx,0,hz);d.updateMatrix();heads.setMatrixAt(i,d.matrix);hoods.setMatrixAt(i,d.matrix);
+  const D=sp.arm>5.5?130:96;                                       // avenues get wider pools than local streets
+  d.scale.set(D,1,D);d.position.set(hx,.1,hz);d.updateMatrix();slPools.setMatrixAt(i,d.matrix);
+  slGlowAttr.setXYZ(i,hx,H-.6,hz);
+  const rec={x:sp.x,z:sp.z,hx,hz,i,removed:false};avenueLamps.push(rec);
+  const key=Math.floor(sp.x/16)+','+Math.floor(sp.z/16);let cell=slCells.get(key);if(!cell)slCells.set(key,cell=[]);cell.push(rec);
+ });
+ for(const m of slMeshes)m.instanceMatrix.needsUpdate=true;
+ // A handful of real point lights follow the player and are moved onto the nearest lamps each update.
+ const physical=parseInt(THREE.REVISION,10)>=155;
+ for(let i=0;i<8;i++){
+  const L=new THREE.PointLight(0xffd28a,0,170,physical?1:1.5);
+  L.userData.peak=physical?120:2.2;scene.add(L);slRealLights.push(L);
+ }
+}
+// Called from setDay(): lamps come on at dusk, are fully bright at night and fade out at dawn.
+function updateStreetLighting(night){
+ const level=Math.max(0,Math.min(1,(night-.45)/.35));
+ lampGlow.emissiveIntensity=.12+level*3.4;
+ slPoolMat.opacity=level*.85;slPools.visible=level>.01;
+ slGlowMat.opacity=level*.95;slGlow.visible=level>.01;
+ if(level>.01)renderer.toneMappingExposure+=level*.2;
+ const best=[];
+ if(level>.01){
+  const px=player.position.x,pz=player.position.z;
+  for(const l of avenueLamps){
+   if(l.removed)continue;
+   const dd=(l.hx-px)*(l.hx-px)+(l.hz-pz)*(l.hz-pz);
+   if(best.length<slRealLights.length||dd<best[best.length-1].dd){
+    best.push({l,dd});best.sort((u,v)=>u.dd-v.dd);if(best.length>slRealLights.length)best.pop();
+   }
+  }
+ }
+ slRealLights.forEach((L,i)=>{
+  if(best[i]){L.position.set(best[i].l.hx,STREETLIGHT_HEIGHT-1,best[i].l.hz);L.intensity=L.userData.peak*level;}
+  else L.intensity=0;
+ });
+}
 
 // Stop lines on every avenue arm entering an avenue/avenue junction.
 function addStopLine(direction,centerX,centerZ,approachSide){
@@ -745,7 +838,6 @@ function signBoard(text,x,z,width=22,color=0x176b43){
 }
 // Physical street-name signs (v0.61): modern two-line boards, 60% smaller than before, mounted parallel to the
 // street they name on two poles (0.25x the bus-shelter height) so nothing hangs over the carriageway.
-const BUS_SHELTER_HEIGHT=18.33;                          // addBusStop roof: base 18.15 + 0.18 thickness
 const STREET_SIGN_POLE_HEIGHT=BUS_SHELTER_HEIGHT*.25;    // two poles, 0.25x the shelter height (~4.6 units)
 const STREET_SIGN_SCALE=.4;                              // 60% reduction of the old board (was 10-17 x 5)
 const STREET_SUFFIXES=['Road','Street','Avenue','Expressway','Way','Causeway','Drive','Crescent','Approach'];
@@ -1313,7 +1405,7 @@ function addAmenityInfill(){
       const rotation=c.roadAxis==='x'?(c.side>0?-Math.PI/2:Math.PI/2):(c.side>0?Math.PI:0);
       addBusStop(c.x,c.z,rotation,SH_DEPTH/8);
       {const hx=c.roadAxis==='x'?SH_DEPTH/2+1:SH_HALF+1,hz=c.roadAxis==='x'?SH_HALF+1:SH_DEPTH/2+1;
-       for(const lamp of avenueLamps)if(lamp.g.parent&&Math.abs(lamp.x-c.x)<hx&&Math.abs(lamp.z-c.z)<hz)scene.remove(lamp.g);}   // the shelter replaces any streetlight standing in its footprint
+       for(const lamp of avenueLamps)if(!lamp.removed&&Math.abs(lamp.x-c.x)<hx&&Math.abs(lamp.z-c.z)<hz)removeStreetlight(lamp);}   // the shelter replaces any streetlight standing in its footprint
       addBusRoadMark(c.roadAxis,c.road,c.side,c.along);
       extraShelters++;placedCount++;
     }
@@ -1462,7 +1554,7 @@ function updateCamera(){
     camera.lookAt(player.position.x,player.position.y+0.8,player.position.z);
   }
 }
-function setDay(){let hour=worldMinutes/60;let daylight=Math.max(0,Math.sin((hour-6)/12*Math.PI));let night=1-daylight;let sky=new THREE.Color().lerpColors(new THREE.Color(0x101d37),new THREE.Color(0x9fc9d4),daylight);if(hour>17||hour<6)sky.lerp(new THREE.Color(0x25324c),.3);scene.background=sky;scene.fog.color.copy(sky);sun.intensity=.25+daylight*2.3;sun.color.setHex(daylight>.3?0xffe7c2:0x9bb8ed);renderer.toneMappingExposure=.55+daylight*.55;document.querySelector('#worldTime').textContent=hour<6||hour>=19?'Night':hour<12?'Morning':hour<17?'Afternoon':'Evening';}
+function setDay(){let hour=worldMinutes/60;let daylight=Math.max(0,Math.sin((hour-6)/12*Math.PI));let night=1-daylight;let sky=new THREE.Color().lerpColors(new THREE.Color(0x101d37),new THREE.Color(0x9fc9d4),daylight);if(hour>17||hour<6)sky.lerp(new THREE.Color(0x25324c),.3);scene.background=sky;scene.fog.color.copy(sky);sun.intensity=.25+daylight*2.3;sun.color.setHex(daylight>.3?0xffe7c2:0x9bb8ed);renderer.toneMappingExposure=.55+daylight*.55;document.querySelector('#worldTime').textContent=hour<6||hour>=19?'Night':hour<12?'Morning':hour<17?'Afternoon':'Evening';updateStreetLighting(night);}
 function toast(s){const t=document.querySelector('#toast');t.textContent=s;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1800)}
 function modal(title,body,actions=[]){document.querySelector('#modalTitle').textContent=title;document.querySelector('#modalBody').innerHTML=body;const a=document.querySelector('#modalActions');a.innerHTML='';actions.forEach(([label,fn,secondary])=>{const b=document.createElement('button');b.textContent=label;if(secondary)b.className='secondary';b.onclick=()=>{closeModal();fn?.()};a.appendChild(b)});document.querySelector('#modalBackdrop').classList.remove('hidden')}
 function closeModal(){document.querySelector('#modalBackdrop').classList.add('hidden')}
