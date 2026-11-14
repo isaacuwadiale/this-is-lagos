@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.68 — v0.67 plus: every building / sports centre / landmark fitted inside its city block (nothing on roads or pavements); view-only rendering (chunked instancing + distance/frustum cell culling). Earlier notes: v0.67 — v0.66 startup and shelter-placement performance fixes; 25x city land area and 25x city content quantity — 100 sports centres, existing two-pole district gateways retained — Lagos street names, physical street signs and Grand Dealership on Isaac Uwadiale Road — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
+// THIS IS LAGOS v0.74.1 — v0.74 hotfix: correct instanced-buffer capacity for four parking-bay markings per compact campus; compact sports-centre campuses stream as per-cell InstancedMeshes; distant campus render objects are removed and rebuilt only in the active 5x5 cell window.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -19,7 +19,20 @@ scene.add(new THREE.HemisphereLight(0xe7fff0,0x71856d,2));
 const sun=new THREE.DirectionalLight(0xfff2d5,2.5);sun.position.set(-35,55,25);sun.castShadow=false;scene.add(sun);
 const mat=(color,roughness=.85)=>new THREE.MeshStandardMaterial({color,roughness});
 const grass=mat(0x7eaa78),road=mat(0x343d3b),sidewalk=mat(0xc9d2c8),white=mat(0xf1f5e9),green=mat(0x18824a),glassMat=new THREE.MeshStandardMaterial({color:0x8eb8b4,roughness:.25,metalness:.15}),dark=mat(0x263a31);
-function block(w,h,d,m,x,y,z){const o=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m);o.position.set(x,y+h/2,z);o.castShadow=true;o.receiveShadow=true;scene.add(o);return o}
+// v0.71: share one unit cube for block scenery and split very long slabs into geographic pieces.
+// This keeps the 10.5km ground and road strips from remaining as single always-resident root meshes.
+const sharedBlockGeometry=new THREE.BoxGeometry(1,1,1);
+const BLOCK_STREAM_MAX=240;
+function block(w,h,d,m,x,y,z){
+ const nx=Math.max(1,Math.ceil(w/BLOCK_STREAM_MAX)),nz=Math.max(1,Math.ceil(d/BLOCK_STREAM_MAX));
+ const sw=w/nx,sd=d/nz;let first=null;
+ for(let ix=0;ix<nx;ix++)for(let iz=0;iz<nz;iz++){
+  const o=new THREE.Mesh(sharedBlockGeometry,m);
+  o.position.set(x-w/2+sw*(ix+.5),y+h/2,z-d/2+sd*(iz+.5));
+  o.scale.set(sw,h,sd);o.castShadow=true;o.receiveShadow=true;scene.add(o);if(!first)first=o;
+ }
+ return first;
+}
 block(300,.2,300,grass,0,-.2,0);
 // Obsolete compact starter roads and markings removed; the unified 48m road grid below is authoritative.
 const buildingMats=[0xe7e8d9,0xd7e2d9,0xd8d8cf,0xe8dfce,0xc7d9d0].map(c=>mat(c));
@@ -27,6 +40,15 @@ const buildingColliders=[];
 // Exact world-space footprints used by the live 2D map.
 const cityMapBuildings=[];
 const cityMapFacilities=[];
+// Compact sports-centre footprints remain as lightweight records; their GPU meshes stream by 300m cell.
+const compactSportsCentreRecords=[];
+const compactSportsCentreGeo=new THREE.BoxGeometry(1,1,1);
+const compactSportsCentreMats={
+ field:new THREE.MeshStandardMaterial({color:0x287b43,roughness:.9}),
+ court:new THREE.MeshStandardMaterial({color:0x276a9a,roughness:.8}),
+ parking:new THREE.MeshStandardMaterial({color:0x303735,roughness:.9}),
+ line:new THREE.MeshBasicMaterial({color:0xf4f2e7})
+};
 // v0.60: named Lagos street grid. The same registry drives street signs and map labels.
 const verticalStreetNames=[
  'Badagry Expressway','Murtala Muhammed Way','Agege Motor Road','Ikorodu Road','Herbert Macaulay Way',
@@ -317,6 +339,7 @@ function finalizeTrees(){
 function updateTreeVisibility(){
  const px=player.position.x,pz=player.position.z;
  for(const ch of treeChunks.values()){
+  if(!ch.near||!ch.far||!ch.decals)continue;
   const d=Math.hypot(ch.cx-px,ch.cz-pz),inView=viewFrustum.intersectsSphere(ch.sphere);
   const isNear=d<TREE_NEAR_DIST;
   ch.near.visible=inView&&isNear;
@@ -1178,21 +1201,45 @@ for(let gx=-5145;gx<=5145;gx+=70){
   cityMapBuildings.push({x:fit.x,z:fit.z,w:fit.w,d:fit.d,kind});
  }
 }
-// Split instanced buildings into 25 geographic chunks for frustum-friendly rendering.
-for(let tx=-2;tx<=2;tx++)for(let tz=-2;tz<=2;tz++){
- const records=expandedBuildingRecords.filter(b=>Math.floor((b.x+5250)/2100)===tx+2&&Math.floor((b.z+5250)/2100)===tz+2);
- if(!records.length)continue;
- const group=new THREE.Group();scene.add(group);
- const body=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),new THREE.MeshStandardMaterial({color:0xffffff,roughness:.86}),records.length);
- const roof=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),roofMat,records.length);
+// v0.69: true building-mesh streaming. Keep compact records/collision/map data
+// for the full city, but create render geometry only for the player's 5x5 cells.
+const BUILDING_STREAM_CELL=300,BUILDING_STREAM_RADIUS=2;
+const buildingRecordsByCell=new Map(),loadedBuildingCells=new Map();
+const buildingStreamMaterial=new THREE.MeshStandardMaterial({color:0xffffff,roughness:.86});
+for(const b of expandedBuildingRecords){
+ const cx=Math.floor((b.x+CITY_HALF)/BUILDING_STREAM_CELL),cz=Math.floor((b.z+CITY_HALF)/BUILDING_STREAM_CELL);
+ const key=cx+','+cz;let list=buildingRecordsByCell.get(key);if(!list)buildingRecordsByCell.set(key,list=[]);list.push(b);
+}
+function buildBuildingCell(cx,cz){
+ const key=cx+','+cz,records=buildingRecordsByCell.get(key);if(!records||!records.length)return;
+ const group=new THREE.Group();group.name='streamed-buildings-'+key;
+ const bodyGeo=new THREE.BoxGeometry(1,1,1),roofGeo=new THREE.BoxGeometry(1,1,1);
+ const body=new THREE.InstancedMesh(bodyGeo,buildingStreamMaterial,records.length);
+ const roof=new THREE.InstancedMesh(roofGeo,roofMat,records.length);
  const dummy=new THREE.Object3D(),color=new THREE.Color();
  records.forEach((b,i)=>{
   dummy.position.set(b.x,b.h/2,b.z);dummy.scale.set(b.w,b.h,b.d);dummy.updateMatrix();body.setMatrixAt(i,dummy.matrix);
   color.setHex(b.color);body.setColorAt(i,color);
   dummy.position.set(b.x,b.h+.25,b.z);dummy.scale.set(b.w+1,.5,b.d+1);dummy.updateMatrix();roof.setMatrixAt(i,dummy.matrix);
  });
- body.instanceMatrix.needsUpdate=true;roof.instanceMatrix.needsUpdate=true;body.frustumCulled=true;roof.frustumCulled=true;group.add(body,roof);
+ body.instanceMatrix.needsUpdate=true;roof.instanceMatrix.needsUpdate=true;
+ if(body.instanceColor)body.instanceColor.needsUpdate=true;
+ body.frustumCulled=true;roof.frustumCulled=true;body.castShadow=false;roof.castShadow=false;
+ group.add(body,roof);scene.add(group);loadedBuildingCells.set(key,{group,bodyGeo,roofGeo});
 }
+function updateStreamedBuildingCells(force=false){
+ const cx=Math.floor((player.position.x+CITY_HALF)/BUILDING_STREAM_CELL),cz=Math.floor((player.position.z+CITY_HALF)/BUILDING_STREAM_CELL);
+ const centerKey=cx+','+cz;if(!force&&centerKey===buildingStreamCenter)return;buildingStreamCenter=centerKey;
+ const wanted=new Set();
+ for(let x=cx-BUILDING_STREAM_RADIUS;x<=cx+BUILDING_STREAM_RADIUS;x++)for(let z=cz-BUILDING_STREAM_RADIUS;z<=cz+BUILDING_STREAM_RADIUS;z++){
+  if(x<0||z<0||x>=Math.ceil(CITY_HALF*2/BUILDING_STREAM_CELL)||z>=Math.ceil(CITY_HALF*2/BUILDING_STREAM_CELL))continue;
+  const key=x+','+z;wanted.add(key);if(!loadedBuildingCells.has(key))buildBuildingCell(x,z);
+ }
+ for(const [key,cell] of loadedBuildingCells){if(wanted.has(key))continue;
+  scene.remove(cell.group);cell.group.clear();cell.bodyGeo.dispose();cell.roofGeo.dispose();loadedBuildingCells.delete(key);
+ }
+}
+let buildingStreamCenter='';
 // Spatial hash for the enlarged building stock keeps amenity and shelter placement efficient.
 const EXPANDED_COLLISION_CELL=100,expandedBuildingGrid=new Map();
 for(const b of buildingColliders){
@@ -1595,8 +1642,7 @@ const sportsCentreBuildResult=buildOneHundredSportsCentres();
 // reserved road-safe plots. Each includes a court, a green practice area and
 // dedicated marked parking; all receive named map entries.
 {
- const target=SPORTS_CENTRE_TARGET-sportsCentreNames.length,records=[],used=new Set(sportsCentreNames.map(s=>Math.round((s.x+5145)/70)+','+Math.round((s.z+5145)/70)));
- const courtMat=new THREE.MeshStandardMaterial({color:0x276a9a,roughness:.8}),fieldMat=new THREE.MeshStandardMaterial({color:0x287b43,roughness:.9}),parkMat=new THREE.MeshStandardMaterial({color:0x303735,roughness:.9}),lineMat=new THREE.MeshBasicMaterial({color:0xf4f2e7});
+ const target=SPORTS_CENTRE_TARGET-sportsCentreNames.length,records=compactSportsCentreRecords,used=new Set(sportsCentreNames.map(s=>Math.round((s.x+5145)/70)+','+Math.round((s.z+5145)/70)));
  let n=0;for(let ix=-73;ix<=73&&n<target;ix++)for(let iz=-73;iz<=73&&n<target;iz++){
   const bx=35+ix*70,bz=35+iz*70,key=Math.round((bx+5145)/70)+','+Math.round((bz+5145)/70);
   if(((ix+74)*148+(iz+74))%7!==0||used.has(key))continue;
@@ -1608,16 +1654,9 @@ const sportsCentreBuildResult=buildOneHundredSportsCentres();
   records.push({x,z,s:sc,label});sportsCentreNames.push({x,z,label,district:nearestDistrictFor(x,z)[0]});
   recordCityFacility('sportscomplex',x,z,sz,sz,label);amenityColliders.push({minX:x-sz/2,maxX:x+sz/2,minZ:z-sz/2,maxZ:z+sz/2});used.add(key);n++;
  }
- function campusInstances(geometry,material,fn){const mesh=new THREE.InstancedMesh(geometry,material,records.length),d=new THREE.Object3D();records.forEach((r,i)=>{fn(d,r);d.updateMatrix();mesh.setMatrixAt(i,d.matrix)});mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=true;scene.add(mesh)}
- campusInstances(new THREE.BoxGeometry(1,1,1),fieldMat,(d,r)=>{d.position.set(r.x-8*r.s,.12,r.z-8*r.s);d.scale.set(21*r.s,.24,13*r.s)});
- campusInstances(new THREE.BoxGeometry(1,1,1),courtMat,(d,r)=>{d.position.set(r.x+9*r.s,.12,r.z-8*r.s);d.scale.set(16*r.s,.24,13*r.s)});
- campusInstances(new THREE.BoxGeometry(1,1,1),parkMat,(d,r)=>{d.position.set(r.x+9*r.s,.08,r.z+16*r.s);d.scale.set(19*r.s,.16,8*r.s)});
- campusInstances(new THREE.BoxGeometry(1,1,1),lineMat,(d,r)=>{d.position.set(r.x+9*r.s,.22,r.z+16*r.s);d.scale.set(18*r.s,.035,.12)});
- const bayMat=new THREE.MeshBasicMaterial({color:0xf4f2e7});
- const bayMesh=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),bayMat,records.length*4),bd=new THREE.Object3D();
- records.forEach((r,i)=>{for(let b=0;b<4;b++){bd.position.set(r.x+(2+b*4)*r.s,.22,r.z+20*r.s);bd.scale.set(.12,.035,5*r.s);bd.updateMatrix();bayMesh.setMatrixAt(i*4+b,bd.matrix)}});
- bayMesh.instanceMatrix.needsUpdate=true;bayMesh.frustumCulled=true;scene.add(bayMesh);
- console.info('Additional instanced sports centres:',n);
+ // v0.74.1: no city-wide InstancedMeshes are created here. Lightweight records are
+ // grouped into 300m cells and only nearby cell meshes are resident in the scene.
+ console.info('Additional streamed sports-centre records:',n);
 }
 console.info('This Is Lagos v0.67 sports centres:',sportsCentreBuildResult);
 sportsCentreBuildResult.created=sportsCentreNames.length;
@@ -1638,6 +1677,39 @@ for(let i=0;i<3;i++){
 
 // Customizable human avatar: varied skin tones, face, hair and clothing.
 const player=new THREE.Group();scene.add(player);
+// v0.74.1: stream the 2,400 compact sports campuses as local per-cell instancing batches.
+const COMPACT_CAMPUS_CELL=300,COMPACT_CAMPUS_RADIUS=2;
+const compactCampusGrid=new Map(),compactCampusLive=new Map();
+for(const r of compactSportsCentreRecords){const k=`${Math.floor(r.x/COMPACT_CAMPUS_CELL)},${Math.floor(r.z/COMPACT_CAMPUS_CELL)}`;let a=compactCampusGrid.get(k);if(!a)compactCampusGrid.set(k,a=[]);a.push(r)}
+function makeCampusInstances(records,kind,capacityMultiplier=1,transform){
+ const mesh=new THREE.InstancedMesh(compactSportsCentreGeo,compactSportsCentreMats[kind],records.length*capacityMultiplier);
+ const d=new THREE.Object3D();let n=0;
+ for(const r of records){const s=r.s;
+  if(kind==='field'){d.position.set(r.x-8*s,.12,r.z-8*s);d.scale.set(21*s,.24,13*s);d.updateMatrix();mesh.setMatrixAt(n++,d.matrix)}
+  else if(kind==='court'){d.position.set(r.x+9*s,.12,r.z-8*s);d.scale.set(16*s,.24,13*s);d.updateMatrix();mesh.setMatrixAt(n++,d.matrix)}
+  else if(kind==='parking'){d.position.set(r.x+9*s,.08,r.z+16*s);d.scale.set(19*s,.16,8*s);d.updateMatrix();mesh.setMatrixAt(n++,d.matrix)}
+  else if(kind==='line'){d.position.set(r.x+9*s,.22,r.z+16*s);d.scale.set(18*s,.035,.12);d.updateMatrix();mesh.setMatrixAt(n++,d.matrix)}
+  else if(kind==='bays')for(let b=0;b<4;b++){d.position.set(r.x+(2+b*4)*s,.22,r.z+20*s);d.scale.set(.12,.035,5*s);d.updateMatrix();mesh.setMatrixAt(n++,d.matrix)}
+ }
+ mesh.count=n;mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=true;return mesh;
+}
+function buildCompactCampusCell(key,records){
+ const group=new THREE.Group();group.name='compact-sports-centres-'+key;
+ for(const kind of ['field','court','parking','line','bays'])group.add(makeCampusInstances(records,kind,kind==='bays'?4:1));
+ scene.add(group);compactCampusLive.set(key,group);
+}
+let compactCampusCenter='';
+function updateCompactSportsCentreStream(force=false){
+ const cx=Math.floor(player.position.x/COMPACT_CAMPUS_CELL),cz=Math.floor(player.position.z/COMPACT_CAMPUS_CELL),center=`${cx},${cz}`;
+ if(!force&&center===compactCampusCenter)return;compactCampusCenter=center;
+ const wanted=new Set();
+ for(let x=cx-COMPACT_CAMPUS_RADIUS;x<=cx+COMPACT_CAMPUS_RADIUS;x++)for(let z=cz-COMPACT_CAMPUS_RADIUS;z<=cz+COMPACT_CAMPUS_RADIUS;z++){
+  const key=`${x},${z}`,records=compactCampusGrid.get(key);if(!records)continue;wanted.add(key);
+  if(!compactCampusLive.has(key))buildCompactCampusCell(key,records);
+ }
+ for(const [key,group] of compactCampusLive){if(wanted.has(key))continue;scene.remove(group);for(const mesh of group.children)mesh.dispose?.();group.clear();compactCampusLive.delete(key)}
+}
+
 let body;
 const avatarDefaults={skin:"#70452f",hair:"#171513",style:"Low cut",top:"#16834a",bottom:"#263d35",shoes:"#f3f3e9",name:"New Lagosian"};
 let avatarSettings={...avatarDefaults};
@@ -1982,28 +2054,42 @@ recordCityFacility('parking',CITY_PARKING.x,CITY_PARKING.z,42,42,CITY_PARKING.na
 // physically standing inside that facility's interaction radius.
 const ACTIVITY_FACILITY_TYPES=new Set(['football','tennis','basketball','tabletennis','sportscomplex']);
 const activityFacilityMarkers=[];
-function facilityStreetAddress(f){
- const vertical=streetName('x',Math.max(-15,Math.min(15,Math.round(f.x/70))));
- const horizontal=streetName('z',Math.max(-15,Math.min(15,Math.round(f.z/70))));
- return `Near ${vertical} and ${horizontal}, Lagos`;
-}
-function facilityCapacity(f){
- if(f.type==='football'||f.type==='sportscomplex')return 24;
- if(f.type==='tennis')return 6;
- if(f.type==='basketball')return 10;
- if(f.type==='tabletennis')return 4;
- return 2;
-}
-function facilityKindName(type){return ({football:'Football',tennis:'Tennis',basketball:'Basketball',tabletennis:'Table tennis',sportscomplex:'Multi-sport centre'})[type]||'Sports';}
+const FACILITY_STREAM_CELL=300,FACILITY_STREAM_RADIUS=2;
+const activityFacilityGrid=new Map();
+const facilityMarkerByRecord=new Map();
+const facilityGlowGeo=new THREE.CircleGeometry(5.2,32);
+const facilityRingGeo=new THREE.RingGeometry(4.45,4.85,40);
+const facilityInnerGeo=new THREE.RingGeometry(3.9,4.02,40);
+const facilityGlowMat=new THREE.MeshBasicMaterial({color:0x1ce6a0,transparent:true,opacity:.12,depthWrite:false});
+const facilityRingMat=new THREE.MeshBasicMaterial({color:0x16e69a,side:THREE.DoubleSide,transparent:true,opacity:.96});
+const facilityInnerMat=new THREE.MeshBasicMaterial({color:0xffffff,side:THREE.DoubleSide,transparent:true,opacity:.9});
+function facilityCellKey(x,z){return `${Math.floor(x/FACILITY_STREAM_CELL)},${Math.floor(z/FACILITY_STREAM_CELL)}`}
 for(const f of cityMapFacilities){
  if(!ACTIVITY_FACILITY_TYPES.has(f.type))continue;
- const marker=new THREE.Group();marker.position.set(f.x,.14,f.z);scene.add(marker);
- const glow=new THREE.Mesh(new THREE.CircleGeometry(5.2,48),new THREE.MeshBasicMaterial({color:0x1ce6a0,transparent:true,opacity:.12,depthWrite:false}));glow.rotation.x=-Math.PI/2;marker.add(glow);
- const ring=new THREE.Mesh(new THREE.RingGeometry(4.45,4.85,64),new THREE.MeshBasicMaterial({color:0x16e69a,side:THREE.DoubleSide,transparent:true,opacity:.96}));ring.rotation.x=-Math.PI/2;marker.add(ring);
- const inner=new THREE.Mesh(new THREE.RingGeometry(3.9,4.02,64),new THREE.MeshBasicMaterial({color:0xffffff,side:THREE.DoubleSide,transparent:true,opacity:.9}));inner.rotation.x=-Math.PI/2;inner.position.y=.015;marker.add(inner);
- activityFacilityMarkers.push({facility:f,marker,glow,ring,radius:5.4,opened:false});
+ const k=facilityCellKey(f.x,f.z);let list=activityFacilityGrid.get(k);if(!list)activityFacilityGrid.set(k,list=[]);list.push(f);
 }
-let currentActivityFacility=null;
+function nearbyActivityFacilities(x,z,radius=FACILITY_STREAM_RADIUS){
+ const cx=Math.floor(x/FACILITY_STREAM_CELL),cz=Math.floor(z/FACILITY_STREAM_CELL),out=[];
+ for(let ix=cx-radius;ix<=cx+radius;ix++)for(let iz=cz-radius;iz<=cz+radius;iz++){
+  const list=activityFacilityGrid.get(`${ix},${iz}`);if(list)out.push(...list);
+ }
+ return out;
+}
+function createActivityFacilityMarker(f){
+ const marker=new THREE.Group();marker.position.set(f.x,.14,f.z);
+ const glow=new THREE.Mesh(facilityGlowGeo,facilityGlowMat);glow.rotation.x=-Math.PI/2;marker.add(glow);
+ const ring=new THREE.Mesh(facilityRingGeo,facilityRingMat);ring.rotation.x=-Math.PI/2;marker.add(ring);
+ const inner=new THREE.Mesh(facilityInnerGeo,facilityInnerMat);inner.rotation.x=-Math.PI/2;inner.position.y=.015;marker.add(inner);
+ scene.add(marker);
+ const entry={facility:f,marker,glow,ring,radius:5.4,opened:false};activityFacilityMarkers.push(entry);facilityMarkerByRecord.set(f,entry);return entry;
+}
+let facilityMarkerCenter='';
+function updateActivityFacilityMarkers(force=false){
+ const key=facilityCellKey(player.position.x,player.position.z);if(!force&&key===facilityMarkerCenter)return;facilityMarkerCenter=key;
+ const wanted=new Set(nearbyActivityFacilities(player.position.x,player.position.z));
+ for(const [f,entry] of facilityMarkerByRecord){if(wanted.has(f))continue;scene.remove(entry.marker);entry.marker.clear();facilityMarkerByRecord.delete(f);const i=activityFacilityMarkers.indexOf(entry);if(i>=0)activityFacilityMarkers.splice(i,1);entry.opened=false;}
+ for(const f of wanted)if(!facilityMarkerByRecord.has(f))createActivityFacilityMarker(f);
+}
 function openFacilityDetails(f){
  currentActivityFacility=f;
  const area=Math.round(f.w*f.d),capacity=facilityCapacity(f),kind=facilityKindName(f.type);
@@ -2012,11 +2098,11 @@ function openFacilityDetails(f){
  modal('Facility information',details,[['Create activity here',()=>openCreateActivity(f)],['View activities',()=>openCompetitions()],['Close',null,true]]);
 }
 function updateActivityFacilityProximity(){
+ updateActivityFacilityMarkers();
  let nearest=null,nearestDistance=Infinity;
  for(const entry of activityFacilityMarkers){
-  const f=entry.facility,d=Math.hypot(player.position.x-f.x,player.position.z-f.z);
+  const f=entry.facility,dx=player.position.x-f.x,dz=player.position.z-f.z,d=Math.hypot(dx,dz);
   entry.glow.material.opacity=.09+.05*Math.sin(performance.now()*.003);
-  entry.ring.rotation.z=0;
   if(d<nearestDistance){nearestDistance=d;nearest=entry;}
  }
  if(nearest&&nearestDistance<=nearest.radius){
@@ -2032,6 +2118,7 @@ function updateActivityFacilityProximity(){
 
 // All trees are registered by now: build instanced meshes, shade patches and trunk colliders.
 finalizeTrees();
+treeSpots.length=0; // compact the completed tree catalogue; per-chunk records remain available for streaming
 // Index building footprints into a spatial grid once. Movement checks now inspect
 // only the small set of buildings in the player's current grid cell, not the whole city.
 const COLLISION_CELL_SIZE=64;
@@ -2213,7 +2300,11 @@ function optimizeWorldForView(){
  // so that hidden cells skip them entirely (their own .visible flags still work inside a visible cell).
  for(const ch of treeChunks.values()){
   const cell=getCullCell('near',Math.floor(ch.cx/CULL_CELL),Math.floor(ch.cz/CULL_CELL));
-  for(const t of [ch.near,ch.far,ch.decals]){cell.group.add(t);grouped++}
+  if(!cell.treeChunks)cell.treeChunks=[];
+  cell.treeChunks.push(ch);
+  // Tree render meshes are rebuilt only while their geographic cell is active.
+  for(const t of [ch.near,ch.far,ch.decals])if(t){scene.remove(t);t.dispose?.()}
+  ch.near=ch.far=ch.decals=null;ch.renderCell=cell;
  }
  const glowSrc=slGlow,glowAttr=slGlowAttr,glowMat=slGlowMat,poolSrc=slPools;
  const glowFlag={visible:false},poolFlag={visible:false};
@@ -2247,8 +2338,89 @@ function optimizeWorldForView(){
  }
  // The street-light module toggles these flags at dusk/dawn; they now switch whole sets of chunked pools / glow points.
  slPools=poolFlag;slGlow=glowFlag;
- console.info('This Is Lagos v0.68 view culling:',{cells:cullCells.length,instancedChunks:chunks,objectsParkedInCells:grouped,hugeObjectsKeptAtRoot:rootKept,sceneRootChildren:scene.children.length});
+ console.info('This Is Lagos v0.72 scenery streaming:',{cells:cullCells.length,instancedChunks:chunks,objectsParkedInCells:grouped,hugeObjectsKeptAtRoot:rootKept,sceneRootChildren:scene.children.length});
  updateCullCells();
+}
+// v0.71: real geographic streaming for static scenery, street-tree render meshes, and segmented road/ground slabs.
+// Cell blueprints retain shared geometry/material resources and compact transforms; live Object3D
+// wrappers and InstancedMesh instance buffers are recreated only for the active 5x5 cell window.
+const SCENERY_STREAM_RADIUS=2;
+let sceneryStreamCenter='';
+function saveSceneryObject(o){
+ const d={type:o.isInstancedMesh?'instanced':o.isMesh?'mesh':o.isPoints?'points':o.isLineSegments?'linesegments':o.isLine?'line':o.isSprite?'sprite':'group',
+  name:o.name,position:o.position.toArray(),quaternion:o.quaternion.toArray(),scale:o.scale.toArray(),matrixAutoUpdate:o.matrixAutoUpdate,
+  matrix:o.matrix.toArray(),visible:o.visible,renderOrder:o.renderOrder,frustumCulled:o.frustumCulled,castShadow:o.castShadow,receiveShadow:o.receiveShadow,
+  geometry:o.geometry||null,material:o.material||null,children:[]};
+ if(o.isInstancedMesh){
+  // v0.72: retain ownership of the original typed arrays. The live mesh and its
+  // cell blueprint share these arrays, so unload/reload never keeps a second
+  // full copy of every instance transform and color in CPU memory.
+  d.count=o.count;d.matrices=o.instanceMatrix.array;d.colors=o.instanceColor?o.instanceColor.array:null;
+ }
+ for(const child of o.children)d.children.push(saveSceneryObject(child));
+ return d;
+}
+function restoreSceneryObject(d){
+ let o;
+ if(d.type==='instanced')o=new THREE.InstancedMesh(d.geometry,d.material,d.count);
+ else if(d.type==='mesh')o=new THREE.Mesh(d.geometry,d.material);
+ else if(d.type==='points')o=new THREE.Points(d.geometry,d.material);
+ else if(d.type==='linesegments')o=new THREE.LineSegments(d.geometry,d.material);
+ else if(d.type==='line')o=new THREE.Line(d.geometry,d.material);
+ else if(d.type==='sprite')o=new THREE.Sprite(d.material);
+ else o=new THREE.Group();
+ o.name=d.name||'';o.position.fromArray(d.position);o.quaternion.fromArray(d.quaternion);o.scale.fromArray(d.scale);
+ o.matrixAutoUpdate=d.matrixAutoUpdate;
+ if(!o.matrixAutoUpdate){o.matrix.fromArray(d.matrix);o.matrixWorldNeedsUpdate=true}
+ o.visible=d.visible;o.renderOrder=d.renderOrder;o.frustumCulled=d.frustumCulled;
+ if('castShadow' in o)o.castShadow=d.castShadow;if('receiveShadow' in o)o.receiveShadow=d.receiveShadow;
+ if(d.type==='instanced'){
+  // Reattach the blueprint arrays directly rather than allocating/copying a
+  // second instance buffer on every cell reload. Three.js uploads them again
+  // after needsUpdate increments the attribute version.
+  o.instanceMatrix=new THREE.InstancedBufferAttribute(d.matrices,16);o.instanceMatrix.needsUpdate=true;
+  if(d.colors){o.instanceColor=new THREE.InstancedBufferAttribute(d.colors,3);o.instanceColor.needsUpdate=true;}
+ }
+ for(const child of d.children)o.add(restoreSceneryObject(child));
+ return o;
+}
+function releaseSceneryObject(o){
+ for(const child of o.children)releaseSceneryObject(child);
+ // InstancedMesh.dispose releases its renderer-side instance buffers where supported.
+ if(o.isInstancedMesh)o.dispose?.();
+}
+function buildStreamedTreeChunk(ch){
+ if(ch.near)return;
+ const dummy=new THREE.Object3D(),col=new THREE.Color(),near=new THREE.Group(),decals=[];
+ TREE_TYPES.forEach((T,ti)=>{
+  const list=ch.trees[ti];if(!list.length)return;
+  const mesh=new THREE.InstancedMesh(T.geo,treeMat,list.length);
+  list.forEach((t,i)=>{const sc=t.s*T.base;dummy.position.set(t.x,0,t.z);dummy.rotation.set(0,t.rot,0);dummy.scale.setScalar(sc);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix);col.setRGB(t.tr,t.tg,t.tb);mesh.setColorAt(i,col);const h=T.crownY*sc,ox=-TREE_SUN.x/TREE_SUN.y*h,oz=-TREE_SUN.z/TREE_SUN.y*h;decals.push({x:t.x+ox,z:t.z+oz,r:T.shade*sc*.75,rot:Math.atan2(-oz,ox)});});
+  mesh.instanceMatrix.needsUpdate=true;if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;near.add(mesh);
+ });
+ const far=new THREE.InstancedMesh(TREE_FAR_GEO,treeMat,ch.all.length);
+ ch.all.forEach((t,i)=>{const sc=t.s*TREE_TYPES[t.type].base,st=TREE_FAR_STRETCH[t.type];dummy.position.set(t.x,0,t.z);dummy.rotation.set(0,t.rot,0);dummy.scale.set(sc*st[0],sc*st[1],sc*st[0]);dummy.updateMatrix();far.setMatrixAt(i,dummy.matrix);col.setRGB(t.tr,t.tg,t.tb);far.setColorAt(i,col);});
+ far.instanceMatrix.needsUpdate=true;if(far.instanceColor)far.instanceColor.needsUpdate=true;far.frustumCulled=false;
+ const dm=new THREE.InstancedMesh(shadePlane,shadeMat,decals.length);
+ decals.forEach((d,i)=>{dummy.position.set(d.x,.16,d.z);dummy.rotation.set(0,d.rot,0);dummy.scale.set(d.r*1.2,1,d.r);dummy.updateMatrix();dm.setMatrixAt(i,dummy.matrix)});
+ dm.instanceMatrix.needsUpdate=true;dm.frustumCulled=false;dm.renderOrder=2;
+ near.visible=far.visible=dm.visible=false;ch.near=near;ch.far=far;ch.decals=dm;ch.renderCell.group.add(near,far,dm);
+}
+function updateSceneryStreamCells(force=false){
+ const cx=Math.floor(player.position.x/CULL_CELL),cz=Math.floor(player.position.z/CULL_CELL),key=cx+','+cz;
+ if(!force&&key===sceneryStreamCenter)return;sceneryStreamCenter=key;
+ for(const c of cullCells){
+  const ix=Math.floor(c.cx/CULL_CELL),iz=Math.floor(c.cz/CULL_CELL),active=Math.abs(ix-cx)<=SCENERY_STREAM_RADIUS&&Math.abs(iz-cz)<=SCENERY_STREAM_RADIUS;
+  if(!c.blueprint){c.blueprint=c.group.children.map(saveSceneryObject);}
+  if(!active&&c.blueprint&&c.group.children.length){for(const child of c.group.children.slice())releaseSceneryObject(child);c.group.clear();}
+  else if(active&&c.blueprint&&!c.group.children.length){for(const d of c.blueprint)c.group.add(restoreSceneryObject(d));}
+  c.group.visible=active;
+  if(c.treeChunks){for(const ch of c.treeChunks){
+   const tcx=Math.floor(ch.cx/CULL_CELL),tcz=Math.floor(ch.cz/CULL_CELL),treeActive=Math.abs(tcx-cx)<=SCENERY_STREAM_RADIUS&&Math.abs(tcz-cz)<=SCENERY_STREAM_RADIUS;
+   if(treeActive)buildStreamedTreeChunk(ch);
+   else if(ch.near){ch.renderCell.group.remove(ch.near,ch.far,ch.decals);ch.near.dispose?.();ch.far.dispose?.();ch.decals.dispose?.();ch.near=ch.far=ch.decals=null;}
+  }}
+ }
 }
 function updateCullCells(){
  camera.updateMatrixWorld();
@@ -2325,13 +2497,21 @@ function animate(){
   player.rotation.y=Math.atan2(dx,dz);
   if(body)body.position.y=1.05+Math.sin(performance.now()*.012)*.045;
  }
+ updateStreamedBuildingCells();
+ updateSceneryStreamCells();
+ updateCompactSportsCentreStream();
  updateActivityFacilityProximity();
  if(weather==='Rain'){for(const d of drops){d.position.y-=uiDt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*180;d.position.z=player.position.z+(Math.random()-.5)*180}}}
  updateCamera();updateCullCells();if((cullFrame++%3)===0){updateVisibleBuildings();updateTreeVisibility();}renderer.render(scene,camera);
 }
 updateCamera();
-console.info('This Is Lagos v0.66 expanded city:',{landAreaMultiplier:25,linearFootprintMultiplier:5,districts:districtDefs.length,buildings:cityMapBuildings.length,facilities:cityMapFacilities.length,sportsCentres:sportsCentreNames.length});
+console.info('This Is Lagos v0.74.1 streamed city:',{landAreaMultiplier:25,linearFootprintMultiplier:5,districts:districtDefs.length,buildings:cityMapBuildings.length,facilities:cityMapFacilities.length,sportsCentres:sportsCentreNames.length});
+console.info('This Is Lagos v0.74.1 shared block geometry:',{sharedUnitBox:true,maxBlockPiece:BLOCK_STREAM_MAX});
 optimizeWorldForView();
+updateSceneryStreamCells(true);
+updateStreamedBuildingCells(true);
+updateActivityFacilityMarkers(true);
+updateCompactSportsCentreStream(true);
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setPixelRatio(maxDevicePixelRatio*renderScale);renderer.setSize(innerWidth,innerHeight)});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)clock.getDelta()});
