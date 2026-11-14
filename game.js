@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.74.1 — v0.74 hotfix: correct instanced-buffer capacity for four parking-bay markings per compact campus; compact sports-centre campuses stream as per-cell InstancedMeshes; distant campus render objects are removed and rebuilt only in the active 5x5 cell window.
+// THIS IS LAGOS v0.74 — v0.73 plus: compact sports-centre campuses stream as per-cell InstancedMeshes; distant campus render objects are removed and rebuilt only in the active 5x5 cell window.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -1654,7 +1654,7 @@ const sportsCentreBuildResult=buildOneHundredSportsCentres();
   records.push({x,z,s:sc,label});sportsCentreNames.push({x,z,label,district:nearestDistrictFor(x,z)[0]});
   recordCityFacility('sportscomplex',x,z,sz,sz,label);amenityColliders.push({minX:x-sz/2,maxX:x+sz/2,minZ:z-sz/2,maxZ:z+sz/2});used.add(key);n++;
  }
- // v0.74.1: no city-wide InstancedMeshes are created here. Lightweight records are
+ // v0.74: no city-wide InstancedMeshes are created here. Lightweight records are
  // grouped into 300m cells and only nearby cell meshes are resident in the scene.
  console.info('Additional streamed sports-centre records:',n);
 }
@@ -1677,7 +1677,7 @@ for(let i=0;i<3;i++){
 
 // Customizable human avatar: varied skin tones, face, hair and clothing.
 const player=new THREE.Group();scene.add(player);
-// v0.74.1: stream the 2,400 compact sports campuses as local per-cell instancing batches.
+// v0.74: stream the 2,400 compact sports campuses as local per-cell instancing batches.
 const COMPACT_CAMPUS_CELL=300,COMPACT_CAMPUS_RADIUS=2;
 const compactCampusGrid=new Map(),compactCampusLive=new Map();
 for(const r of compactSportsCentreRecords){const k=`${Math.floor(r.x/COMPACT_CAMPUS_CELL)},${Math.floor(r.z/COMPACT_CAMPUS_CELL)}`;let a=compactCampusGrid.get(k);if(!a)compactCampusGrid.set(k,a=[]);a.push(r)}
@@ -2054,6 +2054,7 @@ recordCityFacility('parking',CITY_PARKING.x,CITY_PARKING.z,42,42,CITY_PARKING.na
 // physically standing inside that facility's interaction radius.
 const ACTIVITY_FACILITY_TYPES=new Set(['football','tennis','basketball','tabletennis','sportscomplex']);
 const activityFacilityMarkers=[];
+let currentActivityFacility=null;   // facility whose interaction circle the player is standing in
 const FACILITY_STREAM_CELL=300,FACILITY_STREAM_RADIUS=2;
 const activityFacilityGrid=new Map();
 const facilityMarkerByRecord=new Map();
@@ -2413,12 +2414,12 @@ function updateSceneryStreamCells(force=false){
   const ix=Math.floor(c.cx/CULL_CELL),iz=Math.floor(c.cz/CULL_CELL),active=Math.abs(ix-cx)<=SCENERY_STREAM_RADIUS&&Math.abs(iz-cz)<=SCENERY_STREAM_RADIUS;
   if(!c.blueprint){c.blueprint=c.group.children.map(saveSceneryObject);}
   if(!active&&c.blueprint&&c.group.children.length){for(const child of c.group.children.slice())releaseSceneryObject(child);c.group.clear();}
-  else if(active&&c.blueprint&&!c.group.children.length){for(const d of c.blueprint)c.group.add(restoreSceneryObject(d));}
+  else if(active&&c.blueprint&&!c.group.children.length){for(const d of c.blueprint){const o=restoreSceneryObject(d);c.group.add(o);o.updateMatrixWorld(true);}}   // cell groups are frozen (no-op updateMatrixWorld), so settle each restored subtree once
   c.group.visible=active;
   if(c.treeChunks){for(const ch of c.treeChunks){
    const tcx=Math.floor(ch.cx/CULL_CELL),tcz=Math.floor(ch.cz/CULL_CELL),treeActive=Math.abs(tcx-cx)<=SCENERY_STREAM_RADIUS&&Math.abs(tcz-cz)<=SCENERY_STREAM_RADIUS;
    if(treeActive)buildStreamedTreeChunk(ch);
-   else if(ch.near){ch.renderCell.group.remove(ch.near,ch.far,ch.decals);ch.near.dispose?.();ch.far.dispose?.();ch.decals.dispose?.();ch.near=ch.far=ch.decals=null;}
+   else if(ch.near){ch.renderCell.group.remove(ch.near,ch.far,ch.decals);for(const m of ch.near.children)m.dispose?.();ch.far.dispose?.();ch.decals.dispose?.();ch.near=ch.far=ch.decals=null;}
   }}
  }
 }
@@ -2505,8 +2506,8 @@ function animate(){
  updateCamera();updateCullCells();if((cullFrame++%3)===0){updateVisibleBuildings();updateTreeVisibility();}renderer.render(scene,camera);
 }
 updateCamera();
-console.info('This Is Lagos v0.74.1 streamed city:',{landAreaMultiplier:25,linearFootprintMultiplier:5,districts:districtDefs.length,buildings:cityMapBuildings.length,facilities:cityMapFacilities.length,sportsCentres:sportsCentreNames.length});
-console.info('This Is Lagos v0.74.1 shared block geometry:',{sharedUnitBox:true,maxBlockPiece:BLOCK_STREAM_MAX});
+console.info('This Is Lagos v0.74 streamed city:',{landAreaMultiplier:25,linearFootprintMultiplier:5,districts:districtDefs.length,buildings:cityMapBuildings.length,facilities:cityMapFacilities.length,sportsCentres:sportsCentreNames.length});
+console.info('This Is Lagos v0.74 shared block geometry:',{sharedUnitBox:true,maxBlockPiece:BLOCK_STREAM_MAX});
 optimizeWorldForView();
 updateSceneryStreamCells(true);
 updateStreamedBuildingCells(true);
