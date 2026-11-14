@@ -914,7 +914,7 @@ function splitStreetName(name){
 }
 function makeStreetSignTexture(name,aspect){
  const [main,suffix]=splitStreetName(name);
- const cw=1024,ch=Math.round(cw/aspect);
+ const cw=512,ch=Math.round(cw/aspect);   // was 1024 wide: ~4x less canvas/GPU memory per street sign
  const cv=document.createElement('canvas');cv.width=cw;cv.height=ch;
  const c=cv.getContext('2d');
  // Deep navy panel with a crisp white inset border and a cyan accent rail on the left.
@@ -1236,7 +1236,7 @@ function updateStreamedBuildingCells(force=false){
   const key=x+','+z;wanted.add(key);if(!loadedBuildingCells.has(key))buildBuildingCell(x,z);
  }
  for(const [key,cell] of loadedBuildingCells){if(wanted.has(key))continue;
-  scene.remove(cell.group);cell.group.clear();cell.bodyGeo.dispose();cell.roofGeo.dispose();loadedBuildingCells.delete(key);
+  scene.remove(cell.group);for(const m of cell.group.children)m.dispose?.();cell.group.clear();cell.bodyGeo.dispose();cell.roofGeo.dispose();loadedBuildingCells.delete(key);
  }
 }
 let buildingStreamCenter='';
@@ -2389,6 +2389,11 @@ function releaseSceneryObject(o){
  for(const child of o.children)releaseSceneryObject(child);
  // InstancedMesh.dispose releases its renderer-side instance buffers where supported.
  if(o.isInstancedMesh)o.dispose?.();
+ // Free the GPU copies of this object's geometry and textures (sign canvases). The JS objects stay in the
+ // cell blueprint, and three.js re-uploads them automatically if the cell is restored and rendered again.
+ o.geometry?.dispose?.();
+ const ms=Array.isArray(o.material)?o.material:(o.material?[o.material]:[]);
+ for(const m of ms)m.map?.dispose?.();
 }
 function buildStreamedTreeChunk(ch){
  if(ch.near)return;
@@ -2514,6 +2519,7 @@ updateStreamedBuildingCells(true);
 updateActivityFacilityMarkers(true);
 updateCompactSportsCentreStream(true);
 const clock=new THREE.Clock();animate();
+window.lagosMem=()=>({geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,programs:renderer.info.programs?.length,drawCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles,liveCells:cullCells.filter(c=>c.group.children.length).length,totalCells:cullCells.length,jsHeapMB:performance.memory?Math.round(performance.memory.usedJSHeapSize/1e6):'n/a'});
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setPixelRatio(maxDevicePixelRatio*renderScale);renderer.setSize(innerWidth,innerHeight)});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)clock.getDelta()});
 toast('Facility interaction circles and on-site activity creation loaded');
