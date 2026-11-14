@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.70 (memory-lean: streamed street palms, lazy half-size sign textures, canvases released after GPU upload; nothing removed) — previous: v0.68 — v0.67 plus: every building / sports centre / landmark fitted inside its city block (nothing on roads or pavements); view-only rendering (chunked instancing + distance/frustum cell culling). Earlier notes: v0.67 — v0.66 startup and shelter-placement performance fixes; 25x city land area and 25x city content quantity — 100 sports centres, existing two-pole district gateways retained — Lagos street names, physical street signs and Grand Dealership on Isaac Uwadiale Road — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
+// THIS IS LAGOS v0.74 — v0.73 plus: compact sports-centre campuses stream as per-cell InstancedMeshes; distant campus render objects are removed and rebuilt only in the active 5x5 cell window.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -17,11 +17,22 @@ renderer.shadowMap.enabled=false;
 renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;mount.appendChild(renderer.domElement);
 scene.add(new THREE.HemisphereLight(0xe7fff0,0x71856d,2));
 const sun=new THREE.DirectionalLight(0xfff2d5,2.5);sun.position.set(-35,55,25);sun.castShadow=false;scene.add(sun);
-// v0.70 MEMORY: a canvas-drawn texture frees its 2D canvas (CPU copy) as soon as the GPU has its own copy.
-function canvasTex(cv){const t=new THREE.CanvasTexture(cv);t.onUpdate=()=>{t.onUpdate=null;cv.width=cv.height=0};return t}
 const mat=(color,roughness=.85)=>new THREE.MeshStandardMaterial({color,roughness});
 const grass=mat(0x7eaa78),road=mat(0x343d3b),sidewalk=mat(0xc9d2c8),white=mat(0xf1f5e9),green=mat(0x18824a),glassMat=new THREE.MeshStandardMaterial({color:0x8eb8b4,roughness:.25,metalness:.15}),dark=mat(0x263a31);
-function block(w,h,d,m,x,y,z){const o=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m);o.position.set(x,y+h/2,z);o.castShadow=true;o.receiveShadow=true;scene.add(o);return o}
+// v0.71: share one unit cube for block scenery and split very long slabs into geographic pieces.
+// This keeps the 10.5km ground and road strips from remaining as single always-resident root meshes.
+const sharedBlockGeometry=new THREE.BoxGeometry(1,1,1);
+const BLOCK_STREAM_MAX=240;
+function block(w,h,d,m,x,y,z){
+ const nx=Math.max(1,Math.ceil(w/BLOCK_STREAM_MAX)),nz=Math.max(1,Math.ceil(d/BLOCK_STREAM_MAX));
+ const sw=w/nx,sd=d/nz;let first=null;
+ for(let ix=0;ix<nx;ix++)for(let iz=0;iz<nz;iz++){
+  const o=new THREE.Mesh(sharedBlockGeometry,m);
+  o.position.set(x-w/2+sw*(ix+.5),y+h/2,z-d/2+sd*(iz+.5));
+  o.scale.set(sw,h,sd);o.castShadow=true;o.receiveShadow=true;scene.add(o);if(!first)first=o;
+ }
+ return first;
+}
 block(300,.2,300,grass,0,-.2,0);
 // Obsolete compact starter roads and markings removed; the unified 48m road grid below is authoritative.
 const buildingMats=[0xe7e8d9,0xd7e2d9,0xd8d8cf,0xe8dfce,0xc7d9d0].map(c=>mat(c));
@@ -29,6 +40,15 @@ const buildingColliders=[];
 // Exact world-space footprints used by the live 2D map.
 const cityMapBuildings=[];
 const cityMapFacilities=[];
+// Compact sports-centre footprints remain as lightweight records; their GPU meshes stream by 300m cell.
+const compactSportsCentreRecords=[];
+const compactSportsCentreGeo=new THREE.BoxGeometry(1,1,1);
+const compactSportsCentreMats={
+ field:new THREE.MeshStandardMaterial({color:0x287b43,roughness:.9}),
+ court:new THREE.MeshStandardMaterial({color:0x276a9a,roughness:.8}),
+ parking:new THREE.MeshStandardMaterial({color:0x303735,roughness:.9}),
+ line:new THREE.MeshBasicMaterial({color:0xf4f2e7})
+};
 // v0.60: named Lagos street grid. The same registry drives street signs and map labels.
 const verticalStreetNames=[
  'Badagry Expressway','Murtala Muhammed Way','Agege Motor Road','Ikorodu Road','Herbert Macaulay Way',
@@ -229,159 +249,97 @@ const shadeTex=(()=>{
  g.fillStyle=gr;g.fillRect(0,0,128,128);
  g.globalCompositeOperation='destination-out';
  for(let i=0;i<46;i++){const a=treeRand()*Math.PI*2,r=Math.sqrt(treeRand())*50;g.fillStyle='rgba(0,0,0,'+(.18+treeRand()*.3)+')';g.beginPath();g.arc(64+Math.cos(a)*r,64+Math.sin(a)*r,1.5+treeRand()*3.5,0,Math.PI*2);g.fill()}
- return canvasTex(cv);
+ return new THREE.CanvasTexture(cv);
 })();
 const shadeMat=new THREE.MeshBasicMaterial({map:shadeTex,transparent:true,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-2,polygonOffsetUnits:-2});
 const shadePlane=new THREE.PlaneGeometry(2,2);shadePlane.rotateX(-Math.PI/2);
 
 const TREE_CHUNK=160,TREE_CHUNK_R=144,TREE_NEAR_DIST=110,TREE_VIEW_DIST=900,TREE_SHADE_DIST=500;
-// v0.70 MEMORY: the ~500,000 street palms are no longer all built and kept in memory at once. Their positions are
-// generated deterministically per 160 m chunk (identical to before) and the chunk meshes are streamed in around the
-// player and released again when far away. Trunk collisions are computed from the same per-chunk positions.
-const treeChunks=new Map(),treeSpots=[];   // treeChunks = chunks currently streamed in; treeSpots = only the few hand-placed palms until finalizeTrees()
-const TREE_LOAD_DIST=TREE_VIEW_DIST+TREE_CHUNK_R+60,TREE_UNLOAD_DIST=TREE_LOAD_DIST+260;
-const treeRoot=new THREE.Group();
+const treeChunks=new Map(),treeSpots=[];
 // True when (x,z) lies on any carriageway or its pavement (plus a trunk margin). Trees are rejected there.
 function treeOnRoad(x,z,margin=3.4){
  const gx=Math.max(-5180,Math.min(5180,Math.round(x/70)*70)),gz=Math.max(-5180,Math.min(5180,Math.round(z/70)*70));
  const hx=Math.abs(gx%210)<1?24:4,hz=Math.abs(gz%210)<1?24:4;
  return Math.abs(x-gx)<hx+margin||Math.abs(z-gz)<hz+margin;
 }
-function makeTreeSpot(x,z,scale){
- const h=treeHash(x,z),type=Math.floor(h*2)%2,s=scale*(.88+treeHash(x,z,3)*.28);
- return {x,z,type,s,r:.55*s*TREE_TYPES[type].base+.35,rot:treeHash(x,z,4)*Math.PI*2,tr:.9+treeHash(x,z,5)*.14,tg:.92+treeHash(x,z,6)*.14,tb:.88+treeHash(x,z,7)*.16};
-}
 // Every tree is a palm (the kind argument is kept for older call sites). Returns false on a road.
 function addTree(x,z,scale=1,kind='palm',margin=3.4){
  if(treeOnRoad(x,z,margin))return false;
- treeSpots.push(makeTreeSpot(x,z,scale));
+ const h=treeHash(x,z),type=Math.floor(h*2)%2;
+ treeSpots.push({x,z,type,s:scale*(.88+treeHash(x,z,3)*.28),rot:treeHash(x,z,4)*Math.PI*2,tr:.9+treeHash(x,z,5)*.14,tg:.92+treeHash(x,z,6)*.14,tb:.88+treeHash(x,z,7)*.16});
  return true;
 }
 // Continuous rows of palms on BOTH sides of every avenue and every local street, for the full length of each road.
 // The only gaps are where another road crosses; trees also keep clear of the very few streetlight poles and of
 // any building or amenity footprint.
-let treeFreeIdx=null;
-const treeExplicit=new Map(),treeSpotCache=new Map();
-function treeFreeAt(x,z,m){const a=treeFreeIdx.get(Math.floor(x/40)+','+Math.floor(z/40));if(!a)return true;for(const c of a)if(x+m>c.minX&&x-m<c.maxX&&z+m>c.minZ&&z-m<c.maxZ)return false;return true}
-// Trees for ONE chunk (same rules and same hash positions as the old whole-city pass).
-function treeSpotsFor(kx,kz){
- const key=kx+','+kz;let spots=treeSpotCache.get(key);if(spots)return spots;
- spots=(treeExplicit.get(key)||[]).slice();
- if(treeFreeIdx){
-  const x0=kx*TREE_CHUNK,x1=x0+TREE_CHUNK,z0=kz*TREE_CHUNK,z1=z0+TREE_CHUNK;
-  for(const axis of ['z','x']){
-   const a0=axis==='z'?z0:x0,a1=axis==='z'?z1:x1,c0=axis==='z'?x0:z0,c1=axis==='z'?x1:z1;
-   for(let k=Math.max(-74,Math.ceil((c0-30)/70));k<=Math.min(74,Math.floor((c1+30)/70));k++){
-    const g=k*70,avenue=Math.abs(g%210)<1,half=avenue?24:4,SP=avenue?6.5:7.5;
-    for(const side of [-1,1]){
-     const qb=-5140+(side>0?SP/2:0);
-     const nLo=Math.max(0,Math.ceil((a0-1.2-qb)/SP)),nHi=Math.floor((Math.min(5140,a1+1.2)-qb)/SP);
-     for(let n=nLo;n<=nHi;n++){
-      const q=qb+n*SP;
-      if(q>5140)break;
-      if(avenue){const r=((q+5145)%105+105)%105;if(Math.min(r,105-r)<1.5)continue}   // streetlight poles
-      const jq=q+(treeHash(g,q,11+side)-.5)*1.6,off=g+side*(half+3.5+treeHash(q,g,13)*.4);
-      const x=axis==='z'?off:jq,z=axis==='z'?jq:off;
-      if(Math.floor(x/TREE_CHUNK)!==kx||Math.floor(z/TREE_CHUNK)!==kz)continue;
-      if(treeOnRoad(x,z,3.5)||!treeFreeAt(x,z,.6)||nearStreetlight(x,z,1.8))continue;
-      spots.push(makeTreeSpot(x,z,.8+treeHash(x,z,9)*.35));
-     }
-    }
-   }
-  }
- }
- treeSpotCache.set(key,spots);
- if(treeSpotCache.size>400)treeSpotCache.delete(treeSpotCache.keys().next().value);
- return spots;
-}
-// Trunk collision (replaces the half-million trunk boxes that used to sit in the collision grid).
-function collidesWithTree(x,z){
- const a=Math.floor((x-1.6)/TREE_CHUNK),b=Math.floor((x+1.6)/TREE_CHUNK),c=Math.floor((z-1.6)/TREE_CHUNK),d=Math.floor((z+1.6)/TREE_CHUNK);
- for(let i=a;i<=b;i++)for(let j=c;j<=d;j++){
-  const sp=treeSpotsFor(i,j);
-  for(let n=0;n<sp.length;n++){const t=sp[n];if(x>t.x-t.r&&x<t.x+t.r&&z>t.z-t.r&&z<t.z+t.r)return true}
- }
- return false;
-}
-// Called once everything else is placed: index the footprints trees must keep clear of.
-function finalizeTrees(){
+function addStreetTrees(){
  const CS=40,idx=new Map();
  for(const list of [buildingColliders,amenityColliders])for(const c of list){
   for(let ix=Math.floor((c.minX-2)/CS);ix<=Math.floor((c.maxX+2)/CS);ix++)for(let iz=Math.floor((c.minZ-2)/CS);iz<=Math.floor((c.maxZ+2)/CS);iz++){
    const k=ix+','+iz;let a=idx.get(k);if(!a)idx.set(k,a=[]);a.push(c);
   }
  }
- treeFreeIdx=idx;
+ const free=(x,z,m)=>{const a=idx.get(Math.floor(x/CS)+','+Math.floor(z/CS));if(!a)return true;for(const c of a)if(x+m>c.minX&&x-m<c.maxX&&z+m>c.minZ&&z-m<c.maxZ)return false;return true};
+ for(let g=-5180;g<=5180;g+=70){
+  const avenue=Math.abs(g%210)<1,half=avenue?24:4,SP=avenue?6.5:7.5;
+  for(const side of [-1,1]){
+   for(let q=-5140+(side>0?SP/2:0);q<=5140;q+=SP){
+    if(avenue){const r=((q+5145)%105+105)%105;if(Math.min(r,105-r)<1.5)continue}   // streetlight poles
+    for(const axis of ['z','x']){
+     const jq=q+(treeHash(g,q,11+side)-.5)*1.6,off=g+side*(half+3.5+treeHash(q,g,13)*.4);
+     const x=axis==='z'?off:jq,z=axis==='z'?jq:off;
+     if(treeOnRoad(x,z,3.5)||!free(x,z,.6)||nearStreetlight(x,z,1.8))continue;
+     addTree(x,z,.8+treeHash(x,z,9)*.35,'palm',3.5);
+    }
+   }
+  }
+ }
+}
+function finalizeTrees(){
+ addStreetTrees();
  for(const t of treeSpots){
   const key=Math.floor(t.x/TREE_CHUNK)+','+Math.floor(t.z/TREE_CHUNK);
-  let a=treeExplicit.get(key);if(!a)treeExplicit.set(key,a=[]);a.push(t);
+  let ch=treeChunks.get(key);
+  if(!ch){const cx=(Math.floor(t.x/TREE_CHUNK)+.5)*TREE_CHUNK,cz=(Math.floor(t.z/TREE_CHUNK)+.5)*TREE_CHUNK;ch={cx,cz,trees:TREE_TYPES.map(()=>[]),all:[],sphere:new THREE.Sphere(new THREE.Vector3(cx,12,cz),TREE_CHUNK_R),near:null,far:null,decals:null};treeChunks.set(key,ch)}
+  ch.trees[t.type].push(t);ch.all.push(t);
+  const tr=.55*t.s*TREE_TYPES[t.type].base+.35;   // trunk collider
+  buildingColliders.push({minX:t.x-tr,maxX:t.x+tr,minZ:t.z-tr,maxZ:t.z+tr});
  }
- treeSpots.length=0;
-}
-const treeDummy=new THREE.Object3D(),treeCol=new THREE.Color();
-function loadTreeChunk(kx,kz){
- const spots=treeSpotsFor(kx,kz),cx=(kx+.5)*TREE_CHUNK,cz=(kz+.5)*TREE_CHUNK;
- const ch={cx,cz,kx,kz,sphere:new THREE.Sphere(new THREE.Vector3(cx,12,cz),TREE_CHUNK_R),near:null,far:null,decals:null};
- treeChunks.set(kx+','+kz,ch);
- if(!spots.length)return ch;
- const byType=TREE_TYPES.map(()=>[]);for(const t of spots)byType[t.type].push(t);
- const near=new THREE.Group(),decals=[],dummy=treeDummy,col=treeCol;
- TREE_TYPES.forEach((T,ti)=>{
-  const list=byType[ti];if(!list.length)return;
-  const mesh=new THREE.InstancedMesh(T.geo,treeMat,list.length);
-  list.forEach((t,i)=>{
-   const sc=t.s*T.base;
-   dummy.position.set(t.x,0,t.z);dummy.rotation.set(0,t.rot,0);dummy.scale.setScalar(sc);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix);
-   col.setRGB(t.tr,t.tg,t.tb);mesh.setColorAt(i,col);
-   const h=T.crownY*sc,ox=-TREE_SUN.x/TREE_SUN.y*h,oz=-TREE_SUN.z/TREE_SUN.y*h;
-   decals.push({x:t.x+ox,z:t.z+oz,r:T.shade*sc*.75,rot:Math.atan2(-oz,ox)});
+ const dummy=new THREE.Object3D(),col=new THREE.Color();
+ for(const ch of treeChunks.values()){
+  const near=new THREE.Group(),decals=[];
+  TREE_TYPES.forEach((T,ti)=>{
+   const list=ch.trees[ti];if(!list.length)return;
+   const mesh=new THREE.InstancedMesh(T.geo,treeMat,list.length);
+   list.forEach((t,i)=>{
+    const sc=t.s*T.base;
+    dummy.position.set(t.x,0,t.z);dummy.rotation.set(0,t.rot,0);dummy.scale.setScalar(sc);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix);
+    col.setRGB(t.tr,t.tg,t.tb);mesh.setColorAt(i,col);
+    const h=T.crownY*sc,ox=-TREE_SUN.x/TREE_SUN.y*h,oz=-TREE_SUN.z/TREE_SUN.y*h;
+    decals.push({x:t.x+ox,z:t.z+oz,r:T.shade*sc*.75,rot:Math.atan2(-oz,ox)});
+   });
+   mesh.instanceMatrix.needsUpdate=true;if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true;
+   mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;near.add(mesh);
   });
-  mesh.instanceMatrix.needsUpdate=true;if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true;
-  mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;near.add(mesh);
- });
- const far=new THREE.InstancedMesh(TREE_FAR_GEO,treeMat,spots.length);
- spots.forEach((t,i)=>{
-  const sc=t.s*TREE_TYPES[t.type].base,st=TREE_FAR_STRETCH[t.type];
-  dummy.position.set(t.x,0,t.z);dummy.rotation.set(0,t.rot,0);dummy.scale.set(sc*st[0],sc*st[1],sc*st[0]);dummy.updateMatrix();far.setMatrixAt(i,dummy.matrix);
-  col.setRGB(t.tr,t.tg,t.tb);far.setColorAt(i,col);
- });
- far.instanceMatrix.needsUpdate=true;if(far.instanceColor)far.instanceColor.needsUpdate=true;far.frustumCulled=false;
- const dm=new THREE.InstancedMesh(shadePlane,shadeMat,decals.length);
- decals.forEach((d,i)=>{dummy.position.set(d.x,.16,d.z);dummy.rotation.set(0,d.rot,0);dummy.scale.set(d.r*1.2,1,d.r);dummy.updateMatrix();dm.setMatrixAt(i,dummy.matrix)});
- dm.instanceMatrix.needsUpdate=true;dm.frustumCulled=false;dm.renderOrder=2;
- near.visible=far.visible=dm.visible=false;
- ch.near=near;ch.far=far;ch.decals=dm;treeRoot.add(near,far,dm);
- return ch;
-}
-function unloadTreeChunk(key,ch){
- if(ch.near){
-  for(const m of ch.near.children)if(m.dispose)m.dispose();
-  if(ch.far.dispose)ch.far.dispose();if(ch.decals.dispose)ch.decals.dispose();
-  treeRoot.remove(ch.near,ch.far,ch.decals);
+  const far=new THREE.InstancedMesh(TREE_FAR_GEO,treeMat,ch.all.length);
+  ch.all.forEach((t,i)=>{
+   const sc=t.s*TREE_TYPES[t.type].base,st=TREE_FAR_STRETCH[t.type];
+   dummy.position.set(t.x,0,t.z);dummy.rotation.set(0,t.rot,0);dummy.scale.set(sc*st[0],sc*st[1],sc*st[0]);dummy.updateMatrix();far.setMatrixAt(i,dummy.matrix);
+   col.setRGB(t.tr,t.tg,t.tb);far.setColorAt(i,col);
+  });
+  far.instanceMatrix.needsUpdate=true;if(far.instanceColor)far.instanceColor.needsUpdate=true;far.frustumCulled=false;
+  const dm=new THREE.InstancedMesh(shadePlane,shadeMat,decals.length);
+  decals.forEach((d,i)=>{dummy.position.set(d.x,.16,d.z);dummy.rotation.set(0,d.rot,0);dummy.scale.set(d.r*1.2,1,d.r);dummy.updateMatrix();dm.setMatrixAt(i,dummy.matrix)});
+  dm.instanceMatrix.needsUpdate=true;dm.frustumCulled=false;dm.renderOrder=2;
+  near.visible=far.visible=dm.visible=false;
+  ch.near=near;ch.far=far;ch.decals=dm;scene.add(near);scene.add(far);scene.add(dm);
  }
- treeChunks.delete(key);
-}
-// Loads chunks around the player (nearest first) and releases far ones. all=true builds everything in range at once.
-function streamTrees(all){
- const px=player.position.x,pz=player.position.z;
- const kx0=Math.floor((px-TREE_LOAD_DIST)/TREE_CHUNK),kx1=Math.floor((px+TREE_LOAD_DIST)/TREE_CHUNK),kz0=Math.floor((pz-TREE_LOAD_DIST)/TREE_CHUNK),kz1=Math.floor((pz+TREE_LOAD_DIST)/TREE_CHUNK);
- const need=[];
- for(let kx=kx0;kx<=kx1;kx++)for(let kz=kz0;kz<=kz1;kz++){
-  if(treeChunks.has(kx+','+kz))continue;
-  const d=Math.hypot((kx+.5)*TREE_CHUNK-px,(kz+.5)*TREE_CHUNK-pz);
-  if(d<TREE_LOAD_DIST)need.push([d,kx,kz]);
- }
- need.sort((a,b)=>a[0]-b[0]);
- let budget=all?1e9:2;
- for(const [,kx,kz] of need){if(budget--<=0)break;loadTreeChunk(kx,kz)}
- for(const [key,ch] of Array.from(treeChunks)){if(Math.hypot(ch.cx-px,ch.cz-pz)>TREE_UNLOAD_DIST)unloadTreeChunk(key,ch)}
 }
 // Chunk-level frustum + distance culling with two levels of detail (called with the building culling pass).
 function updateTreeVisibility(){
- streamTrees(false);
  const px=player.position.x,pz=player.position.z;
  for(const ch of treeChunks.values()){
-  if(!ch.near)continue;
+  if(!ch.near||!ch.far||!ch.decals)continue;
   const d=Math.hypot(ch.cx-px,ch.cz-pz),inView=viewFrustum.intersectsSphere(ch.sphere);
   const isNear=d<TREE_NEAR_DIST;
   ch.near.visible=inView&&isNear;
@@ -684,7 +642,7 @@ function removeStreetlightsInRect(x,z,halfX,halfZ){
  const rcv=document.createElement('canvas');rcv.width=rcv.height=256;const rc=rcv.getContext('2d');
  const rg=rc.createRadialGradient(128,128,0,128,128,128);
  rg.addColorStop(0,'rgba(255,255,255,1)');rg.addColorStop(.22,'rgba(255,255,255,.6)');rg.addColorStop(.55,'rgba(255,255,255,.2)');rg.addColorStop(1,'rgba(255,255,255,0)');
- rc.fillStyle=rg;rc.fillRect(0,0,256,256);const radialTex=canvasTex(rcv);
+ rc.fillStyle=rg;rc.fillRect(0,0,256,256);const radialTex=new THREE.CanvasTexture(rcv);
  slPoolMat=new THREE.MeshBasicMaterial({map:radialTex,color:0xffc46e,transparent:true,opacity:0,blending:THREE.AdditiveBlending,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-4,polygonOffsetUnits:-4});
  const poolGeo=new THREE.PlaneGeometry(1,1);poolGeo.rotateX(-Math.PI/2);
  slPools=new THREE.InstancedMesh(poolGeo,slPoolMat,N);slPools.frustumCulled=false;slPools.renderOrder=2;slPools.visible=false;scene.add(slPools);slMeshes.push(slPools);
@@ -933,15 +891,10 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
  return obj;
 }
 function signBoard(text,x,z,width=22,color=0x176b43){
- const sm=new THREE.MeshBasicMaterial({transparent:false,side:THREE.DoubleSide});sm.userData.lazy=1;
- const mesh=new THREE.Mesh(new THREE.PlaneGeometry(width,5),sm);
- mesh.onBeforeRender=()=>{   // v0.70: drawn on first render only
-  if(sm.map)return;
-  const canvas=document.createElement('canvas');canvas.width=512;canvas.height=128;
-  const ctx=canvas.getContext('2d');ctx.fillStyle='#'+color.toString(16).padStart(6,'0');ctx.fillRect(0,0,512,128);
-  ctx.fillStyle='#ffffff';ctx.font='bold 42px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,256,64,480);
-  sm.map=canvasTex(canvas);sm.needsUpdate=true;
- };
+ const canvas=document.createElement('canvas');canvas.width=512;canvas.height=128;
+ const ctx=canvas.getContext('2d');ctx.fillStyle='#'+color.toString(16).padStart(6,'0');ctx.fillRect(0,0,512,128);
+ ctx.fillStyle='#ffffff';ctx.font='bold 42px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,256,64,480);
+ const tex=new THREE.CanvasTexture(canvas);const mesh=new THREE.Mesh(new THREE.PlaneGeometry(width,5),new THREE.MeshBasicMaterial({map:tex,transparent:false,side:THREE.DoubleSide}));
  mesh.position.set(x,7,z);scene.add(mesh);return mesh;
 }
 // Physical street-name signs (v0.61): modern two-line boards, 60% smaller than before, mounted parallel to the
@@ -961,7 +914,7 @@ function splitStreetName(name){
 }
 function makeStreetSignTexture(name,aspect){
  const [main,suffix]=splitStreetName(name);
- const cw=512,ch=Math.round(cw/aspect);
+ const cw=1024,ch=Math.round(cw/aspect);
  const cv=document.createElement('canvas');cv.width=cw;cv.height=ch;
  const c=cv.getContext('2d');
  // Deep navy panel with a crisp white inset border and a cyan accent rail on the left.
@@ -983,7 +936,7 @@ function makeStreetSignTexture(name,aspect){
   if('letterSpacing' in c)c.letterSpacing=`${ch*.035}px`;
   c.fillText(suffix,cw/2+ch*.05,ch*.74);
  }
- const tex=canvasTex(cv);
+ const tex=new THREE.CanvasTexture(cv);
  tex.anisotropy=renderer.capabilities.getMaxAnisotropy();
  return tex;
 }
@@ -1003,13 +956,12 @@ function addStreetNameSign(name,x,z,axis){
  }
  const frame=new THREE.Mesh(new THREE.BoxGeometry(boardW+.14,boardH+.14,.1),streetSignFrameMat);
  frame.position.set(0,boardY,0);g.add(frame);
- const faceMat=new THREE.MeshBasicMaterial();faceMat.userData.lazy=1;   // v0.70: the board texture is drawn the first time the sign is actually rendered
- const fillSign=()=>{if(faceMat.map)return;faceMat.map=makeStreetSignTexture(name,boardW/boardH);faceMat.needsUpdate=true};
+ const tex=makeStreetSignTexture(name,boardW/boardH);
+ const faceMat=new THREE.MeshBasicMaterial({map:tex});
  const front=new THREE.Mesh(new THREE.PlaneGeometry(boardW,boardH),faceMat);
  front.position.set(0,boardY,.056);g.add(front);
  const back=new THREE.Mesh(new THREE.PlaneGeometry(boardW,boardH),faceMat);
- back.rotation.y=Math.PI;back.position.set(0,boardY,-.056);g.add(back);
- front.onBeforeRender=fillSign;back.onBeforeRender=fillSign;   // reads correctly from both sides
+ back.rotation.y=Math.PI;back.position.set(0,boardY,-.056);g.add(back);   // reads correctly from both sides
  return g;
 }
 function buildStreetNameSigns(){
@@ -1047,7 +999,7 @@ function makeDistrictTexture(name,aspect){
  if('letterSpacing' in c)c.letterSpacing=`${size*.06}px`;
  while(c.measureText(text).width>cw*.7&&size>10){size-=2;c.font=`800 ${size}px ${fam}`;if('letterSpacing' in c)c.letterSpacing=`${size*.06}px`;}
  c.fillStyle='#ffffff';c.fillText(text,cw/2,ch*.53);
- const tex=canvasTex(cv);tex.anisotropy=renderer.capabilities.getMaxAnisotropy();return tex;
+ const tex=new THREE.CanvasTexture(cv);tex.anisotropy=renderer.capabilities.getMaxAnisotropy();return tex;
 }
 function districtGatewayPlacement(cx,cz){
  const mod=(a,n)=>((a%n)+n)%n;
@@ -1249,21 +1201,45 @@ for(let gx=-5145;gx<=5145;gx+=70){
   cityMapBuildings.push({x:fit.x,z:fit.z,w:fit.w,d:fit.d,kind});
  }
 }
-// Split instanced buildings into 25 geographic chunks for frustum-friendly rendering.
-for(let tx=-2;tx<=2;tx++)for(let tz=-2;tz<=2;tz++){
- const records=expandedBuildingRecords.filter(b=>Math.floor((b.x+5250)/2100)===tx+2&&Math.floor((b.z+5250)/2100)===tz+2);
- if(!records.length)continue;
- const group=new THREE.Group();scene.add(group);
- const body=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),new THREE.MeshStandardMaterial({color:0xffffff,roughness:.86}),records.length);
- const roof=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),roofMat,records.length);
+// v0.69: true building-mesh streaming. Keep compact records/collision/map data
+// for the full city, but create render geometry only for the player's 5x5 cells.
+const BUILDING_STREAM_CELL=300,BUILDING_STREAM_RADIUS=2;
+const buildingRecordsByCell=new Map(),loadedBuildingCells=new Map();
+const buildingStreamMaterial=new THREE.MeshStandardMaterial({color:0xffffff,roughness:.86});
+for(const b of expandedBuildingRecords){
+ const cx=Math.floor((b.x+CITY_HALF)/BUILDING_STREAM_CELL),cz=Math.floor((b.z+CITY_HALF)/BUILDING_STREAM_CELL);
+ const key=cx+','+cz;let list=buildingRecordsByCell.get(key);if(!list)buildingRecordsByCell.set(key,list=[]);list.push(b);
+}
+function buildBuildingCell(cx,cz){
+ const key=cx+','+cz,records=buildingRecordsByCell.get(key);if(!records||!records.length)return;
+ const group=new THREE.Group();group.name='streamed-buildings-'+key;
+ const bodyGeo=new THREE.BoxGeometry(1,1,1),roofGeo=new THREE.BoxGeometry(1,1,1);
+ const body=new THREE.InstancedMesh(bodyGeo,buildingStreamMaterial,records.length);
+ const roof=new THREE.InstancedMesh(roofGeo,roofMat,records.length);
  const dummy=new THREE.Object3D(),color=new THREE.Color();
  records.forEach((b,i)=>{
   dummy.position.set(b.x,b.h/2,b.z);dummy.scale.set(b.w,b.h,b.d);dummy.updateMatrix();body.setMatrixAt(i,dummy.matrix);
   color.setHex(b.color);body.setColorAt(i,color);
   dummy.position.set(b.x,b.h+.25,b.z);dummy.scale.set(b.w+1,.5,b.d+1);dummy.updateMatrix();roof.setMatrixAt(i,dummy.matrix);
  });
- body.instanceMatrix.needsUpdate=true;roof.instanceMatrix.needsUpdate=true;body.frustumCulled=true;roof.frustumCulled=true;group.add(body,roof);
+ body.instanceMatrix.needsUpdate=true;roof.instanceMatrix.needsUpdate=true;
+ if(body.instanceColor)body.instanceColor.needsUpdate=true;
+ body.frustumCulled=true;roof.frustumCulled=true;body.castShadow=false;roof.castShadow=false;
+ group.add(body,roof);scene.add(group);loadedBuildingCells.set(key,{group,bodyGeo,roofGeo});
 }
+function updateStreamedBuildingCells(force=false){
+ const cx=Math.floor((player.position.x+CITY_HALF)/BUILDING_STREAM_CELL),cz=Math.floor((player.position.z+CITY_HALF)/BUILDING_STREAM_CELL);
+ const centerKey=cx+','+cz;if(!force&&centerKey===buildingStreamCenter)return;buildingStreamCenter=centerKey;
+ const wanted=new Set();
+ for(let x=cx-BUILDING_STREAM_RADIUS;x<=cx+BUILDING_STREAM_RADIUS;x++)for(let z=cz-BUILDING_STREAM_RADIUS;z<=cz+BUILDING_STREAM_RADIUS;z++){
+  if(x<0||z<0||x>=Math.ceil(CITY_HALF*2/BUILDING_STREAM_CELL)||z>=Math.ceil(CITY_HALF*2/BUILDING_STREAM_CELL))continue;
+  const key=x+','+z;wanted.add(key);if(!loadedBuildingCells.has(key))buildBuildingCell(x,z);
+ }
+ for(const [key,cell] of loadedBuildingCells){if(wanted.has(key))continue;
+  scene.remove(cell.group);cell.group.clear();cell.bodyGeo.dispose();cell.roofGeo.dispose();loadedBuildingCells.delete(key);
+ }
+}
+let buildingStreamCenter='';
 // Spatial hash for the enlarged building stock keeps amenity and shelter placement efficient.
 const EXPANDED_COLLISION_CELL=100,expandedBuildingGrid=new Map();
 for(const b of buildingColliders){
@@ -1407,7 +1383,7 @@ function addBusRoadMark(roadAxis,road,side,along){
   if(!busMarkMat){
     const cv=document.createElement('canvas');cv.width=cv.height=256;const g=cv.getContext('2d');
     g.fillStyle='#f4f2df';g.font='900 230px "Arial Black", Arial, sans-serif';g.textAlign='center';g.textBaseline='middle';g.fillText('BUS',128,136,236);
-    const tex=canvasTex(cv);tex.anisotropy=4;
+    const tex=new THREE.CanvasTexture(cv);tex.anisotropy=4;
     busMarkMat=new THREE.MeshBasicMaterial({map:tex,transparent:true,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-3,polygonOffsetUnits:-3});
     busMarkGeo=new THREE.PlaneGeometry(4.4,9);busMarkGeo.rotateX(-Math.PI/2);
   }
@@ -1454,7 +1430,7 @@ function addBusStop(x,z,rotation=0,zScale=1){
   signCtx.fillRect(86,121,36,28);signCtx.fillRect(134,121,36,28);
   signCtx.fillStyle='#ffffff';
   signCtx.beginPath();signCtx.arc(94,183,10,0,Math.PI*2);signCtx.arc(162,183,10,0,Math.PI*2);signCtx.fill();
-  const signTexture=canvasTex(signCanvas);
+  const signTexture=new THREE.CanvasTexture(signCanvas);
   const circularSign=new THREE.Mesh(
     new THREE.CircleGeometry(1.2,32),
     new THREE.MeshBasicMaterial({map:signTexture,side:THREE.DoubleSide})
@@ -1666,8 +1642,7 @@ const sportsCentreBuildResult=buildOneHundredSportsCentres();
 // reserved road-safe plots. Each includes a court, a green practice area and
 // dedicated marked parking; all receive named map entries.
 {
- const target=SPORTS_CENTRE_TARGET-sportsCentreNames.length,records=[],used=new Set(sportsCentreNames.map(s=>Math.round((s.x+5145)/70)+','+Math.round((s.z+5145)/70)));
- const courtMat=new THREE.MeshStandardMaterial({color:0x276a9a,roughness:.8}),fieldMat=new THREE.MeshStandardMaterial({color:0x287b43,roughness:.9}),parkMat=new THREE.MeshStandardMaterial({color:0x303735,roughness:.9}),lineMat=new THREE.MeshBasicMaterial({color:0xf4f2e7});
+ const target=SPORTS_CENTRE_TARGET-sportsCentreNames.length,records=compactSportsCentreRecords,used=new Set(sportsCentreNames.map(s=>Math.round((s.x+5145)/70)+','+Math.round((s.z+5145)/70)));
  let n=0;for(let ix=-73;ix<=73&&n<target;ix++)for(let iz=-73;iz<=73&&n<target;iz++){
   const bx=35+ix*70,bz=35+iz*70,key=Math.round((bx+5145)/70)+','+Math.round((bz+5145)/70);
   if(((ix+74)*148+(iz+74))%7!==0||used.has(key))continue;
@@ -1679,16 +1654,9 @@ const sportsCentreBuildResult=buildOneHundredSportsCentres();
   records.push({x,z,s:sc,label});sportsCentreNames.push({x,z,label,district:nearestDistrictFor(x,z)[0]});
   recordCityFacility('sportscomplex',x,z,sz,sz,label);amenityColliders.push({minX:x-sz/2,maxX:x+sz/2,minZ:z-sz/2,maxZ:z+sz/2});used.add(key);n++;
  }
- function campusInstances(geometry,material,fn){const mesh=new THREE.InstancedMesh(geometry,material,records.length),d=new THREE.Object3D();records.forEach((r,i)=>{fn(d,r);d.updateMatrix();mesh.setMatrixAt(i,d.matrix)});mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=true;scene.add(mesh)}
- campusInstances(new THREE.BoxGeometry(1,1,1),fieldMat,(d,r)=>{d.position.set(r.x-8*r.s,.12,r.z-8*r.s);d.scale.set(21*r.s,.24,13*r.s)});
- campusInstances(new THREE.BoxGeometry(1,1,1),courtMat,(d,r)=>{d.position.set(r.x+9*r.s,.12,r.z-8*r.s);d.scale.set(16*r.s,.24,13*r.s)});
- campusInstances(new THREE.BoxGeometry(1,1,1),parkMat,(d,r)=>{d.position.set(r.x+9*r.s,.08,r.z+16*r.s);d.scale.set(19*r.s,.16,8*r.s)});
- campusInstances(new THREE.BoxGeometry(1,1,1),lineMat,(d,r)=>{d.position.set(r.x+9*r.s,.22,r.z+16*r.s);d.scale.set(18*r.s,.035,.12)});
- const bayMat=new THREE.MeshBasicMaterial({color:0xf4f2e7});
- const bayMesh=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),bayMat,records.length*4),bd=new THREE.Object3D();
- records.forEach((r,i)=>{for(let b=0;b<4;b++){bd.position.set(r.x+(2+b*4)*r.s,.22,r.z+20*r.s);bd.scale.set(.12,.035,5*r.s);bd.updateMatrix();bayMesh.setMatrixAt(i*4+b,bd.matrix)}});
- bayMesh.instanceMatrix.needsUpdate=true;bayMesh.frustumCulled=true;scene.add(bayMesh);
- console.info('Additional instanced sports centres:',n);
+ // v0.74: no city-wide InstancedMeshes are created here. Lightweight records are
+ // grouped into 300m cells and only nearby cell meshes are resident in the scene.
+ console.info('Additional streamed sports-centre records:',n);
 }
 console.info('This Is Lagos v0.67 sports centres:',sportsCentreBuildResult);
 sportsCentreBuildResult.created=sportsCentreNames.length;
@@ -1709,6 +1677,39 @@ for(let i=0;i<3;i++){
 
 // Customizable human avatar: varied skin tones, face, hair and clothing.
 const player=new THREE.Group();scene.add(player);
+// v0.74: stream the 2,400 compact sports campuses as local per-cell instancing batches.
+const COMPACT_CAMPUS_CELL=300,COMPACT_CAMPUS_RADIUS=2;
+const compactCampusGrid=new Map(),compactCampusLive=new Map();
+for(const r of compactSportsCentreRecords){const k=`${Math.floor(r.x/COMPACT_CAMPUS_CELL)},${Math.floor(r.z/COMPACT_CAMPUS_CELL)}`;let a=compactCampusGrid.get(k);if(!a)compactCampusGrid.set(k,a=[]);a.push(r)}
+function makeCampusInstances(records,kind,capacityMultiplier=1,transform){
+ const mesh=new THREE.InstancedMesh(compactSportsCentreGeo,compactSportsCentreMats[kind],records.length*capacityMultiplier);
+ const d=new THREE.Object3D();let n=0;
+ for(const r of records){const s=r.s;
+  if(kind==='field'){d.position.set(r.x-8*s,.12,r.z-8*s);d.scale.set(21*s,.24,13*s);d.updateMatrix();mesh.setMatrixAt(n++,d.matrix)}
+  else if(kind==='court'){d.position.set(r.x+9*s,.12,r.z-8*s);d.scale.set(16*s,.24,13*s);d.updateMatrix();mesh.setMatrixAt(n++,d.matrix)}
+  else if(kind==='parking'){d.position.set(r.x+9*s,.08,r.z+16*s);d.scale.set(19*s,.16,8*s);d.updateMatrix();mesh.setMatrixAt(n++,d.matrix)}
+  else if(kind==='line'){d.position.set(r.x+9*s,.22,r.z+16*s);d.scale.set(18*s,.035,.12);d.updateMatrix();mesh.setMatrixAt(n++,d.matrix)}
+  else if(kind==='bays')for(let b=0;b<4;b++){d.position.set(r.x+(2+b*4)*s,.22,r.z+20*s);d.scale.set(.12,.035,5*s);d.updateMatrix();mesh.setMatrixAt(n++,d.matrix)}
+ }
+ mesh.count=n;mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=true;return mesh;
+}
+function buildCompactCampusCell(key,records){
+ const group=new THREE.Group();group.name='compact-sports-centres-'+key;
+ for(const kind of ['field','court','parking','line','bays'])group.add(makeCampusInstances(records,kind));
+ scene.add(group);compactCampusLive.set(key,group);
+}
+let compactCampusCenter='';
+function updateCompactSportsCentreStream(force=false){
+ const cx=Math.floor(player.position.x/COMPACT_CAMPUS_CELL),cz=Math.floor(player.position.z/COMPACT_CAMPUS_CELL),center=`${cx},${cz}`;
+ if(!force&&center===compactCampusCenter)return;compactCampusCenter=center;
+ const wanted=new Set();
+ for(let x=cx-COMPACT_CAMPUS_RADIUS;x<=cx+COMPACT_CAMPUS_RADIUS;x++)for(let z=cz-COMPACT_CAMPUS_RADIUS;z<=cz+COMPACT_CAMPUS_RADIUS;z++){
+  const key=`${x},${z}`,records=compactCampusGrid.get(key);if(!records)continue;wanted.add(key);
+  if(!compactCampusLive.has(key))buildCompactCampusCell(key,records);
+ }
+ for(const [key,group] of compactCampusLive){if(wanted.has(key))continue;scene.remove(group);for(const mesh of group.children)mesh.dispose?.();group.clear();compactCampusLive.delete(key)}
+}
+
 let body;
 const avatarDefaults={skin:"#70452f",hair:"#171513",style:"Low cut",top:"#16834a",bottom:"#263d35",shoes:"#f3f3e9",name:"New Lagosian"};
 let avatarSettings={...avatarDefaults};
@@ -2053,28 +2054,42 @@ recordCityFacility('parking',CITY_PARKING.x,CITY_PARKING.z,42,42,CITY_PARKING.na
 // physically standing inside that facility's interaction radius.
 const ACTIVITY_FACILITY_TYPES=new Set(['football','tennis','basketball','tabletennis','sportscomplex']);
 const activityFacilityMarkers=[];
-function facilityStreetAddress(f){
- const vertical=streetName('x',Math.max(-15,Math.min(15,Math.round(f.x/70))));
- const horizontal=streetName('z',Math.max(-15,Math.min(15,Math.round(f.z/70))));
- return `Near ${vertical} and ${horizontal}, Lagos`;
-}
-function facilityCapacity(f){
- if(f.type==='football'||f.type==='sportscomplex')return 24;
- if(f.type==='tennis')return 6;
- if(f.type==='basketball')return 10;
- if(f.type==='tabletennis')return 4;
- return 2;
-}
-function facilityKindName(type){return ({football:'Football',tennis:'Tennis',basketball:'Basketball',tabletennis:'Table tennis',sportscomplex:'Multi-sport centre'})[type]||'Sports';}
+const FACILITY_STREAM_CELL=300,FACILITY_STREAM_RADIUS=2;
+const activityFacilityGrid=new Map();
+const facilityMarkerByRecord=new Map();
+const facilityGlowGeo=new THREE.CircleGeometry(5.2,32);
+const facilityRingGeo=new THREE.RingGeometry(4.45,4.85,40);
+const facilityInnerGeo=new THREE.RingGeometry(3.9,4.02,40);
+const facilityGlowMat=new THREE.MeshBasicMaterial({color:0x1ce6a0,transparent:true,opacity:.12,depthWrite:false});
+const facilityRingMat=new THREE.MeshBasicMaterial({color:0x16e69a,side:THREE.DoubleSide,transparent:true,opacity:.96});
+const facilityInnerMat=new THREE.MeshBasicMaterial({color:0xffffff,side:THREE.DoubleSide,transparent:true,opacity:.9});
+function facilityCellKey(x,z){return `${Math.floor(x/FACILITY_STREAM_CELL)},${Math.floor(z/FACILITY_STREAM_CELL)}`}
 for(const f of cityMapFacilities){
  if(!ACTIVITY_FACILITY_TYPES.has(f.type))continue;
- const marker=new THREE.Group();marker.position.set(f.x,.14,f.z);scene.add(marker);
- const glow=new THREE.Mesh(new THREE.CircleGeometry(5.2,48),new THREE.MeshBasicMaterial({color:0x1ce6a0,transparent:true,opacity:.12,depthWrite:false}));glow.rotation.x=-Math.PI/2;marker.add(glow);
- const ring=new THREE.Mesh(new THREE.RingGeometry(4.45,4.85,64),new THREE.MeshBasicMaterial({color:0x16e69a,side:THREE.DoubleSide,transparent:true,opacity:.96}));ring.rotation.x=-Math.PI/2;marker.add(ring);
- const inner=new THREE.Mesh(new THREE.RingGeometry(3.9,4.02,64),new THREE.MeshBasicMaterial({color:0xffffff,side:THREE.DoubleSide,transparent:true,opacity:.9}));inner.rotation.x=-Math.PI/2;inner.position.y=.015;marker.add(inner);
- activityFacilityMarkers.push({facility:f,marker,glow,ring,radius:5.4,opened:false});
+ const k=facilityCellKey(f.x,f.z);let list=activityFacilityGrid.get(k);if(!list)activityFacilityGrid.set(k,list=[]);list.push(f);
 }
-let currentActivityFacility=null;
+function nearbyActivityFacilities(x,z,radius=FACILITY_STREAM_RADIUS){
+ const cx=Math.floor(x/FACILITY_STREAM_CELL),cz=Math.floor(z/FACILITY_STREAM_CELL),out=[];
+ for(let ix=cx-radius;ix<=cx+radius;ix++)for(let iz=cz-radius;iz<=cz+radius;iz++){
+  const list=activityFacilityGrid.get(`${ix},${iz}`);if(list)out.push(...list);
+ }
+ return out;
+}
+function createActivityFacilityMarker(f){
+ const marker=new THREE.Group();marker.position.set(f.x,.14,f.z);
+ const glow=new THREE.Mesh(facilityGlowGeo,facilityGlowMat);glow.rotation.x=-Math.PI/2;marker.add(glow);
+ const ring=new THREE.Mesh(facilityRingGeo,facilityRingMat);ring.rotation.x=-Math.PI/2;marker.add(ring);
+ const inner=new THREE.Mesh(facilityInnerGeo,facilityInnerMat);inner.rotation.x=-Math.PI/2;inner.position.y=.015;marker.add(inner);
+ scene.add(marker);
+ const entry={facility:f,marker,glow,ring,radius:5.4,opened:false};activityFacilityMarkers.push(entry);facilityMarkerByRecord.set(f,entry);return entry;
+}
+let facilityMarkerCenter='';
+function updateActivityFacilityMarkers(force=false){
+ const key=facilityCellKey(player.position.x,player.position.z);if(!force&&key===facilityMarkerCenter)return;facilityMarkerCenter=key;
+ const wanted=new Set(nearbyActivityFacilities(player.position.x,player.position.z));
+ for(const [f,entry] of facilityMarkerByRecord){if(wanted.has(f))continue;scene.remove(entry.marker);entry.marker.clear();facilityMarkerByRecord.delete(f);const i=activityFacilityMarkers.indexOf(entry);if(i>=0)activityFacilityMarkers.splice(i,1);entry.opened=false;}
+ for(const f of wanted)if(!facilityMarkerByRecord.has(f))createActivityFacilityMarker(f);
+}
 function openFacilityDetails(f){
  currentActivityFacility=f;
  const area=Math.round(f.w*f.d),capacity=facilityCapacity(f),kind=facilityKindName(f.type);
@@ -2083,11 +2098,11 @@ function openFacilityDetails(f){
  modal('Facility information',details,[['Create activity here',()=>openCreateActivity(f)],['View activities',()=>openCompetitions()],['Close',null,true]]);
 }
 function updateActivityFacilityProximity(){
+ updateActivityFacilityMarkers();
  let nearest=null,nearestDistance=Infinity;
  for(const entry of activityFacilityMarkers){
-  const f=entry.facility,d=Math.hypot(player.position.x-f.x,player.position.z-f.z);
+  const f=entry.facility,dx=player.position.x-f.x,dz=player.position.z-f.z,d=Math.hypot(dx,dz);
   entry.glow.material.opacity=.09+.05*Math.sin(performance.now()*.003);
-  entry.ring.rotation.z=0;
   if(d<nearestDistance){nearestDistance=d;nearest=entry;}
  }
  if(nearest&&nearestDistance<=nearest.radius){
@@ -2103,6 +2118,7 @@ function updateActivityFacilityProximity(){
 
 // All trees are registered by now: build instanced meshes, shade patches and trunk colliders.
 finalizeTrees();
+treeSpots.length=0; // compact the completed tree catalogue; per-chunk records remain available for streaming
 // Index building footprints into a spatial grid once. Movement checks now inspect
 // only the small set of buildings in the player's current grid cell, not the whole city.
 const COLLISION_CELL_SIZE=64;
@@ -2117,8 +2133,9 @@ for(const b of buildingColliders){
 }
 function collidesWithBuilding(x,z){
  const list=collisionGrid.get(collisionCellKey(Math.floor(x/COLLISION_CELL_SIZE),Math.floor(z/COLLISION_CELL_SIZE)));
- if(list){for(const b of list){if(x>b.minX&&x<b.maxX&&z>b.minZ&&z<b.maxZ)return true;}}
- return collidesWithTree(x,z);
+ if(!list)return false;
+ for(const b of list){if(x>b.minX&&x<b.maxX&&z>b.minZ&&z<b.maxZ)return true;}
+ return false;
 }
 
 // ============================================================================
@@ -2274,31 +2291,7 @@ function chunkInstanced(src,forceCls,master){
  scene.remove(src);
  return made;
 }
-// v0.70 MEMORY: thousands of meshes were each built with their own copy of an identical box / ring / circle / plane / cylinder.
-// Meshes with byte-identical built-in geometry now share one copy (fewer GPU buffers, much less JS memory; nothing looks different).
-function shareIdenticalGeometries(){
- const SHAREABLE=['BoxGeometry','PlaneGeometry','CircleGeometry','RingGeometry','CylinderGeometry','SphereGeometry'];
- const canon=new Map(),mapped=new Map();let before=0,after=0;
- scene.traverse(o=>{
-  if(!o.isMesh||!o.geometry)return;
-  const g=o.geometry;before++;
-  let c=mapped.get(g);
-  if(!c){
-   c=g;
-   if(g.parameters&&SHAREABLE.includes(g.type)&&g.attributes.position){
-    const p=g.attributes.position.array;let sum=0;for(let i=0;i<p.length;i++)sum+=(i+1)*p[i];
-    const key=g.type+JSON.stringify(g.parameters)+'|'+p.length+'|'+(g.index?g.index.count:0)+'|'+sum.toFixed(4);
-    const hit=canon.get(key);if(hit)c=hit;else canon.set(key,g);
-   }
-   mapped.set(g,c);
-  }
-  if(c!==g){o.geometry=c;}
- });
- for(const [g,c] of mapped)if(g!==c)g.dispose();
- console.info('This Is Lagos v0.70 shared geometries:',{meshGeometriesBefore:mapped.size,after:canon.size});
-}
 function optimizeWorldForView(){
- shareIdenticalGeometries();
  scene.updateMatrixWorld(true);                       // settle every matrix once, then freeze static cells
  const keep=new Set([player,rainGroup,camera]);
  let chunks=0,grouped=0,rootKept=0;
@@ -2307,7 +2300,11 @@ function optimizeWorldForView(){
  // so that hidden cells skip them entirely (their own .visible flags still work inside a visible cell).
  for(const ch of treeChunks.values()){
   const cell=getCullCell('near',Math.floor(ch.cx/CULL_CELL),Math.floor(ch.cz/CULL_CELL));
-  for(const t of [ch.near,ch.far,ch.decals]){cell.group.add(t);grouped++}
+  if(!cell.treeChunks)cell.treeChunks=[];
+  cell.treeChunks.push(ch);
+  // Tree render meshes are rebuilt only while their geographic cell is active.
+  for(const t of [ch.near,ch.far,ch.decals])if(t){scene.remove(t);t.dispose?.()}
+  ch.near=ch.far=ch.decals=null;ch.renderCell=cell;
  }
  const glowSrc=slGlow,glowAttr=slGlowAttr,glowMat=slGlowMat,poolSrc=slPools;
  const glowFlag={visible:false},poolFlag={visible:false};
@@ -2341,8 +2338,89 @@ function optimizeWorldForView(){
  }
  // The street-light module toggles these flags at dusk/dawn; they now switch whole sets of chunked pools / glow points.
  slPools=poolFlag;slGlow=glowFlag;
- console.info('This Is Lagos v0.68 view culling:',{cells:cullCells.length,instancedChunks:chunks,objectsParkedInCells:grouped,hugeObjectsKeptAtRoot:rootKept,sceneRootChildren:scene.children.length});
+ console.info('This Is Lagos v0.72 scenery streaming:',{cells:cullCells.length,instancedChunks:chunks,objectsParkedInCells:grouped,hugeObjectsKeptAtRoot:rootKept,sceneRootChildren:scene.children.length});
  updateCullCells();
+}
+// v0.71: real geographic streaming for static scenery, street-tree render meshes, and segmented road/ground slabs.
+// Cell blueprints retain shared geometry/material resources and compact transforms; live Object3D
+// wrappers and InstancedMesh instance buffers are recreated only for the active 5x5 cell window.
+const SCENERY_STREAM_RADIUS=2;
+let sceneryStreamCenter='';
+function saveSceneryObject(o){
+ const d={type:o.isInstancedMesh?'instanced':o.isMesh?'mesh':o.isPoints?'points':o.isLineSegments?'linesegments':o.isLine?'line':o.isSprite?'sprite':'group',
+  name:o.name,position:o.position.toArray(),quaternion:o.quaternion.toArray(),scale:o.scale.toArray(),matrixAutoUpdate:o.matrixAutoUpdate,
+  matrix:o.matrix.toArray(),visible:o.visible,renderOrder:o.renderOrder,frustumCulled:o.frustumCulled,castShadow:o.castShadow,receiveShadow:o.receiveShadow,
+  geometry:o.geometry||null,material:o.material||null,children:[]};
+ if(o.isInstancedMesh){
+  // v0.72: retain ownership of the original typed arrays. The live mesh and its
+  // cell blueprint share these arrays, so unload/reload never keeps a second
+  // full copy of every instance transform and color in CPU memory.
+  d.count=o.count;d.matrices=o.instanceMatrix.array;d.colors=o.instanceColor?o.instanceColor.array:null;
+ }
+ for(const child of o.children)d.children.push(saveSceneryObject(child));
+ return d;
+}
+function restoreSceneryObject(d){
+ let o;
+ if(d.type==='instanced')o=new THREE.InstancedMesh(d.geometry,d.material,d.count);
+ else if(d.type==='mesh')o=new THREE.Mesh(d.geometry,d.material);
+ else if(d.type==='points')o=new THREE.Points(d.geometry,d.material);
+ else if(d.type==='linesegments')o=new THREE.LineSegments(d.geometry,d.material);
+ else if(d.type==='line')o=new THREE.Line(d.geometry,d.material);
+ else if(d.type==='sprite')o=new THREE.Sprite(d.material);
+ else o=new THREE.Group();
+ o.name=d.name||'';o.position.fromArray(d.position);o.quaternion.fromArray(d.quaternion);o.scale.fromArray(d.scale);
+ o.matrixAutoUpdate=d.matrixAutoUpdate;
+ if(!o.matrixAutoUpdate){o.matrix.fromArray(d.matrix);o.matrixWorldNeedsUpdate=true}
+ o.visible=d.visible;o.renderOrder=d.renderOrder;o.frustumCulled=d.frustumCulled;
+ if('castShadow' in o)o.castShadow=d.castShadow;if('receiveShadow' in o)o.receiveShadow=d.receiveShadow;
+ if(d.type==='instanced'){
+  // Reattach the blueprint arrays directly rather than allocating/copying a
+  // second instance buffer on every cell reload. Three.js uploads them again
+  // after needsUpdate increments the attribute version.
+  o.instanceMatrix=new THREE.InstancedBufferAttribute(d.matrices,16);o.instanceMatrix.needsUpdate=true;
+  if(d.colors){o.instanceColor=new THREE.InstancedBufferAttribute(d.colors,3);o.instanceColor.needsUpdate=true;}
+ }
+ for(const child of d.children)o.add(restoreSceneryObject(child));
+ return o;
+}
+function releaseSceneryObject(o){
+ for(const child of o.children)releaseSceneryObject(child);
+ // InstancedMesh.dispose releases its renderer-side instance buffers where supported.
+ if(o.isInstancedMesh)o.dispose?.();
+}
+function buildStreamedTreeChunk(ch){
+ if(ch.near)return;
+ const dummy=new THREE.Object3D(),col=new THREE.Color(),near=new THREE.Group(),decals=[];
+ TREE_TYPES.forEach((T,ti)=>{
+  const list=ch.trees[ti];if(!list.length)return;
+  const mesh=new THREE.InstancedMesh(T.geo,treeMat,list.length);
+  list.forEach((t,i)=>{const sc=t.s*T.base;dummy.position.set(t.x,0,t.z);dummy.rotation.set(0,t.rot,0);dummy.scale.setScalar(sc);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix);col.setRGB(t.tr,t.tg,t.tb);mesh.setColorAt(i,col);const h=T.crownY*sc,ox=-TREE_SUN.x/TREE_SUN.y*h,oz=-TREE_SUN.z/TREE_SUN.y*h;decals.push({x:t.x+ox,z:t.z+oz,r:T.shade*sc*.75,rot:Math.atan2(-oz,ox)});});
+  mesh.instanceMatrix.needsUpdate=true;if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;near.add(mesh);
+ });
+ const far=new THREE.InstancedMesh(TREE_FAR_GEO,treeMat,ch.all.length);
+ ch.all.forEach((t,i)=>{const sc=t.s*TREE_TYPES[t.type].base,st=TREE_FAR_STRETCH[t.type];dummy.position.set(t.x,0,t.z);dummy.rotation.set(0,t.rot,0);dummy.scale.set(sc*st[0],sc*st[1],sc*st[0]);dummy.updateMatrix();far.setMatrixAt(i,dummy.matrix);col.setRGB(t.tr,t.tg,t.tb);far.setColorAt(i,col);});
+ far.instanceMatrix.needsUpdate=true;if(far.instanceColor)far.instanceColor.needsUpdate=true;far.frustumCulled=false;
+ const dm=new THREE.InstancedMesh(shadePlane,shadeMat,decals.length);
+ decals.forEach((d,i)=>{dummy.position.set(d.x,.16,d.z);dummy.rotation.set(0,d.rot,0);dummy.scale.set(d.r*1.2,1,d.r);dummy.updateMatrix();dm.setMatrixAt(i,dummy.matrix)});
+ dm.instanceMatrix.needsUpdate=true;dm.frustumCulled=false;dm.renderOrder=2;
+ near.visible=far.visible=dm.visible=false;ch.near=near;ch.far=far;ch.decals=dm;ch.renderCell.group.add(near,far,dm);
+}
+function updateSceneryStreamCells(force=false){
+ const cx=Math.floor(player.position.x/CULL_CELL),cz=Math.floor(player.position.z/CULL_CELL),key=cx+','+cz;
+ if(!force&&key===sceneryStreamCenter)return;sceneryStreamCenter=key;
+ for(const c of cullCells){
+  const ix=Math.floor(c.cx/CULL_CELL),iz=Math.floor(c.cz/CULL_CELL),active=Math.abs(ix-cx)<=SCENERY_STREAM_RADIUS&&Math.abs(iz-cz)<=SCENERY_STREAM_RADIUS;
+  if(!c.blueprint){c.blueprint=c.group.children.map(saveSceneryObject);}
+  if(!active&&c.blueprint&&c.group.children.length){for(const child of c.group.children.slice())releaseSceneryObject(child);c.group.clear();}
+  else if(active&&c.blueprint&&!c.group.children.length){for(const d of c.blueprint)c.group.add(restoreSceneryObject(d));}
+  c.group.visible=active;
+  if(c.treeChunks){for(const ch of c.treeChunks){
+   const tcx=Math.floor(ch.cx/CULL_CELL),tcz=Math.floor(ch.cz/CULL_CELL),treeActive=Math.abs(tcx-cx)<=SCENERY_STREAM_RADIUS&&Math.abs(tcz-cz)<=SCENERY_STREAM_RADIUS;
+   if(treeActive)buildStreamedTreeChunk(ch);
+   else if(ch.near){ch.renderCell.group.remove(ch.near,ch.far,ch.decals);ch.near.dispose?.();ch.far.dispose?.();ch.decals.dispose?.();ch.near=ch.far=ch.decals=null;}
+  }}
+ }
 }
 function updateCullCells(){
  camera.updateMatrixWorld();
@@ -2419,14 +2497,21 @@ function animate(){
   player.rotation.y=Math.atan2(dx,dz);
   if(body)body.position.y=1.05+Math.sin(performance.now()*.012)*.045;
  }
+ updateStreamedBuildingCells();
+ updateSceneryStreamCells();
+ updateCompactSportsCentreStream();
  updateActivityFacilityProximity();
  if(weather==='Rain'){for(const d of drops){d.position.y-=uiDt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*180;d.position.z=player.position.z+(Math.random()-.5)*180}}}
  updateCamera();updateCullCells();if((cullFrame++%3)===0){updateVisibleBuildings();updateTreeVisibility();}renderer.render(scene,camera);
 }
 updateCamera();
-console.info('This Is Lagos v0.66 expanded city:',{landAreaMultiplier:25,linearFootprintMultiplier:5,districts:districtDefs.length,buildings:cityMapBuildings.length,facilities:cityMapFacilities.length,sportsCentres:sportsCentreNames.length});
+console.info('This Is Lagos v0.74 streamed city:',{landAreaMultiplier:25,linearFootprintMultiplier:5,districts:districtDefs.length,buildings:cityMapBuildings.length,facilities:cityMapFacilities.length,sportsCentres:sportsCentreNames.length});
+console.info('This Is Lagos v0.74 shared block geometry:',{sharedUnitBox:true,maxBlockPiece:BLOCK_STREAM_MAX});
 optimizeWorldForView();
-scene.add(treeRoot);streamTrees(true);   // v0.70: trees are streamed in around the player (added after the world culling pass on purpose)
+updateSceneryStreamCells(true);
+updateStreamedBuildingCells(true);
+updateActivityFacilityMarkers(true);
+updateCompactSportsCentreStream(true);
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setPixelRatio(maxDevicePixelRatio*renderScale);renderer.setSize(innerWidth,innerHeight)});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)clock.getDelta()});
