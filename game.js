@@ -1,3 +1,4 @@
+// THIS IS LAGOS v0.70 — GPU resource streaming and city-generation memory cleanup, developed from protected Base v0.68.
 // THIS IS LAGOS v0.68 — v0.67 plus: every building / sports centre / landmark fitted inside its city block (nothing on roads or pavements); view-only rendering (chunked instancing + distance/frustum cell culling). Earlier notes: v0.67 — v0.66 startup and shelter-placement performance fixes; 25x city land area and 25x city content quantity — 100 sports centres, existing two-pole district gateways retained — Lagos street names, physical street signs and Grand Dealership on Isaac Uwadiale Road — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -17,9 +18,14 @@ renderer.shadowMap.enabled=false;
 renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;mount.appendChild(renderer.domElement);
 scene.add(new THREE.HemisphereLight(0xe7fff0,0x71856d,2));
 const sun=new THREE.DirectionalLight(0xfff2d5,2.5);sun.position.set(-35,55,25);sun.castShadow=false;scene.add(sun);
-const mat=(color,roughness=.85)=>new THREE.MeshStandardMaterial({color,roughness});
+// v0.69 MEMORY: identical static materials and box geometries are shared instead of
+// allocating a fresh GPU resource for every repeated window, shutter, wall and road part.
+const materialCache=new Map(),boxGeometryCache=new Map();
+const mat=(color,roughness=.85)=>{const key=`${color}:${roughness}`;let m=materialCache.get(key);if(!m){m=new THREE.MeshStandardMaterial({color,roughness});materialCache.set(key,m)}return m};
+function boxGeo(w,h,d){const key=`${w}:${h}:${d}`;let g=boxGeometryCache.get(key);if(!g){g=new THREE.BoxGeometry(w,h,d);boxGeometryCache.set(key,g)}return g}
+
 const grass=mat(0x7eaa78),road=mat(0x343d3b),sidewalk=mat(0xc9d2c8),white=mat(0xf1f5e9),green=mat(0x18824a),glassMat=new THREE.MeshStandardMaterial({color:0x8eb8b4,roughness:.25,metalness:.15}),dark=mat(0x263a31);
-function block(w,h,d,m,x,y,z){const o=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m);o.position.set(x,y+h/2,z);o.castShadow=true;o.receiveShadow=true;scene.add(o);return o}
+function block(w,h,d,m,x,y,z){const o=new THREE.Mesh(boxGeo(w,h,d),m);o.position.set(x,y+h/2,z);o.castShadow=true;o.receiveShadow=true;scene.add(o);return o}
 block(300,.2,300,grass,0,-.2,0);
 // Obsolete compact starter roads and markings removed; the unified 48m road grid below is authoritative.
 const buildingMats=[0xe7e8d9,0xd7e2d9,0xd8d8cf,0xe8dfce,0xc7d9d0].map(c=>mat(c));
@@ -75,8 +81,8 @@ function building(x,z,w,d,h,idx){
  const scale=4,sw=w*scale,sd=d*scale,sh=h*scale;
  if(!legacyBuildingPlotClear(x,z,sw,sd,2)) return;
  const g=new THREE.Group();g.position.set(x,0,z);g.scale.setScalar(scale);scene.add(g);
- const m=buildingMats[idx%buildingMats.length];const body=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m);body.position.y=h/2;g.add(body);const cap=new THREE.Mesh(new THREE.BoxGeometry(w+.15,.3,d+.15),green);cap.position.y=h-.15;g.add(cap);
- for(let y=2;y<h-1;y+=2.6){for(let xx=-w/2+1;xx<w/2-.5;xx+=2){const win=new THREE.Mesh(new THREE.BoxGeometry(.85,1.15,.08),glassMat);win.position.set(xx,y,d/2+.045);g.add(win);const win2=win.clone();win2.position.z=-d/2-.045;g.add(win2)}}
+ const m=buildingMats[idx%buildingMats.length];const body=new THREE.Mesh(boxGeo(w,h,d),m);body.position.y=h/2;g.add(body);const cap=new THREE.Mesh(boxGeo(w+.15,.3,d+.15),green);cap.position.y=h-.15;g.add(cap);
+ for(let y=2;y<h-1;y+=2.6){for(let xx=-w/2+1;xx<w/2-.5;xx+=2){const win=new THREE.Mesh(boxGeo(.85,1.15,.08),glassMat);win.position.set(xx,y,d/2+.045);g.add(win);const win2=win.clone();win2.position.z=-d/2-.045;g.add(win2)}}
  buildingColliders.push({minX:x-sw/2-1,maxX:x+sw/2+1,minZ:z-sd/2-1,maxZ:z+sd/2+1});
  cityMapBuildings.push({x,z,w:sw,d:sd,kind:'legacy'});
 }
@@ -311,7 +317,12 @@ function finalizeTrees(){
   dm.instanceMatrix.needsUpdate=true;dm.frustumCulled=false;dm.renderOrder=2;
   near.visible=far.visible=dm.visible=false;
   ch.near=near;ch.far=far;ch.decals=dm;scene.add(near);scene.add(far);scene.add(dm);
+  // The InstancedMeshes now contain the final transforms/colours. Retain only
+  // the render objects and chunk bounds; discard the duplicate per-tree JS records.
+  ch.trees=null;ch.all=null;
  }
+ // treeSpots duplicates the records now baked into the instanced buffers.
+ treeSpots.length=0;
 }
 // Chunk-level frustum + distance culling with two levels of detail (called with the building culling pass).
 function updateTreeVisibility(){
@@ -449,7 +460,7 @@ function clearBuildingPlot(x,z,w,d,extra=1){
 const pavementMat=mat(0xcbd1c7), kerbEdgeMat=mat(0xaeb8ad);
 function addRoadsideInstances(records,material){
  if(!records.length)return;
- const mesh=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),material,records.length);
+ const mesh=new THREE.InstancedMesh(boxGeo(1,1,1),material,records.length);
  const dummy=new THREE.Object3D();
  records.forEach((r,i)=>{
   dummy.position.set(r.x,r.y,r.z);dummy.scale.set(r.w,r.h,r.d);dummy.rotation.set(0,0,0);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix);
@@ -494,7 +505,7 @@ function roadPaint(w,d,x,z,material=paintWhite,y=.018){
 }
 function flushRoadPaint(){
  for(const [material,records] of roadPaintBatches){
-  const mesh=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),material,records.length);
+  const mesh=new THREE.InstancedMesh(boxGeo(1,1,1),material,records.length);
   const dummy=new THREE.Object3D();
   records.forEach((r,i)=>{dummy.position.set(r.x,r.y,r.z);dummy.scale.set(r.w,.035,r.d);dummy.rotation.set(0,0,0);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix)});
   mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;scene.add(mesh);
@@ -727,7 +738,7 @@ function addWaterTank(parent,x,y,z,scale=1){
  tank.position.set(x,y+1.05*scale,z);parent.add(tank);
  const lid=new THREE.Mesh(new THREE.CylinderGeometry(.88*scale,.88*scale,.12*scale,12),darkMetal);
  lid.position.set(x,y+1.92*scale,z);parent.add(lid);
- const legs=new THREE.Mesh(new THREE.BoxGeometry(1.8*scale,.16*scale,1.8*scale),darkMetal);
+ const legs=new THREE.Mesh(boxGeo(1.8*scale,.16*scale,1.8*scale),darkMetal);
  legs.position.set(x,y+.12*scale,z);parent.add(legs);
 }
 const viewCulledBuildings=[];
@@ -778,8 +789,8 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
  viewCulledBuildings.push({group:obj,sphere:new THREE.Sphere(new THREE.Vector3(x,h/2,z),visibilityRadius),detailChildren:null,detailDistance:420,maxDistance:2100});
  buildingColliders.push({minX:x-scaledW/2-1,maxX:x+scaledW/2+1,minZ:z-scaledD/2-1,maxZ:z+scaledD/2+1});
  cityMapBuildings.push({x,z,w:scaledW*placed.fit,d:scaledD*placed.fit,kind});
- const main=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),wall);main.position.y=h/2;main.castShadow=false;main.receiveShadow=false;obj.add(main);
- const roof=new THREE.Mesh(new THREE.BoxGeometry(w+.35,.5,d+.35),roofPalette[Math.abs(seed+2)%roofPalette.length]);roof.position.y=h+.18;roof.castShadow=false;obj.add(roof);
+ const main=new THREE.Mesh(boxGeo(w,h,d),wall);main.position.y=h/2;main.castShadow=false;main.receiveShadow=false;obj.add(main);
+ const roof=new THREE.Mesh(boxGeo(w+.35,.5,d+.35),roofPalette[Math.abs(seed+2)%roofPalette.length]);roof.position.y=h+.18;roof.castShadow=false;obj.add(roof);
  // Lagos residential facades: recessed-looking windows, balcony slabs,
  // painted fascia bands, security grilles and rooftop water storage.
  if(kind==='residential'||kind==='mixed'||kind==='tenement'||kind==='apartment'||kind==='bungalow'||kind==='duplex'){
@@ -788,7 +799,7 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
   const groundWindowHeight=2.35, groundWindowWidth=1.65, frameThickness=.09;
   for(let wx=-w/2+1.25;wx<w/2-.55;wx+=2.85){
    const frontZ=d/2+.07;
-   const groundWin=new THREE.Mesh(new THREE.BoxGeometry(groundWindowWidth,groundWindowHeight,.07),glassBlue);
+   const groundWin=new THREE.Mesh(boxGeo(groundWindowWidth,groundWindowHeight,.07),glassBlue);
    groundWin.position.set(wx,groundWindowHeight/2+.04,frontZ);obj.add(groundWin);
    const frameZ=frontZ+.055;
    const bars=[
@@ -797,30 +808,30 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
     [groundWindowWidth+frameThickness*2,frameThickness,wx,groundWindowHeight+.04],
     [groundWindowWidth+frameThickness*2,frameThickness,wx,.04]
    ];
-   for(const [bw,bh,bx,by] of bars){const bar=new THREE.Mesh(new THREE.BoxGeometry(bw,bh,.08),darkMetal);bar.position.set(bx,by,frameZ);obj.add(bar)}
+   for(const [bw,bh,bx,by] of bars){const bar=new THREE.Mesh(boxGeo(bw,bh,.08),darkMetal);bar.position.set(bx,by,frameZ);obj.add(bar)}
   }
   for(let floor=3.2;floor<h-1.2;floor+=3.2){
-   const balcony=new THREE.Mesh(new THREE.BoxGeometry(w+.35,.16,.9),concreteMat);
+   const balcony=new THREE.Mesh(boxGeo(w+.35,.16,.9),concreteMat);
    balcony.position.set(0,floor,d/2+.42);obj.add(balcony);
-   const rail=new THREE.Mesh(new THREE.BoxGeometry(w*.82,.72,.10),darkMetal);
+   const rail=new THREE.Mesh(boxGeo(w*.82,.72,.10),darkMetal);
    rail.position.set(0,floor+.43,d/2+.82);obj.add(rail);
    for(let wx=-w/2+1.25;wx<w/2-.55;wx+=2.85){
     const upperWindowHeight=2.35, upperWindowWidth=1.65;
-    const win=new THREE.Mesh(new THREE.BoxGeometry(upperWindowWidth,upperWindowHeight,.07),glassBlue);
+    const win=new THREE.Mesh(boxGeo(upperWindowWidth,upperWindowHeight,.07),glassBlue);
     const windowCenterY=floor+upperWindowHeight/2;
     win.position.set(wx,windowCenterY,d/2+.07);obj.add(win);
     const fz=d/2+.125, fy=windowCenterY, ft=.08, halfW=upperWindowWidth/2;
     for(const [bw,bh,bx,by] of [[ft,upperWindowHeight+.16,wx-halfW-ft/2,fy],[ft,upperWindowHeight+.16,wx+halfW+ft/2,fy],[upperWindowWidth+ft*2,ft,wx,fy+upperWindowHeight/2+ft/2],[upperWindowWidth+ft*2,ft,wx,fy-upperWindowHeight/2-ft/2]]){
-     const frame=new THREE.Mesh(new THREE.BoxGeometry(bw,bh,.07),darkMetal);frame.position.set(bx,by,fz);obj.add(frame);
+     const frame=new THREE.Mesh(boxGeo(bw,bh,.07),darkMetal);frame.position.set(bx,by,fz);obj.add(frame);
     }
    }
   }
-  const fascia=new THREE.Mesh(new THREE.BoxGeometry(w+.22,.28,d+.22),trimMat);
+  const fascia=new THREE.Mesh(boxGeo(w+.22,.28,d+.22),trimMat);
   fascia.position.y=2.55;obj.add(fascia);
   if(h>7) addWaterTank(obj,w*.24,h+.35,-d*.18,Math.min(1.25,Math.max(.7,w/18)));
   // External stair/service core on one side, common in walk-up blocks.
   if(kind==='tenement'||kind==='residential'||kind==='apartment'){
-   const stair=new THREE.Mesh(new THREE.BoxGeometry(1.5,Math.min(h,10),d*.58),concreteMat);
+   const stair=new THREE.Mesh(boxGeo(1.5,Math.min(h,10),d*.58),concreteMat);
    stair.position.set(-w*.36,Math.min(h,10)/2,d*.18);obj.add(stair);
   }
  }
@@ -828,25 +839,25 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
   // Pitched roof, deep veranda, porch columns and a visible front entrance.
   const roofMesh=new THREE.Mesh(new THREE.ConeGeometry(Math.max(w,d)*.72,Math.max(2.2,h*.22),4),rustRoof);
   roofMesh.position.set(0,h+1.0,0);roofMesh.rotation.y=Math.PI/4;obj.add(roofMesh);
-  const porch=new THREE.Mesh(new THREE.BoxGeometry(w*.72,.25,2.4),concreteMat);
+  const porch=new THREE.Mesh(boxGeo(w*.72,.25,2.4),concreteMat);
   porch.position.set(0,1.5,d/2+1.1);obj.add(porch);
   for(const px of [-w*.32,w*.32]){
-   const col=new THREE.Mesh(new THREE.BoxGeometry(.32,2.8,.32),trimMat);
+   const col=new THREE.Mesh(boxGeo(.32,2.8,.32),trimMat);
    col.position.set(px,1.4,d/2+1.9);obj.add(col);
   }
-  const door=new THREE.Mesh(new THREE.BoxGeometry(1.35,2.35,.12),darkMetal);
+  const door=new THREE.Mesh(boxGeo(1.35,2.35,.12),darkMetal);
   door.position.set(0,1.18,d/2+.09);obj.add(door);
  }
  if(kind==='tenement'){
   // Repeated narrow door bays and shared frontage typical of dense compounds.
   for(let dx=-w/2+1.5;dx<w/2-1;dx+=3.2){
-   const door=new THREE.Mesh(new THREE.BoxGeometry(1.05,2.15,.12),darkMetal);
+   const door=new THREE.Mesh(boxGeo(1.05,2.15,.12),darkMetal);
    door.position.set(dx,1.08,d/2+.12);obj.add(door);
   }
  }
  if(kind==='shop'||kind==='market'){
-  const awning=new THREE.Mesh(new THREE.BoxGeometry(w+.3,.35,d*.28),marketMat);awning.position.set(0,2.6,d/2+.35);obj.add(awning);
-  for(let wx=-w/2+1;wx<w/2;wx+=2.2){const shutter=new THREE.Mesh(new THREE.BoxGeometry(1.5,2,.08),mat(0x6e756d));shutter.position.set(wx,1.2,d/2+.08);obj.add(shutter)}
+  const awning=new THREE.Mesh(boxGeo(w+.3,.35,d*.28),marketMat);awning.position.set(0,2.6,d/2+.35);obj.add(awning);
+  for(let wx=-w/2+1;wx<w/2;wx+=2.2){const shutter=new THREE.Mesh(boxGeo(1.5,2,.08),mat(0x6e756d));shutter.position.set(wx,1.2,d/2+.08);obj.add(shutter)}
  }
  if(kind==='office'){
   // Office glazing belongs on the designated front facade only.
@@ -856,7 +867,7 @@ function makeBuilding(x,z,w,d,h,kind='residential',seed=0){
   const officeFrontZ=d/2+.075;
   for(let floor=1.6;floor<h-1.2;floor+=3.2){
    for(let wx=-w/2+officeWindowWidth*.7;wx<w/2-officeWindowWidth*.45;wx+=officeWindowWidth*1.35){
-    const pane=new THREE.Mesh(new THREE.BoxGeometry(officeWindowWidth,officeWindowHeight,.08),glassBlue);
+    const pane=new THREE.Mesh(boxGeo(officeWindowWidth,officeWindowHeight,.08),glassBlue);
     pane.position.set(wx,floor+officeWindowHeight/2,officeFrontZ);obj.add(pane);
    }
   }
@@ -931,7 +942,7 @@ function addStreetNameSign(name,x,z,axis){
   const pole=new THREE.Mesh(streetSignPoleGeo,streetSignPoleMat);
   pole.position.set(sx*(boardW/2-.28),STREET_SIGN_POLE_HEIGHT/2,0);g.add(pole);
  }
- const frame=new THREE.Mesh(new THREE.BoxGeometry(boardW+.14,boardH+.14,.1),streetSignFrameMat);
+ const frame=new THREE.Mesh(boxGeo(boardW+.14,boardH+.14,.1),streetSignFrameMat);
  frame.position.set(0,boardY,0);g.add(frame);
  const tex=makeStreetSignTexture(name,boardW/boardH);
  const faceMat=new THREE.MeshBasicMaterial({map:tex});
@@ -1003,10 +1014,10 @@ function addDistrictGateway(name,cx,cz){
  for(const sx of [-1,1]){
   const pole=new THREE.Mesh(districtPoleGeo,districtPoleMat);
   pole.position.set(sx*DISTRICT_POLE_OFFSET,DISTRICT_POLE_HEIGHT/2,0);g.add(pole);
-  const base=new THREE.Mesh(new THREE.BoxGeometry(2.2,.5,2.2),districtFrameMat);base.position.set(sx*DISTRICT_POLE_OFFSET,.25,0);g.add(base);
+  const base=new THREE.Mesh(boxGeo(2.2,.5,2.2),districtFrameMat);base.position.set(sx*DISTRICT_POLE_OFFSET,.25,0);g.add(base);
  }
  const boardY=DISTRICT_POLE_HEIGHT-DISTRICT_BOARD_H/2-.4;
- const frame=new THREE.Mesh(new THREE.BoxGeometry(boardW+.3,DISTRICT_BOARD_H+.3,.4),districtFrameMat);frame.position.set(0,boardY,0);g.add(frame);
+ const frame=new THREE.Mesh(boxGeo(boardW+.3,DISTRICT_BOARD_H+.3,.4),districtFrameMat);frame.position.set(0,boardY,0);g.add(frame);
  const faceMat=new THREE.MeshBasicMaterial({map:makeDistrictTexture(name,boardW/DISTRICT_BOARD_H)});
  const front=new THREE.Mesh(new THREE.PlaneGeometry(boardW,DISTRICT_BOARD_H),faceMat);front.position.set(0,boardY,.22);g.add(front);
  const back=new THREE.Mesh(new THREE.PlaneGeometry(boardW,DISTRICT_BOARD_H),faceMat);back.rotation.y=Math.PI;back.position.set(0,boardY,-.22);g.add(back);
@@ -1020,31 +1031,31 @@ function buildDistrictGateways(){for(const d of districtDefs)addDistrictGateway(
 function palmTree(x,z,scale=1){addTree(x,z,scale*1.15,'palm')}
 function fencedPitch(cx,cz,name='FOOTBALL PITCH',surface=sportGreen,s=1){
  const g=new THREE.Group();g.position.set(cx,0,cz);g.scale.setScalar(s);scene.add(g);
- const field=new THREE.Mesh(new THREE.BoxGeometry(82,.22,48),surface);field.position.y=.04;g.add(field);
+ const field=new THREE.Mesh(boxGeo(82,.22,48),surface);field.position.y=.04;g.add(field);
  const lineMat=new THREE.MeshBasicMaterial({color:0xffffff});
- function line(w,h,x,z){const m=new THREE.Mesh(new THREE.BoxGeometry(w,.035,h),lineMat);m.position.set(x,.17,z);g.add(m)}
+ function line(w,h,x,z){const m=new THREE.Mesh(boxGeo(w,.035,h),lineMat);m.position.set(x,.17,z);g.add(m)}
  line(78,.35,0,-23.5);line(78,.35,0,23.5);line(.35,47,-40,0);line(.35,47,40,0);line(.3,47,0,0);
  const circle=new THREE.Mesh(new THREE.RingGeometry(7.6,7.9,48),lineMat);circle.rotation.x=-Math.PI/2;circle.position.y=.18;g.add(circle);
- for(const x of [-40,40]){const goal=new THREE.Mesh(new THREE.BoxGeometry(.6,5,12),white);goal.position.set(x,2.5,0);g.add(goal)}
+ for(const x of [-40,40]){const goal=new THREE.Mesh(boxGeo(.6,5,12),white);goal.position.set(x,2.5,0);g.add(goal)}
  // Simple perimeter fence and floodlights.
  const fenceMat=mat(0x87958b);
- for(const x of [-44,44]){const f=new THREE.Mesh(new THREE.BoxGeometry(.25,3,58),fenceMat);f.position.set(x,1.5,0);g.add(f)}
- for(const z of [-29,29]){const f=new THREE.Mesh(new THREE.BoxGeometry(92,3,.25),fenceMat);f.position.set(0,1.5,z);g.add(f)}
- for(const x of [-48,48])for(const z of [-31,31]){const pole=new THREE.Mesh(new THREE.CylinderGeometry(.16,.22,13,8),dark);pole.position.set(x,6.5,z);g.add(pole);const lamp=new THREE.Mesh(new THREE.BoxGeometry(2,.4,1),white);lamp.position.set(x,13,z);g.add(lamp)}
+ for(const x of [-44,44]){const f=new THREE.Mesh(boxGeo(.25,3,58),fenceMat);f.position.set(x,1.5,0);g.add(f)}
+ for(const z of [-29,29]){const f=new THREE.Mesh(boxGeo(92,3,.25),fenceMat);f.position.set(0,1.5,z);g.add(f)}
+ for(const x of [-48,48])for(const z of [-31,31]){const pole=new THREE.Mesh(new THREE.CylinderGeometry(.16,.22,13,8),dark);pole.position.set(x,6.5,z);g.add(pole);const lamp=new THREE.Mesh(boxGeo(2,.4,1),white);lamp.position.set(x,13,z);g.add(lamp)}
  signBoard(name,cx,cz-34*s,26*Math.max(.6,s),0x176b43);
  recordCityFacility('football',cx,cz,92*s,58*s,name);
 }
 function tennisCentre(cx,cz,s=1){
  const g=new THREE.Group();g.position.set(cx,0,cz);g.scale.setScalar(s);scene.add(g);
- for(let c=0;c<3;c++){const z=(c-1)*30;const court=new THREE.Mesh(new THREE.BoxGeometry(22,.2,12),sportBlue);court.position.set(0,.06,z);g.add(court);
+ for(let c=0;c<3;c++){const z=(c-1)*30;const court=new THREE.Mesh(boxGeo(22,.2,12),sportBlue);court.position.set(0,.06,z);g.add(court);
   const ln=new THREE.MeshBasicMaterial({color:0xffffff});
-  for(const x of [-10.5,10.5]){const m=new THREE.Mesh(new THREE.BoxGeometry(.18,.04,11),ln);m.position.set(x,.19,z);g.add(m)}
-  const net=new THREE.Mesh(new THREE.BoxGeometry(.15,1,12),mat(0xe8e8df));net.position.set(0,.65,z);g.add(net)}
+  for(const x of [-10.5,10.5]){const m=new THREE.Mesh(boxGeo(.18,.04,11),ln);m.position.set(x,.19,z);g.add(m)}
+  const net=new THREE.Mesh(boxGeo(.15,1,12),mat(0xe8e8df));net.position.set(0,.65,z);g.add(net)}
  signBoard('LAGOS TENNIS CENTRE',cx,cz-Math.min(36*s+4,24),28*Math.max(.6,s),0x245f94);
  recordCityFacility('tennis',cx,cz,30*s,72*s,'Tennis centre');
 }
 function basketballCentre(cx,cz){
- const court=new THREE.Mesh(new THREE.BoxGeometry(38,.2,23),sportRed);court.position.set(cx,.05,cz);scene.add(court);
+ const court=new THREE.Mesh(boxGeo(38,.2,23),sportRed);court.position.set(cx,.05,cz);scene.add(court);
  const ring=new THREE.Mesh(new THREE.RingGeometry(5,5.3,32),new THREE.MeshBasicMaterial({color:0xffffff,side:THREE.DoubleSide}));ring.rotation.x=-Math.PI/2;ring.position.set(cx,.18,cz);scene.add(ring);
  signBoard('COMMUNITY BASKETBALL COURT',cx,cz-22,25,0x9b4036);
  recordCityFacility('basketball',cx,cz,38,23,'Basketball court');
@@ -1052,7 +1063,7 @@ function basketballCentre(cx,cz){
 function marketCluster(cx,cz,label='LOCAL MARKET'){
  // v0.68: canopies follow the road-safe position each shop was actually given.
  const placed=[];
- for(let i=0;i<7;i++){const x=cx+(i%4)*13-20,z=cz+Math.floor(i/4)*15;const shop=makeBuilding(x,z,10,10,4,'market',i);if(shop){const canopy=new THREE.Mesh(new THREE.BoxGeometry(10,.35,10),marketMat);canopy.position.set(shop.position.x,4.4,shop.position.z);scene.add(canopy);placed.push(shop.position)}}
+ for(let i=0;i<7;i++){const x=cx+(i%4)*13-20,z=cz+Math.floor(i/4)*15;const shop=makeBuilding(x,z,10,10,4,'market',i);if(shop){const canopy=new THREE.Mesh(boxGeo(10,.35,10),marketMat);canopy.position.set(shop.position.x,4.4,shop.position.z);scene.add(canopy);placed.push(shop.position)}}
  // Shops that had to be pushed far away (no room nearby) are not part of the cluster's sign/map footprint.
  const near=placed.filter(p=>Math.hypot(p.x-cx,p.z-cz)<170);
  let mx=cx,mz=cz,w=78,d=30;
@@ -1068,14 +1079,14 @@ function compound(cx,cz,kind='residential',seed=0){
  // Walled family compounds with gate, small yard and several low-rise blocks.
  const wall=mat(0xb6ad9a),g=new THREE.Group();g.position.set(cx,0,cz);scene.add(g);
  for(const [x,z,w,d] of [[0,-21,42,.7],[0,21,42,.7],[-21,0,.7,42],[21,0,.7,42]]){
-  const m=new THREE.Mesh(new THREE.BoxGeometry(w,2.2,d),wall);m.position.set(x,1.1,z);g.add(m)
+  const m=new THREE.Mesh(boxGeo(w,2.2,d),wall);m.position.set(x,1.1,z);g.add(m)
  }
- const gate=new THREE.Mesh(new THREE.BoxGeometry(7,2.4,.5),mat(0x354c40));gate.position.set(0,1.2,21);g.add(gate);
- const gateHeader=new THREE.Mesh(new THREE.BoxGeometry(9,.45,.8),trimMat);gateHeader.position.set(0,2.55,21);g.add(gateHeader);
+ const gate=new THREE.Mesh(boxGeo(7,2.4,.5),mat(0x354c40));gate.position.set(0,1.2,21);g.add(gate);
+ const gateHeader=new THREE.Mesh(boxGeo(9,.45,.8),trimMat);gateHeader.position.set(0,2.55,21);g.add(gateHeader);
  // Two low-rise buildings create the familiar shared-yard compound layout.
  makeBuilding(cx-9,cz-7,15,14,10,kind,seed);makeBuilding(cx+9,cz-7,14,13,8,kind,seed+1);
- const gen=new THREE.Mesh(new THREE.BoxGeometry(1.5,1.1,1.1),darkMetal);gen.position.set(cx+15,.55,cz+14);scene.add(gen);
- const yard=new THREE.Mesh(new THREE.BoxGeometry(14,.12,10),grass);yard.position.set(cx,0,cz+11);scene.add(yard);
+ const gen=new THREE.Mesh(boxGeo(1.5,1.1,1.1),darkMetal);gen.position.set(cx+15,.55,cz+14);scene.add(gen);
+ const yard=new THREE.Mesh(boxGeo(14,.12,10),grass);yard.position.set(cx,0,cz+11);scene.add(yard);
 }
 function buildDistrict(name,cx,cz,type,seed){
  // arterial frontage, varied block fabric and a signature landmark per district.
@@ -1105,10 +1116,10 @@ function buildDistrict(name,cx,cz,type,seed){
    }else if(isLuxury){
     // Larger gated plots with detached duplexes and landscaped setbacks.
     if(!clearBuildingPlot(x,z,42,42,1)) continue;
-    const yard=new THREE.Mesh(new THREE.BoxGeometry(34,.12,30),grass);yard.position.set(x,.02,z);scene.add(yard);
+    const yard=new THREE.Mesh(boxGeo(34,.12,30),grass);yard.position.set(x,.02,z);scene.add(yard);
     compound(x,z,'duplex',seed+i);
     for(const sx of [-12,12]){
-     const hedge=new THREE.Mesh(new THREE.BoxGeometry(1.1,1.5,25),mat(0x326b3c));hedge.position.set(x+sx, .75,z);scene.add(hedge);
+     const hedge=new THREE.Mesh(boxGeo(1.1,1.5,25),mat(0x326b3c));hedge.position.set(x+sx, .75,z);scene.add(hedge);
     }
    }else compound(x,z,houseKind,seed+i);
   }
@@ -1183,8 +1194,8 @@ for(let tx=-2;tx<=2;tx++)for(let tz=-2;tz<=2;tz++){
  const records=expandedBuildingRecords.filter(b=>Math.floor((b.x+5250)/2100)===tx+2&&Math.floor((b.z+5250)/2100)===tz+2);
  if(!records.length)continue;
  const group=new THREE.Group();scene.add(group);
- const body=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),new THREE.MeshStandardMaterial({color:0xffffff,roughness:.86}),records.length);
- const roof=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),roofMat,records.length);
+ const body=new THREE.InstancedMesh(boxGeo(1,1,1),new THREE.MeshStandardMaterial({color:0xffffff,roughness:.86}),records.length);
+ const roof=new THREE.InstancedMesh(boxGeo(1,1,1),roofMat,records.length);
  const dummy=new THREE.Object3D(),color=new THREE.Color();
  records.forEach((b,i)=>{
   dummy.position.set(b.x,b.h/2,b.z);dummy.scale.set(b.w,b.h,b.d);dummy.updateMatrix();body.setMatrixAt(i,dummy.matrix);
@@ -1224,7 +1235,7 @@ function reserveAmenity(x,z,w,d){
   amenityColliders.push({minX:x-w/2-2,maxX:x+w/2+2,minZ:z-d/2-2,maxZ:z+d/2+2});
 }
 function amenityBox(parent,w,h,d,material,x,y,z){
-  const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),material);
+  const m=new THREE.Mesh(boxGeo(w,h,d),material);
   m.position.set(x,y+h/2,z);m.castShadow=false;m.receiveShadow=false;parent.add(m);return m;
 }
 function addShopfront(x,z,label='SHOP',accent=0x176b43){
@@ -1283,12 +1294,12 @@ function addTennisCourt(x,z){
   amenityBox(g,30,.18,19,sportBlue,0,.05,0);
   const line=new THREE.MeshBasicMaterial({color:0xffffff});
   for(const px of [-14.5,14.5]){
-    const m=new THREE.Mesh(new THREE.BoxGeometry(.18,.04,18),line);m.position.set(px,.17,0);g.add(m);
+    const m=new THREE.Mesh(boxGeo(.18,.04,18),line);m.position.set(px,.17,0);g.add(m);
   }
   for(const pz of [-9,9]){
-    const m=new THREE.Mesh(new THREE.BoxGeometry(29,.04,.18),line);m.position.set(0,.17,pz);g.add(m);
+    const m=new THREE.Mesh(boxGeo(29,.04,.18),line);m.position.set(0,.17,pz);g.add(m);
   }
-  const net=new THREE.Mesh(new THREE.BoxGeometry(.18,1,18),amenityMats.white);net.position.set(0,.7,0);g.add(net);
+  const net=new THREE.Mesh(boxGeo(.18,1,18),amenityMats.white);net.position.set(0,.7,0);g.add(net);
   signBoard('COMMUNITY TENNIS',x,z-12,20,0x245f94);reserveAmenity(x,z,34,25);recordCityFacility('tennis',x,z,34,25,'Tennis court');
 }
 function addGardenPark(x,z,large=false){
@@ -1609,12 +1620,12 @@ const sportsCentreBuildResult=buildOneHundredSportsCentres();
   recordCityFacility('sportscomplex',x,z,sz,sz,label);amenityColliders.push({minX:x-sz/2,maxX:x+sz/2,minZ:z-sz/2,maxZ:z+sz/2});used.add(key);n++;
  }
  function campusInstances(geometry,material,fn){const mesh=new THREE.InstancedMesh(geometry,material,records.length),d=new THREE.Object3D();records.forEach((r,i)=>{fn(d,r);d.updateMatrix();mesh.setMatrixAt(i,d.matrix)});mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=true;scene.add(mesh)}
- campusInstances(new THREE.BoxGeometry(1,1,1),fieldMat,(d,r)=>{d.position.set(r.x-8*r.s,.12,r.z-8*r.s);d.scale.set(21*r.s,.24,13*r.s)});
- campusInstances(new THREE.BoxGeometry(1,1,1),courtMat,(d,r)=>{d.position.set(r.x+9*r.s,.12,r.z-8*r.s);d.scale.set(16*r.s,.24,13*r.s)});
- campusInstances(new THREE.BoxGeometry(1,1,1),parkMat,(d,r)=>{d.position.set(r.x+9*r.s,.08,r.z+16*r.s);d.scale.set(19*r.s,.16,8*r.s)});
- campusInstances(new THREE.BoxGeometry(1,1,1),lineMat,(d,r)=>{d.position.set(r.x+9*r.s,.22,r.z+16*r.s);d.scale.set(18*r.s,.035,.12)});
+ campusInstances(boxGeo(1,1,1),fieldMat,(d,r)=>{d.position.set(r.x-8*r.s,.12,r.z-8*r.s);d.scale.set(21*r.s,.24,13*r.s)});
+ campusInstances(boxGeo(1,1,1),courtMat,(d,r)=>{d.position.set(r.x+9*r.s,.12,r.z-8*r.s);d.scale.set(16*r.s,.24,13*r.s)});
+ campusInstances(boxGeo(1,1,1),parkMat,(d,r)=>{d.position.set(r.x+9*r.s,.08,r.z+16*r.s);d.scale.set(19*r.s,.16,8*r.s)});
+ campusInstances(boxGeo(1,1,1),lineMat,(d,r)=>{d.position.set(r.x+9*r.s,.22,r.z+16*r.s);d.scale.set(18*r.s,.035,.12)});
  const bayMat=new THREE.MeshBasicMaterial({color:0xf4f2e7});
- const bayMesh=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),bayMat,records.length*4),bd=new THREE.Object3D();
+ const bayMesh=new THREE.InstancedMesh(boxGeo(1,1,1),bayMat,records.length*4),bd=new THREE.Object3D();
  records.forEach((r,i)=>{for(let b=0;b<4;b++){bd.position.set(r.x+(2+b*4)*r.s,.22,r.z+20*r.s);bd.scale.set(.12,.035,5*r.s);bd.updateMatrix();bayMesh.setMatrixAt(i*4+b,bd.matrix)}});
  bayMesh.instanceMatrix.needsUpdate=true;bayMesh.frustumCulled=true;scene.add(bayMesh);
  console.info('Additional instanced sports centres:',n);
@@ -1660,7 +1671,7 @@ function rebuildAvatar(opts=avatarSettings){
   for(const x of [-.105,.105]){
     part(player,new THREE.SphereGeometry(.047,16,12),mat(0xf5eee2),x,2.075,.239,.95,.7,.5);
     part(player,new THREE.SphereGeometry(.022,12,10),mat(0x24160f),x,2.075,.26);
-    part(player,new THREE.BoxGeometry(.095,.018,.025),hairMat,x,2.145,.24,1,1,1);
+    part(player,boxGeo(.095,.018,.025),hairMat,x,2.145,.24,1,1,1);
   }
   // Nose bridge and nostrils; proportions remain editable through the future face controls.
   part(player,new THREE.SphereGeometry(.07,16,12),skin,0,2.005,.265,.72,1.05,.75);
@@ -1690,7 +1701,7 @@ function rebuildAvatar(opts=avatarSettings){
     part(player,new THREE.SphereGeometry(.095,14,10),skin,side*.43,.78,.015,.85,1.1,.8);
     // Legs and footwear
     part(player,new THREE.CapsuleGeometry(.135,.52,5,10),trousers,side*.16,.39,0,1,1,.9);
-    part(player,new THREE.BoxGeometry(.22,.13,.38),shoe,side*.16,.105,-.075);
+    part(player,boxGeo(.22,.13,.38),shoe,side*.16,.105,-.075);
   }
 }
 let avatarReady=false, avatarMixer=null, avatarModel=null, avatarActions={}, activeAvatarAction=null;
@@ -1726,9 +1737,15 @@ gltfLoader.load('./models/The_Miami_Dealer.glb',gltf=>{
 },undefined,error=>{
   console.warn('Detailed character could not load:',error);rebuildAvatar(avatarSettings);player.visible=true;avatarReady=true;loadingBadge.textContent='Using local character preview';setTimeout(()=>loadingBadge.remove(),2600);
 });
-const rainGroup=new THREE.Group();scene.add(rainGroup);const drops=[];
-for(let i=0;i<500;i++){const d=new THREE.Mesh(new THREE.BoxGeometry(.025,.45,.025),new THREE.MeshBasicMaterial({color:0xd9efff,transparent:true,opacity:.55}));d.position.set((Math.random()-.5)*180,Math.random()*35,(Math.random()-.5)*180);rainGroup.add(d);drops.push(d)}
-rainGroup.visible=false;
+const rainGroup=new THREE.Group();scene.add(rainGroup);
+// One shared geometry/material and one draw call replace 500 individual rain meshes.
+const rainGeometry=boxGeo(.025,.45,.025);
+const rainMaterial=new THREE.MeshBasicMaterial({color:0xd9efff,transparent:true,opacity:.55});
+const rainMesh=new THREE.InstancedMesh(rainGeometry,rainMaterial,500);
+const drops=Array.from({length:500},()=>({x:(Math.random()-.5)*180,y:Math.random()*35,z:(Math.random()-.5)*180}));
+const rainDummy=new THREE.Object3D();
+for(let i=0;i<drops.length;i++){const d=drops[i];rainDummy.position.set(d.x,d.y,d.z);rainDummy.updateMatrix();rainMesh.setMatrixAt(i,rainDummy.matrix)}
+rainMesh.instanceMatrix.needsUpdate=true;rainGroup.add(rainMesh);rainGroup.visible=false;
 let cameraMode=0,weather='Clear',worldMinutes=12*60,daySpeed=3,lookAngle=0,lookPitch=.12,cameraDistance=157.5;
 const modes=['THIRD PERSON','FIRST PERSON','ISOMETRIC'];
 const keys={};let moving=false;
@@ -2142,9 +2159,10 @@ window.addEventListener('keydown',e=>{if(e.key==='Escape'&&cityMapOpen)setCityMa
 let uiUpdateElapsed=0;
 // Adaptive render resolution: if frame rate drops, lower pixel count without restarting.
 // ============================================================================
-// v0.68 VIEW-ONLY RENDERING
-// Nothing was removed from the city. Instead, everything static is grouped into 300m cells and only the
-// cells that are inside the camera frustum AND within draw distance are drawn:
+// v0.70 CELL-BASED GPU RESOURCE STREAMING (built on v0.68 view culling)
+// All original city content remains intact. Static scenery is grouped into 300m cells; only the
+// cells inside the camera frustum and draw distance are drawn. Long-hidden cells release their GPU allocations;
+// their CPU-side geometry remains cached for fast, faithful restoration.
 //  * the city-wide instanced meshes (560,000 road-paint dashes, 176,000 pavement/kerb slabs, 19,600 street
 //    lamps x5 parts, lamp glow) are split per cell, so the GPU only draws the instances around the player;
 //  * ~30,000 individual meshes/groups are parked in per-cell groups whose whole subtree is skipped when
@@ -2161,7 +2179,7 @@ function getCullCell(cls,cx,cz,master=null){
   const group=new THREE.Group();group.matrixAutoUpdate=false;
   group.updateMatrixWorld=function(){};     // frozen subtree: static scenery needs no per-frame matrix work
   const mx=(cx+.5)*CULL_CELL,mz=(cz+.5)*CULL_CELL;
-  c={group,cx:mx,cz:mz,dist:CULL_DIST[cls]||CULL_DIST.far,master,sphere:new THREE.Sphere(new THREE.Vector3(mx,CULL_SPHERE_Y,mz),CULL_SPHERE_R)};
+  c={group,cx:mx,cz:mz,dist:CULL_DIST[cls]||CULL_DIST.far,master,sphere:new THREE.Sphere(new THREE.Vector3(mx,CULL_SPHERE_Y,mz),CULL_SPHERE_R),resources:null,gpuActive:false,hiddenFrames:0};
   cullCellMap.set(key,c);cullCells.push(c);scene.add(group);
  }
  return c;
@@ -2203,6 +2221,50 @@ function chunkInstanced(src,forceCls,master){
  }
  scene.remove(src);
  return made;
+}
+// GPU resource streaming for static city cells. CPU-side geometry data is retained
+// so Three.js can transparently upload it again when a cell comes back into view.
+// Shared resources are reference-counted across cells and pinned if still used by
+// objects that remain at the scene root (player, ground, large roads, lights, etc.).
+const cullResourceUsers=new Map(),cullPinnedResources=new Set();
+const CULL_GPU_RELEASE_DELAY=150; // 2.5 seconds at 60fps avoids camera-turn thrashing.
+function addMaterialResources(set,material){
+ if(!material)return;
+ const mats=Array.isArray(material)?material:[material];
+ for(const m of mats){
+  if(!m)continue;set.add(m);
+  for(const value of Object.values(m))if(value&&value.isTexture)set.add(value);
+ }
+}
+function collectObjectResources(root,set){
+ root.traverse(o=>{
+  if(o.geometry)set.add(o.geometry);
+  addMaterialResources(set,o.material);
+ });
+}
+function prepareCullCellResources(){
+ cullResourceUsers.clear();cullPinnedResources.clear();
+ const cellGroups=new Set(cullCells.map(c=>c.group));
+ const rootResources=new Set();
+ for(const o of scene.children)if(!cellGroups.has(o))collectObjectResources(o,rootResources);
+ for(const r of rootResources)cullPinnedResources.add(r);
+ for(const c of cullCells){
+  const resources=new Set();collectObjectResources(c.group,resources);c.resources=resources;
+  for(const r of resources)if(!cullResourceUsers.has(r))cullResourceUsers.set(r,0);
+ }
+}
+function setCullCellGpuActive(c,active){
+ if(c.gpuActive===active)return;
+ c.gpuActive=active;
+ if(!c.resources)return;
+ for(const r of c.resources){
+  const count=cullResourceUsers.get(r)||0;
+  if(active){cullResourceUsers.set(r,count+1);}
+  else{
+   const next=Math.max(0,count-1);cullResourceUsers.set(r,next);
+   if(next===0&&!cullPinnedResources.has(r)&&typeof r.dispose==='function')r.dispose();
+  }
+ }
 }
 function optimizeWorldForView(){
  scene.updateMatrixWorld(true);                       // settle every matrix once, then freeze static cells
@@ -2247,7 +2309,8 @@ function optimizeWorldForView(){
  }
  // The street-light module toggles these flags at dusk/dawn; they now switch whole sets of chunked pools / glow points.
  slPools=poolFlag;slGlow=glowFlag;
- console.info('This Is Lagos v0.68 view culling:',{cells:cullCells.length,instancedChunks:chunks,objectsParkedInCells:grouped,hugeObjectsKeptAtRoot:rootKept,sceneRootChildren:scene.children.length});
+ prepareCullCellResources();
+ console.info('This Is Lagos v0.70 memory optimisation:',{cells:cullCells.length,instancedChunks:chunks,objectsParkedInCells:grouped,hugeObjectsKeptAtRoot:rootKept,sceneRootChildren:scene.children.length,sharedBoxGeometries:boxGeometryCache.size,sharedMaterials:materialCache.size,treeBlueprintRecordsReleased:true,gpuCellResourceStreaming:true,gpuReleaseDelayFrames:CULL_GPU_RELEASE_DELAY});
  updateCullCells();
 }
 function updateCullCells(){
@@ -2261,6 +2324,9 @@ function updateCullCells(){
   if(vis&&c.master)vis=c.master.visible!==false;
   if(vis)vis=cellFrustum.intersectsSphere(c.sphere);
   c.group.visible=vis;
+  if(vis){c.hiddenFrames=0;setCullCellGpuActive(c,true);}
+  else if(!c.gpuActive){c.hiddenFrames=0;}
+  else if(++c.hiddenFrames>=CULL_GPU_RELEASE_DELAY){setCullCellGpuActive(c,false);c.hiddenFrames=0;}
  }
 }
 let fpsSampleTime=0,fpsFrames=0,slowSamples=0,fastSamples=0;
@@ -2326,11 +2392,11 @@ function animate(){
   if(body)body.position.y=1.05+Math.sin(performance.now()*.012)*.045;
  }
  updateActivityFacilityProximity();
- if(weather==='Rain'){for(const d of drops){d.position.y-=uiDt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*180;d.position.z=player.position.z+(Math.random()-.5)*180}}}
+ if(weather==='Rain'){for(let i=0;i<drops.length;i++){const d=drops[i];d.y-=uiDt*18;if(d.y<0){d.y=35;d.x=player.position.x+(Math.random()-.5)*180;d.z=player.position.z+(Math.random()-.5)*180}rainDummy.position.set(d.x,d.y,d.z);rainDummy.updateMatrix();rainMesh.setMatrixAt(i,rainDummy.matrix)}rainMesh.instanceMatrix.needsUpdate=true}
  updateCamera();updateCullCells();if((cullFrame++%3)===0){updateVisibleBuildings();updateTreeVisibility();}renderer.render(scene,camera);
 }
 updateCamera();
-console.info('This Is Lagos v0.66 expanded city:',{landAreaMultiplier:25,linearFootprintMultiplier:5,districts:districtDefs.length,buildings:cityMapBuildings.length,facilities:cityMapFacilities.length,sportsCentres:sportsCentreNames.length});
+console.info('This Is Lagos v0.70 expanded city:',{landAreaMultiplier:25,linearFootprintMultiplier:5,districts:districtDefs.length,buildings:cityMapBuildings.length,facilities:cityMapFacilities.length,sportsCentres:sportsCentreNames.length});
 optimizeWorldForView();
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setPixelRatio(maxDevicePixelRatio*renderScale);renderer.setSize(innerWidth,innerHeight)});
