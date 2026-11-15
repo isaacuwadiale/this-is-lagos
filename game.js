@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.68 — v0.67 plus: every building / sports centre / landmark fitted inside its city block (nothing on roads or pavements); view-only rendering (chunked instancing + distance/frustum cell culling). Earlier notes: v0.67 — v0.66 startup and shelter-placement performance fixes; 25x city land area and 25x city content quantity — 100 sports centres, existing two-pole district gateways retained — Lagos street names, physical street signs and Grand Dealership on Isaac Uwadiale Road — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
+// THIS IS LAGOS v0.69 — based directly on v0.68; adds 5x5 player-centred cell streaming for static city scenery. — v0.67 plus: every building / sports centre / landmark fitted inside its city block (nothing on roads or pavements); view-only rendering (chunked instancing + distance/frustum cell culling). Earlier notes: v0.67 — v0.66 startup and shelter-placement performance fixes; 25x city land area and 25x city content quantity — 100 sports centres, existing two-pole district gateways retained — Lagos street names, physical street signs and Grand Dealership on Isaac Uwadiale Road — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -2161,7 +2161,7 @@ function getCullCell(cls,cx,cz,master=null){
   const group=new THREE.Group();group.matrixAutoUpdate=false;
   group.updateMatrixWorld=function(){};     // frozen subtree: static scenery needs no per-frame matrix work
   const mx=(cx+.5)*CULL_CELL,mz=(cz+.5)*CULL_CELL;
-  c={group,cx:mx,cz:mz,dist:CULL_DIST[cls]||CULL_DIST.far,master,sphere:new THREE.Sphere(new THREE.Vector3(mx,CULL_SPHERE_Y,mz),CULL_SPHERE_R)};
+  c={group,cx:mx,cz:mz,dist:CULL_DIST[cls]||CULL_DIST.far,master,sphere:new THREE.Sphere(new THREE.Vector3(mx,CULL_SPHERE_Y,mz),CULL_SPHERE_R),streamActive:true,gpuReleased:false};
   cullCellMap.set(key,c);cullCells.push(c);scene.add(group);
  }
  return c;
@@ -2247,15 +2247,38 @@ function optimizeWorldForView(){
  }
  // The street-light module toggles these flags at dusk/dawn; they now switch whole sets of chunked pools / glow points.
  slPools=poolFlag;slGlow=glowFlag;
- console.info('This Is Lagos v0.68 view culling:',{cells:cullCells.length,instancedChunks:chunks,objectsParkedInCells:grouped,hugeObjectsKeptAtRoot:rootKept,sceneRootChildren:scene.children.length});
+ console.info('This Is Lagos v0.69 5x5 cell streaming:',{cells:cullCells.length,instancedChunks:chunks,objectsParkedInCells:grouped,hugeObjectsKeptAtRoot:rootKept,sceneRootChildren:scene.children.length});
  updateCullCells();
+}
+// v0.69: keep only a 5x5 grid of 300m cells attached to the live scene around the player.
+// InstancedMesh GPU-side instance buffers are released when a cell leaves the window;
+// the CPU-side instance data and shared geometry/materials remain available for reactivation.
+const STREAM_RADIUS_CELLS=2;
+function setCellStreamingActive(c,active){
+ if(active===c.streamActive)return;
+ c.streamActive=active;
+ if(active){
+  scene.add(c.group);
+  c.group.traverse(o=>{if(o.isInstancedMesh){if(o.instanceMatrix)o.instanceMatrix.needsUpdate=true;if(o.instanceColor)o.instanceColor.needsUpdate=true;}});
+  c.gpuReleased=false;
+ }else{
+  scene.remove(c.group);
+  if(!c.gpuReleased){
+   c.group.traverse(o=>{if(o.isInstancedMesh&&typeof o.dispose==='function')o.dispose();});
+   c.gpuReleased=true;
+  }
+ }
 }
 function updateCullCells(){
  camera.updateMatrixWorld();
  cellProj.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);cellFrustum.setFromProjectionMatrix(cellProj);
- camera.getWorldPosition(camWorld);
- const px=camWorld.x,pz=camWorld.z;
+ const px=player.position.x,pz=player.position.z;
+ const pcx=Math.floor(px/CULL_CELL),pcz=Math.floor(pz/CULL_CELL);
  for(const c of cullCells){
+  const cx=Math.floor(c.cx/CULL_CELL),cz=Math.floor(c.cz/CULL_CELL);
+  const inWindow=Math.abs(cx-pcx)<=STREAM_RADIUS_CELLS&&Math.abs(cz-pcz)<=STREAM_RADIUS_CELLS;
+  setCellStreamingActive(c,inWindow);
+  if(!inWindow){c.group.visible=false;continue;}
   const dx=c.cx-px,dz=c.cz-pz,reach=c.dist+250;
   let vis=dx*dx+dz*dz<reach*reach;
   if(vis&&c.master)vis=c.master.visible!==false;
