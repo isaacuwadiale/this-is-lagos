@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.74-MOBILE: lazy world generation + streamed, instanced chunks, staged chunk jobs
+// THIS IS LAGOS v0.76-MOBILE: lazy world generation + streamed, instanced chunks, staged chunk jobs
 // Target: < 400 MB on phones. Add ?debug to the URL to log draw calls / GPU memory.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -934,6 +934,7 @@ async function fetchCapped(url, maxBytes, onBytes) {
   return buf.buffer;
 }
 
+const avatarTexReport = new Set();   // texture sizes actually in memory (shown in ?debug)
 function attachAvatar(gltf) {
   const model = gltf.scene;
   const size = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3());
@@ -943,6 +944,10 @@ function attachAvatar(gltf) {
     if (!o.isMesh) return;
     o.castShadow = o.receiveShadow = false;
     o.frustumCulled = false;   // skinned meshes can be culled wrongly by their bind-pose bounds
+    // Face morph targets are never driven by this game, and three builds a float texture for them PER material
+    // (the original GLB: 24 materials x 34 targets = ~2 GB). Strip them if an unoptimised GLB is ever used.
+    if (o.geometry?.morphAttributes && Object.keys(o.geometry.morphAttributes).length) o.geometry.morphAttributes = {};
+    o.morphTargetInfluences = undefined; o.morphTargetDictionary = undefined;
     for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
       if (!m) continue;
       if (IS_MOBILE) {   // phones: no normal/AO maps (small on screen, costly in memory and fill-rate)
@@ -951,6 +956,7 @@ function attachAvatar(gltf) {
       for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap']) {
         if (!m[k]) continue;
         shrinkTexture(m[k], AVATAR_TEX_MAX);
+        avatarTexReport.add(k + ' ' + (m[k].image?.width || '?') + 'x' + (m[k].image?.height || '?'));
         if (IS_MOBILE && k === 'map') { m[k].generateMipmaps = false; m[k].minFilter = THREE.LinearFilter; }
       }
     }
@@ -961,7 +967,7 @@ function attachAvatar(gltf) {
   if (gltf.animations?.length) {
     avatarMixer = new THREE.AnimationMixer(avatarModel);
     for (const clip of gltf.animations) {
-      clip.tracks = clip.tracks.filter(t => !/^root.position(?:\(.*\))?$/i.test(t.name));
+      clip.tracks = clip.tracks.filter(t => !/^root.position(?:\(.*\))?$/i.test(t.name) && !/morphTargetInfluences/.test(t.name));
       avatarActions[clip.name.toLowerCase()] = avatarMixer.clipAction(clip);
     }
     activeAvatarAction = avatarActions[Object.keys(avatarActions).find(n => n.includes('idle')) || Object.keys(avatarActions)[0]];
@@ -997,7 +1003,7 @@ async function loadAvatar(i = 0) {
     if (settled) return;
     try { attachAvatar(gltf); } catch (err) { fail(err); return; }
     settled = true; restoreDecode();
-    avatarInfo += ' - loaded';
+    avatarInfo += ' - loaded; textures: ' + ([...avatarTexReport].join(', ') || 'none');
     loadingBadge.remove();
     toast('Character loaded');
   }, fail);
@@ -1221,7 +1227,7 @@ function animate() {
   fpsSampleTime += rawDt; fpsFrames++;
   if (fpsSampleTime >= 2) {   // adaptive resolution: drops when slow, recovers when there is headroom
     const fps = fpsFrames / fpsSampleTime;
-    if (dbgEl) dbgEl.textContent = `fps ${fps.toFixed(0)}  scale ${renderScale.toFixed(2)}\ncalls ${renderer.info.render.calls}  tris ${(renderer.info.render.triangles / 1000).toFixed(0)}k\ngeometries ${renderer.info.memory.geometries}  textures ${renderer.info.memory.textures}\nchunks ${loadedChunks.size}  jobs ${taskQueue.length}\nJS heap ${performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) + ' MB' : 'n/a'}\nv0.74  avatar: ${avatarInfo}`;
+    if (dbgEl) dbgEl.textContent = `fps ${fps.toFixed(0)}  scale ${renderScale.toFixed(2)}\ncalls ${renderer.info.render.calls}  tris ${(renderer.info.render.triangles / 1000).toFixed(0)}k\ngeometries ${renderer.info.memory.geometries}  textures ${renderer.info.memory.textures}\nchunks ${loadedChunks.size}  jobs ${taskQueue.length}\nJS heap ${performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) + ' MB' : 'n/a'}\nv0.76  avatar: ${avatarInfo}`;
     fpsSampleTime = 0; fpsFrames = 0;
     if (fps < 26) { slowSamples++; fastSamples = 0; } else if (fps > 55) { fastSamples++; slowSamples = 0; } else slowSamples = fastSamples = 0;
     if (slowSamples >= 2 && renderScale > 0.6) { renderScale = Math.max(0.6, renderScale - 0.1); applyResolution(); slowSamples = 0; }
