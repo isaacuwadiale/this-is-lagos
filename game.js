@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.69 — based directly on v0.68; adds 5x5 player-centred cell streaming for static city scenery. — v0.67 plus: every building / sports centre / landmark fitted inside its city block (nothing on roads or pavements); view-only rendering (chunked instancing + distance/frustum cell culling). Earlier notes: v0.67 — v0.66 startup and shelter-placement performance fixes; 25x city land area and 25x city content quantity — 100 sports centres, existing two-pole district gateways retained — Lagos street names, physical street signs and Grand Dealership on Isaac Uwadiale Road — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
+// THIS IS LAGOS v0.686 — palm trees and shade patches now stream in the active 5x5 cells; based on v0.686 in the player's 5x5 cell window. — v0.67 plus: every building / sports centre / landmark fitted inside its city block (nothing on roads or pavements); view-only rendering (chunked instancing + distance/frustum cell culling). Earlier notes: v0.67 — v0.66 startup and shelter-placement performance fixes; 25x city land area and 25x city content quantity — 100 sports centres, existing two-pole district gateways retained — Lagos street names, physical street signs and Grand Dealership on Isaac Uwadiale Road — detailed live city map with exact generated building and facility footprints — tall palm trees along both sides of every road with ground shade; cleared 48m avenues, unified road markings
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -232,8 +232,11 @@ const shadeTex=(()=>{
 const shadeMat=new THREE.MeshBasicMaterial({map:shadeTex,transparent:true,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-2,polygonOffsetUnits:-2});
 const shadePlane=new THREE.PlaneGeometry(2,2);shadePlane.rotateX(-Math.PI/2);
 
-const TREE_CHUNK=160,TREE_CHUNK_R=144,TREE_NEAR_DIST=110,TREE_VIEW_DIST=900,TREE_SHADE_DIST=500;
-const treeChunks=new Map(),treeSpots=[];
+const TREE_CELL=300,TREE_GRID=35,TREE_CELL_R=235,TREE_NEAR_DIST=110,TREE_VIEW_DIST=900,TREE_SHADE_DIST=500;
+// CPU-side tree placement records are compact and grouped by 300m cell. Three.js
+// meshes and instance buffers exist only for the active 5x5 player window.
+const treeCellData=new Map(),treeChunks=new Map(),treeSpots=[];
+let treeStreamCenter='',treeCellQueue=[];
 // True when (x,z) lies on any carriageway or its pavement (plus a trunk margin). Trees are rejected there.
 function treeOnRoad(x,z,margin=3.4){
  const gx=Math.max(-5180,Math.min(5180,Math.round(x/70)*70)),gz=Math.max(-5180,Math.min(5180,Math.round(z/70)*70));
@@ -273,47 +276,71 @@ function addStreetTrees(){
   }
  }
 }
+function treeCellIndex(v){return Math.max(0,Math.min(TREE_GRID-1,Math.floor((v+5250)/TREE_CELL)));}
 function finalizeTrees(){
  addStreetTrees();
  for(const t of treeSpots){
-  const key=Math.floor(t.x/TREE_CHUNK)+','+Math.floor(t.z/TREE_CHUNK);
-  let ch=treeChunks.get(key);
-  if(!ch){const cx=(Math.floor(t.x/TREE_CHUNK)+.5)*TREE_CHUNK,cz=(Math.floor(t.z/TREE_CHUNK)+.5)*TREE_CHUNK;ch={cx,cz,trees:TREE_TYPES.map(()=>[]),all:[],sphere:new THREE.Sphere(new THREE.Vector3(cx,12,cz),TREE_CHUNK_R),near:null,far:null,decals:null};treeChunks.set(key,ch)}
-  ch.trees[t.type].push(t);ch.all.push(t);
-  const tr=.55*t.s*TREE_TYPES[t.type].base+.35;   // trunk collider
+  const cx=treeCellIndex(t.x),cz=treeCellIndex(t.z),key=cx+','+cz;
+  let data=treeCellData.get(key);if(!data){const x=-5250+(cx+.5)*TREE_CELL,z=-5250+(cz+.5)*TREE_CELL;data={cx,cz,trees:TREE_TYPES.map(()=>[]),all:[],sphere:new THREE.Sphere(new THREE.Vector3(x,12,z),TREE_CELL_R)};treeCellData.set(key,data)}
+  data.trees[t.type].push(t);data.all.push(t);
+  // Keep the existing trunk collision behaviour. These are lightweight CPU
+  // rectangles, not render objects, and are indexed by the existing collision grid.
+  const tr=.55*t.s*TREE_TYPES[t.type].base+.35;
   buildingColliders.push({minX:t.x-tr,maxX:t.x+tr,minZ:t.z-tr,maxZ:t.z+tr});
  }
- const dummy=new THREE.Object3D(),col=new THREE.Color();
- for(const ch of treeChunks.values()){
-  const near=new THREE.Group(),decals=[];
-  TREE_TYPES.forEach((T,ti)=>{
-   const list=ch.trees[ti];if(!list.length)return;
-   const mesh=new THREE.InstancedMesh(T.geo,treeMat,list.length);
-   list.forEach((t,i)=>{
-    const sc=t.s*T.base;
-    dummy.position.set(t.x,0,t.z);dummy.rotation.set(0,t.rot,0);dummy.scale.setScalar(sc);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix);
-    col.setRGB(t.tr,t.tg,t.tb);mesh.setColorAt(i,col);
-    const h=T.crownY*sc,ox=-TREE_SUN.x/TREE_SUN.y*h,oz=-TREE_SUN.z/TREE_SUN.y*h;
-    decals.push({x:t.x+ox,z:t.z+oz,r:T.shade*sc*.75,rot:Math.atan2(-oz,ox)});
-   });
-   mesh.instanceMatrix.needsUpdate=true;if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true;
-   mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;near.add(mesh);
-  });
-  const far=new THREE.InstancedMesh(TREE_FAR_GEO,treeMat,ch.all.length);
-  ch.all.forEach((t,i)=>{
-   const sc=t.s*TREE_TYPES[t.type].base,st=TREE_FAR_STRETCH[t.type];
-   dummy.position.set(t.x,0,t.z);dummy.rotation.set(0,t.rot,0);dummy.scale.set(sc*st[0],sc*st[1],sc*st[0]);dummy.updateMatrix();far.setMatrixAt(i,dummy.matrix);
-   col.setRGB(t.tr,t.tg,t.tb);far.setColorAt(i,col);
-  });
-  far.instanceMatrix.needsUpdate=true;if(far.instanceColor)far.instanceColor.needsUpdate=true;far.frustumCulled=false;
-  const dm=new THREE.InstancedMesh(shadePlane,shadeMat,decals.length);
-  decals.forEach((d,i)=>{dummy.position.set(d.x,.16,d.z);dummy.rotation.set(0,d.rot,0);dummy.scale.set(d.r*1.2,1,d.r);dummy.updateMatrix();dm.setMatrixAt(i,dummy.matrix)});
-  dm.instanceMatrix.needsUpdate=true;dm.frustumCulled=false;dm.renderOrder=2;
-  near.visible=far.visible=dm.visible=false;
-  ch.near=near;ch.far=far;ch.decals=dm;scene.add(near);scene.add(far);scene.add(dm);
- }
+ treeSpots.length=0;
 }
-// Chunk-level frustum + distance culling with two levels of detail (called with the building culling pass).
+function buildTreeCell(cx,cz){
+ const key=cx+','+cz,data=treeCellData.get(key);if(!data||treeChunks.has(key))return;
+ const group=new THREE.Group();group.name='palm-trees-'+key;
+ const near=new THREE.Group(),decals=[];
+ const dummy=new THREE.Object3D(),col=new THREE.Color();
+ TREE_TYPES.forEach((T,ti)=>{
+  const list=data.trees[ti];if(!list.length)return;
+  const mesh=new THREE.InstancedMesh(T.geo,treeMat,list.length);
+  list.forEach((t,i)=>{
+   const sc=t.s*T.base;
+   dummy.position.set(t.x,0,t.z);dummy.rotation.set(0,t.rot,0);dummy.scale.setScalar(sc);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix);
+   col.setRGB(t.tr,t.tg,t.tb);mesh.setColorAt(i,col);
+   const h=T.crownY*sc,ox=-TREE_SUN.x/TREE_SUN.y*h,oz=-TREE_SUN.z/TREE_SUN.y*h;
+   decals.push({x:t.x+ox,z:t.z+oz,r:T.shade*sc*.75,rot:Math.atan2(-oz,ox)});
+  });
+  mesh.instanceMatrix.needsUpdate=true;if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true;
+  mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;near.add(mesh);
+ });
+ const far=new THREE.InstancedMesh(TREE_FAR_GEO,treeMat,data.all.length);
+ data.all.forEach((t,i)=>{
+  const sc=t.s*TREE_TYPES[t.type].base,st=TREE_FAR_STRETCH[t.type];
+  dummy.position.set(t.x,0,t.z);dummy.rotation.set(0,t.rot,0);dummy.scale.set(sc*st[0],sc*st[1],sc*st[0]);dummy.updateMatrix();far.setMatrixAt(i,dummy.matrix);
+  col.setRGB(t.tr,t.tg,t.tb);far.setColorAt(i,col);
+ });
+ far.instanceMatrix.needsUpdate=true;if(far.instanceColor)far.instanceColor.needsUpdate=true;far.frustumCulled=false;
+ const dm=new THREE.InstancedMesh(shadePlane,shadeMat,decals.length);
+ decals.forEach((d,i)=>{dummy.position.set(d.x,.16,d.z);dummy.rotation.set(0,d.rot,0);dummy.scale.set(d.r*1.2,1,d.r);dummy.updateMatrix();dm.setMatrixAt(i,dummy.matrix)});
+ dm.instanceMatrix.needsUpdate=true;dm.frustumCulled=false;dm.renderOrder=2;
+ near.visible=far.visible=dm.visible=false;group.add(near,far,dm);scene.add(group);
+ treeChunks.set(key,{group,near,far,decals:dm,sphere:data.sphere,cx:-5250+(cx+.5)*TREE_CELL,cz:-5250+(cz+.5)*TREE_CELL});
+}
+function disposeTreeCell(key){
+ const cell=treeChunks.get(key);if(!cell)return;
+ scene.remove(cell.group);
+ for(const mesh of [cell.near.children[0],...cell.near.children.slice(1),cell.far,cell.decals])if(mesh&&typeof mesh.dispose==='function')mesh.dispose();
+ cell.group.clear();treeChunks.delete(key);
+}
+function updateTreeStreaming(force=false){
+ const px=Math.max(-5250,Math.min(5249.99,player.position.x)),pz=Math.max(-5250,Math.min(5249.99,player.position.z));
+ const cx=treeCellIndex(px),cz=treeCellIndex(pz),center=cx+','+cz;
+ if(force||center!==treeStreamCenter){
+  treeStreamCenter=center;const desired=new Set();
+  for(let x=Math.max(0,cx-2);x<=Math.min(TREE_GRID-1,cx+2);x++)for(let z=Math.max(0,cz-2);z<=Math.min(TREE_GRID-1,cz+2);z++)desired.add(x+','+z);
+  for(const key of Array.from(treeChunks.keys()))if(!desired.has(key))disposeTreeCell(key);
+  const pending=[];
+  for(const key of desired)if(treeCellData.has(key)&&!treeChunks.has(key)){const [x,z]=key.split(',').map(Number);pending.push({key,x,z,d:(x-cx)*(x-cx)+(z-cz)*(z-cz)})}
+  pending.sort((a,b)=>a.d-b.d);treeCellQueue=pending;
+ }
+ // Build at most one tree cell per frame to avoid a large one-frame hitch.
+ while(treeCellQueue.length){const item=treeCellQueue.shift();if(!treeChunks.has(item.key)){buildTreeCell(item.x,item.z);break}}
+}
 function updateTreeVisibility(){
  const px=player.position.x,pz=player.position.z;
  for(const ch of treeChunks.values()){
@@ -444,42 +471,63 @@ function clearBuildingPlot(x,z,w,d,extra=1){
  return true;
 }
 
-// Build continuous pedestrian pavements between junctions. Instancing keeps
-// thousands of short pavement/kerb segments to just two draw calls.
+// v0.683: true on-demand roadside infrastructure chunks. The old implementation
+// allocated every pavement and kerb instance across the 10.5km city at startup.
+// Each 300m cell now owns only its local segments and releases its instance buffers
+// when the cell leaves the player's 5x5 active window.
 const pavementMat=mat(0xcbd1c7), kerbEdgeMat=mat(0xaeb8ad);
-function addRoadsideInstances(records,material){
- if(!records.length)return;
- const mesh=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),material,records.length);
+const roadsideUnitGeo=new THREE.BoxGeometry(1,1,1);
+const ROADSIDE_CELL=300,ROADSIDE_GRID=35,roadsideChunks=new Map();
+let roadsideStreamCenter='';
+function addRoadsideInstances(parent,records,material){
+ if(!records.length)return null;
+ const mesh=new THREE.InstancedMesh(roadsideUnitGeo,material,records.length);
  const dummy=new THREE.Object3D();
- records.forEach((r,i)=>{
-  dummy.position.set(r.x,r.y,r.z);dummy.scale.set(r.w,r.h,r.d);dummy.rotation.set(0,0,0);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix);
- });
- mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;scene.add(mesh);
+ records.forEach((r,i)=>{dummy.position.set(r.x,r.y,r.z);dummy.scale.set(r.w,r.h,r.d);dummy.rotation.set(0,0,0);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix)});
+ mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;parent.add(mesh);return mesh;
 }
-function buildSidewalkNetwork(){
+function buildRoadsideCell(cx,cz){
+ const minX=-5250+cx*ROADSIDE_CELL,maxX=minX+ROADSIDE_CELL;
+ const minZ=-5250+cz*ROADSIDE_CELL,maxZ=minZ+ROADSIDE_CELL;
  const pavements=[],kerbs=[];
- const grid=[];for(let v=-5180;v<=5180;v+=70)grid.push(v);
- for(const p of grid){
-  const roadHalf=roadHalfWidthAt(p);
-  for(let i=0;i<grid.length-1;i++){
-   const a=grid[i],b=grid[i+1];
-   const start=a+roadHalfWidthAt(a)+.55,end=b-roadHalfWidthAt(b)-.55,len=end-start;
-   if(len<5)continue;
-   const mid=(start+end)/2;
-   for(const side of [-1,1]){
-    const offset=side*(roadHalf+.12);
-    // North-south street: kerb beside asphalt, pavement behind it.
+ const addSegment=(p,a,b,axis)=>{
+  const roadHalf=roadHalfWidthAt(p),start=a+roadHalfWidthAt(a)+.55,end=b-roadHalfWidthAt(b)-.55,len=end-start;
+  if(len<5)return;const mid=(start+end)/2;
+  if(mid<(axis==='z'?minZ:minX)||mid>=(axis==='z'?maxZ:maxX))return;
+  for(const side of [-1,1]){
+   const offset=side*(roadHalf+.12);
+   if(axis==='z'){
     kerbs.push({x:p+offset,y:.05,z:mid,w:.24,h:.18,d:len});
     pavements.push({x:p+side*(roadHalf+.24+1.25),y:.02,z:mid,w:2.5,h:.12,d:len});
-    // East-west street: same layout rotated by 90 degrees.
+   }else{
     kerbs.push({x:mid,y:.05,z:p+offset,w:len,h:.18,d:.24});
     pavements.push({x:mid,y:.02,z:p+side*(roadHalf+.24+1.25),w:len,h:.12,d:2.5});
    }
   }
+ };
+ const grid=[];for(let v=-5180;v<=5180;v+=70)grid.push(v);
+ for(const p of grid){
+  if(p>=minX-30&&p<maxX+30)for(let i=0;i<grid.length-1;i++)addSegment(p,grid[i],grid[i+1],'z');
+  if(p>=minZ-30&&p<maxZ+30)for(let i=0;i<grid.length-1;i++)addSegment(p,grid[i],grid[i+1],'x');
  }
- addRoadsideInstances(pavements,pavementMat);addRoadsideInstances(kerbs,kerbEdgeMat);
+ const group=new THREE.Group();group.name=`roadside-${cx}-${cz}`;
+ addRoadsideInstances(group,pavements,pavementMat);addRoadsideInstances(group,kerbs,kerbEdgeMat);
+ scene.add(group);roadsideChunks.set(`${cx},${cz}`,group);
 }
-buildSidewalkNetwork();
+function disposeRoadsideCell(key){
+ const group=roadsideChunks.get(key);if(!group)return;
+ for(const child of group.children){if(child.isInstancedMesh&&typeof child.dispose==='function')child.dispose()}
+ scene.remove(group);group.clear();roadsideChunks.delete(key);
+}
+function updateRoadsideStreaming(force=false){
+ const px=Math.max(-5250,Math.min(5249.99,player.position.x)),pz=Math.max(-5250,Math.min(5249.99,player.position.z));
+ const cx=Math.floor((px+5250)/ROADSIDE_CELL),cz=Math.floor((pz+5250)/ROADSIDE_CELL),center=`${cx},${cz}`;
+ if(!force&&center===roadsideStreamCenter)return;
+ roadsideStreamCenter=center;const desired=new Set();
+ for(let x=Math.max(0,cx-2);x<=Math.min(ROADSIDE_GRID-1,cx+2);x++)for(let z=Math.max(0,cz-2);z<=Math.min(ROADSIDE_GRID-1,cz+2);z++)desired.add(`${x},${z}`);
+ for(const key of Array.from(roadsideChunks.keys()))if(!desired.has(key))disposeRoadsideCell(key);
+ for(const key of desired)if(!roadsideChunks.has(key)){const [x,z]=key.split(',').map(Number);buildRoadsideCell(x,z)}
+}
 
 // Realistic road paint: avenue centre lines, broken lane dividers, edge lines,
 // turn arrows and stop bars. All paint sits slightly above the asphalt.
@@ -489,16 +537,61 @@ const paintYellow=new THREE.MeshBasicMaterial({color:0xf1c84b,...PAINT_OFFSET});
 const paintArrow=new THREE.MeshBasicMaterial({color:0xf4f2df,side:THREE.DoubleSide,polygonOffset:true,polygonOffsetFactor:-3,polygonOffsetUnits:-3});
 const roadPaintBatches=new Map(),roadArrowRecords=[];
 function roadPaint(w,d,x,z,material=paintWhite,y=.018){
- let batch=roadPaintBatches.get(material);if(!batch){batch=[];roadPaintBatches.set(material,batch)}
- batch.push({w,d,x,z,y:y>.05?y+.015:y+.012});   // lift paint clear of the asphalt top (avenue .06 / street -.04)
+ const record={w,d,x,z,y:y>.05?y+.015:y+.012};   // lift paint clear of the asphalt top (avenue .06 / street -.04)
+ if(roadMarkDataFinalized){const data=roadMarkDataFor(x,z);let list=data.paint.get(material);if(!list){list=[];data.paint.set(material,list)}list.push(record);return}
+ let batch=roadPaintBatches.get(material);if(!batch){batch=[];roadPaintBatches.set(material,batch)}batch.push(record);
+}
+// Road paint is retained as compact CPU-side records and instantiated only in the
+// player's active 5x5 area. The old implementation created every city's paint mesh
+// before the first frame; view culling merely hid those GPU buffers.
+const ROAD_MARK_CELL=300,ROAD_MARK_GRID=35;
+const roadMarkUnitGeo=new THREE.BoxGeometry(1,1,1);
+const roadMarkCellData=new Map(),roadMarkChunks=new Map();
+let roadMarkStreamCenter='',roadMarkDataFinalized=false;
+function roadMarkCellIndex(v){return Math.max(0,Math.min(ROAD_MARK_GRID-1,Math.floor((v+5250)/ROAD_MARK_CELL)));}
+function roadMarkDataFor(x,z){
+ const cx=roadMarkCellIndex(x),cz=roadMarkCellIndex(z),key=cx+','+cz;
+ let data=roadMarkCellData.get(key);if(!data){data={cx,cz,paint:new Map(),arrows:[]};roadMarkCellData.set(key,data)}
+ return data;
 }
 function flushRoadPaint(){
  for(const [material,records] of roadPaintBatches){
-  const mesh=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),material,records.length);
-  const dummy=new THREE.Object3D();
-  records.forEach((r,i)=>{dummy.position.set(r.x,r.y,r.z);dummy.scale.set(r.w,.035,r.d);dummy.rotation.set(0,0,0);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix)});
-  mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;scene.add(mesh);
+  for(const r of records){const data=roadMarkDataFor(r.x,r.z);let list=data.paint.get(material);if(!list){list=[];data.paint.set(material,list)}list.push(r)}
  }
+ roadPaintBatches.clear();
+}
+function makeRoadMarkChunk(cx,cz){
+ const key=cx+','+cz,data=roadMarkCellData.get(key);if(!data)return;
+ const group=new THREE.Group();group.name='road-markings-'+key;
+ const dummy=new THREE.Object3D();
+ for(const [material,records] of data.paint){
+  if(!records.length)continue;
+  const mesh=new THREE.InstancedMesh(roadMarkUnitGeo,material,records.length);
+  for(let i=0;i<records.length;i++){const r=records[i];dummy.position.set(r.x,r.y,r.z);dummy.scale.set(r.w,.035,r.d);dummy.rotation.set(0,0,0);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix)}
+  mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;group.add(mesh);
+ }
+ if(data.arrows.length){
+  const shape=new THREE.Shape();shape.moveTo(0,3.2);shape.lineTo(-1.1,1.2);shape.lineTo(-.38,1.2);shape.lineTo(-.38,-2.2);shape.lineTo(.38,-2.2);shape.lineTo(.38,1.2);shape.lineTo(1.1,1.2);shape.closePath();
+  const arrowGeo=new THREE.ShapeGeometry(shape);
+  const mesh=new THREE.InstancedMesh(arrowGeo,paintArrow,data.arrows.length);
+  for(let i=0;i<data.arrows.length;i++){const r=data.arrows[i];dummy.position.set(r.x,.115,r.z);dummy.rotation.set(-Math.PI/2,r.rotation,0);dummy.scale.set(1,1,1);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix)}
+  mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;group.add(mesh);
+ }
+ scene.add(group);roadMarkChunks.set(key,group);
+}
+function disposeRoadMarkChunk(key){
+ const group=roadMarkChunks.get(key);if(!group)return;
+ for(const child of group.children){if(child.isInstancedMesh&&typeof child.dispose==='function')child.dispose();if(child.isInstancedMesh&&child.geometry!==roadMarkUnitGeo&&child.geometry!==undefined)child.geometry.dispose()}
+ scene.remove(group);group.clear();roadMarkChunks.delete(key);
+}
+function updateRoadMarkingStreaming(force=false){
+ const px=Math.max(-5250,Math.min(5249.99,player.position.x)),pz=Math.max(-5250,Math.min(5249.99,player.position.z));
+ const cx=roadMarkCellIndex(px),cz=roadMarkCellIndex(pz),center=cx+','+cz;
+ if(!force&&center===roadMarkStreamCenter)return;
+ roadMarkStreamCenter=center;const desired=new Set();
+ for(let x=Math.max(0,cx-2);x<=Math.min(ROAD_MARK_GRID-1,cx+2);x++)for(let z=Math.max(0,cz-2);z<=Math.min(ROAD_MARK_GRID-1,cz+2);z++)desired.add(x+','+z);
+ for(const key of Array.from(roadMarkChunks.keys()))if(!desired.has(key))disposeRoadMarkChunk(key);
+ for(const key of desired)if(!roadMarkChunks.has(key)){const [x,z]=key.split(',').map(Number);makeRoadMarkChunk(x,z)}
 }
 // Main avenues: double yellow centre lines and broken white lane separators.
 // All paint stops short of every junction box so crossings are left clear.
@@ -538,12 +631,8 @@ for(let p=-5180;p<=5180;p+=70){
 // Direction arrows at regular approach points.
 function addRoadArrow(x,z,rotation=0){roadArrowRecords.push({x,z,rotation});}
 function flushRoadArrows(){
- if(!roadArrowRecords.length)return;
- const shape=new THREE.Shape();shape.moveTo(0,3.2);shape.lineTo(-1.1,1.2);shape.lineTo(-.38,1.2);shape.lineTo(-.38,-2.2);shape.lineTo(.38,-2.2);shape.lineTo(.38,1.2);shape.lineTo(1.1,1.2);shape.closePath();
- const mesh=new THREE.InstancedMesh(new THREE.ShapeGeometry(shape),paintArrow,roadArrowRecords.length);
- const dummy=new THREE.Object3D();
- roadArrowRecords.forEach((r,i)=>{dummy.position.set(r.x,.115,r.z);dummy.rotation.set(-Math.PI/2,r.rotation,0);dummy.scale.set(1,1,1);dummy.updateMatrix();mesh.setMatrixAt(i,dummy.matrix)});
- mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;scene.add(mesh);
+ for(const r of roadArrowRecords)roadMarkDataFor(r.x,r.z).arrows.push(r);
+ roadArrowRecords.length=0;
 }
 // Add clear directional arrows on the four approaches to every major junction (kept behind the stop line).
 const AO=32+(STOP_OFF-5)+1;
@@ -561,21 +650,41 @@ for(let p=-5040;p<=5040;p+=210){for(let q=-5040;q<=5040;q+=210){
 const BUS_SHELTER_HEIGHT=18.33;                          // addBusStop roof: base 18.15 + 0.18 thickness
 const STREETLIGHT_HEIGHT=BUS_SHELTER_HEIGHT*1.5;         // ~27.5 units
 const poleMat=mat(0x59645e,.55), lampGlow=new THREE.MeshStandardMaterial({color:0xffe7ad,emissive:0xffc66b,emissiveIntensity:.15,roughness:.3});
-const avenueLamps=[];                                    // every lamp; a bus shelter removes any lamp inside its footprint
-const slCells=new Map();                                 // spatial hash so street trees keep clear of the poles
-const slMeshes=[];
-let slPools=null,slPoolMat=null,slGlow=null,slGlowMat=null,slGlowAttr=null;
+const avenueLamps=[];                                    // lightweight placement records; render meshes stream by cell
+const slCells=new Map();                                 // 16m spatial hash keeps trees/shelters clear of poles
+const STREETLIGHT_CELL=300,STREETLIGHT_GRID=35;
+const streetlightCellData=new Map(),streetlightChunks=new Map();
+let streetlightStreamCenter='',slNightLevel=0;
+let slPools={visible:false},slGlow={visible:false},slPoolMat=null,slGlowMat=null;
 const slRealLights=[];
+const slPoleGeo=new THREE.CylinderGeometry(.3,.52,STREETLIGHT_HEIGHT,10);slPoleGeo.translate(0,STREETLIGHT_HEIGHT/2,0);
+const slArmGeo=new THREE.CylinderGeometry(.16,.22,1,8);slArmGeo.rotateZ(-Math.PI/2);slArmGeo.translate(.5,STREETLIGHT_HEIGHT-.7,0);
+const slHeadGeo=new THREE.BoxGeometry(2.6,.42,1.0);slHeadGeo.translate(0,STREETLIGHT_HEIGHT-.5,0);
+const slHoodGeo=new THREE.BoxGeometry(2.9,.22,1.2);slHoodGeo.translate(0,STREETLIGHT_HEIGHT-.2,0);
+const slPoolGeo=new THREE.PlaneGeometry(1,1);slPoolGeo.rotateX(-Math.PI/2);
+const slDummy=new THREE.Object3D();
+function streetlightCellIndex(v){return Math.max(0,Math.min(STREETLIGHT_GRID-1,Math.floor((v+5250)/STREETLIGHT_CELL)));}
+function streetlightDataFor(x,z){
+ const cx=streetlightCellIndex(x),cz=streetlightCellIndex(z),key=cx+','+cz;
+ let data=streetlightCellData.get(key);if(!data){data={cx,cz,lamps:[]};streetlightCellData.set(key,data)}
+ return data;
+}
 function nearStreetlight(x,z,m){
  const cx=Math.floor(x/16),cz=Math.floor(z/16);
- for(let i=-1;i<=1;i++)for(let j=-1;j<=1;j++){const a=slCells.get((cx+i)+','+(cz+j));if(a)for(const l of a)if(Math.abs(l.x-x)<m&&Math.abs(l.z-z)<m)return true;}
+ for(let i=-1;i<=1;i++)for(let j=-1;j<=1;j++){const a=slCells.get((cx+i)+','+(cz+j));if(a)for(const l of a)if(!l.removed&&Math.abs(l.x-x)<m&&Math.abs(l.z-z)<m)return true;}
  return false;
+}
+function disposeStreetlightCell(key){
+ const cell=streetlightChunks.get(key);if(!cell)return;
+ scene.remove(cell.group);
+ for(const mesh of cell.meshes)if(typeof mesh.dispose==='function')mesh.dispose();
+ if(cell.glowGeo)cell.glowGeo.dispose();
+ cell.group.clear();streetlightChunks.delete(key);
 }
 function removeStreetlight(l){
  if(l.removed)return;l.removed=true;
- const zero=new THREE.Matrix4().makeScale(0,0,0);
- for(const m of slMeshes){m.setMatrixAt(l.i,zero);m.instanceMatrix.needsUpdate=true;}
- slGlowAttr.setY(l.i,-5000);slGlowAttr.needsUpdate=true;
+ const key=l.cellKey,cell=streetlightChunks.get(key);
+ if(cell)cell.dirty=true;
 }
 function removeStreetlightsInRect(x,z,halfX,halfZ){
  const minX=Math.floor((x-halfX)/16),maxX=Math.floor((x+halfX)/16);
@@ -585,18 +694,59 @@ function removeStreetlightsInRect(x,z,halfX,halfZ){
   for(const lamp of cell)if(!lamp.removed&&Math.abs(lamp.x-x)<halfX&&Math.abs(lamp.z-z)<halfZ)removeStreetlight(lamp);
  }
 }
-{
- const H=STREETLIGHT_HEIGHT,specs=[];
- const roadHalf=c=>(Math.round(c/70)%3===0)?24:4;      // every 3rd road is a 48m avenue, the rest are 8m streets
- const onCarriageway=(x,z)=>{const rx=Math.round(x/70)*70,rz=Math.round(z/70)*70;return Math.abs(x-rx)<roadHalf(rx)+1.2||Math.abs(z-rz)<roadHalf(rz)+1.2;};
- // Any lamp whose pole would stand on asphalt (or its kerb) is simply not built.
- const add=(x,z,rot,arm)=>{if(Math.abs(x)>5200||Math.abs(z)>5200||onCarriageway(x,z))return;specs.push({x,z,rot,arm});};
- // Avenues: both verges, every 105 units (spots that fall inside a crossing avenue are dropped by the filter).
- for(let p=-5040;p<=5040;p+=210)for(let q=-5145;q<=5145;q+=105){
-  add(p-27.2,q,0,5.8);add(p+27.2,q,Math.PI,5.8);                  // north-south avenue
-  add(q,p+27.2,Math.PI/2,5.8);add(q,p-27.2,-Math.PI/2,5.8);       // east-west avenue
+function makeStreetlightCell(cx,cz){
+ const key=cx+','+cz,data=streetlightCellData.get(key);if(!data)return;
+ const lamps=data.lamps.filter(l=>!l.removed);if(!lamps.length)return;
+ const group=new THREE.Group();group.name='streetlights-'+key;
+ const poles=new THREE.InstancedMesh(slPoleGeo,poleMat,lamps.length);
+ const arms=new THREE.InstancedMesh(slArmGeo,poleMat,lamps.length);
+ const heads=new THREE.InstancedMesh(slHeadGeo,lampGlow,lamps.length);
+ const hoods=new THREE.InstancedMesh(slHoodGeo,poleMat,lamps.length);
+ const pools=new THREE.InstancedMesh(slPoolGeo,slPoolMat,lamps.length);
+ const glowPositions=new Float32Array(lamps.length*3);
+ for(let i=0;i<lamps.length;i++){
+  const l=lamps[i],hOff=l.arm-.6;
+  const hx=l.hx,hz=l.hz;
+  slDummy.rotation.set(0,l.rot,0);slDummy.scale.set(1,1,1);slDummy.position.set(l.x,0,l.z);slDummy.updateMatrix();poles.setMatrixAt(i,slDummy.matrix);
+  slDummy.scale.set(l.arm,1,1);slDummy.updateMatrix();arms.setMatrixAt(i,slDummy.matrix);
+  slDummy.scale.set(1,1,1);slDummy.position.set(hx,0,hz);slDummy.updateMatrix();heads.setMatrixAt(i,slDummy.matrix);hoods.setMatrixAt(i,slDummy.matrix);
+  const D=l.arm>5.5?130:96;slDummy.scale.set(D,1,D);slDummy.position.set(hx,.1,hz);slDummy.updateMatrix();pools.setMatrixAt(i,slDummy.matrix);
+  glowPositions[i*3]=hx;glowPositions[i*3+1]=STREETLIGHT_HEIGHT-.6;glowPositions[i*3+2]=hz;
  }
- // Local streets: lamps on the pavement beside the street, alternating sides, mid-block every 210 units.
+ const meshes=[poles,arms,heads,hoods,pools];
+ for(const mesh of meshes){mesh.instanceMatrix.needsUpdate=true;mesh.frustumCulled=false;mesh.castShadow=false;mesh.receiveShadow=false;group.add(mesh)}
+ pools.renderOrder=2;pools.visible=slNightLevel>.01;
+ const glowGeo=new THREE.BufferGeometry();glowGeo.setAttribute('position',new THREE.BufferAttribute(glowPositions,3));glowGeo.computeBoundingSphere();
+ const glow=new THREE.Points(glowGeo,slGlowMat);glow.frustumCulled=false;glow.visible=slNightLevel>.01;group.add(glow);
+ scene.add(group);streetlightChunks.set(key,{group,meshes,glowGeo,pools,glow,dirty:false});
+}
+function updateStreetlightStreaming(force=false){
+ const px=Math.max(-5250,Math.min(5249.99,player.position.x)),pz=Math.max(-5250,Math.min(5249.99,player.position.z));
+ const cx=streetlightCellIndex(px),cz=streetlightCellIndex(pz),center=cx+','+cz;
+ if(!force&&center===streetlightStreamCenter){
+  for(const [key,cell] of Array.from(streetlightChunks))if(cell.dirty){disposeStreetlightCell(key);const [x,z]=key.split(',').map(Number);makeStreetlightCell(x,z)}
+  return;
+ }
+ streetlightStreamCenter=center;const desired=new Set();
+ for(let x=Math.max(0,cx-2);x<=Math.min(STREETLIGHT_GRID-1,cx+2);x++)for(let z=Math.max(0,cz-2);z<=Math.min(STREETLIGHT_GRID-1,cz+2);z++)desired.add(x+','+z);
+ for(const key of Array.from(streetlightChunks.keys()))if(!desired.has(key))disposeStreetlightCell(key);
+ for(const key of desired){const cell=streetlightChunks.get(key);if(cell&&cell.dirty)disposeStreetlightCell(key);if(!streetlightChunks.has(key)){const [x,z]=key.split(',').map(Number);makeStreetlightCell(x,z)}}
+}
+{
+ const roadHalf=c=>(Math.round(c/70)%3===0)?24:4;
+ const onCarriageway=(x,z)=>{const rx=Math.round(x/70)*70,rz=Math.round(z/70)*70;return Math.abs(x-rx)<roadHalf(rx)+1.2||Math.abs(z-rz)<roadHalf(rz)+1.2;};
+ const add=(x,z,rot,arm)=>{
+  if(Math.abs(x)>5200||Math.abs(z)>5200||onCarriageway(x,z))return;
+  const hx=x+Math.cos(rot)*(arm-.6),hz=z-Math.sin(rot)*(arm-.6);
+  const rec={x,z,rot,arm,hx,hz,removed:false};const data=streetlightDataFor(x,z);rec.cellKey=data.cx+','+data.cz;data.lamps.push(rec);avenueLamps.push(rec);
+  const sk=Math.floor(x/16)+','+Math.floor(z/16);let cell=slCells.get(sk);if(!cell)slCells.set(sk,cell=[]);cell.push(rec);
+ };
+ // Avenues: both verges, every 105 units; poles inside crossing avenues are rejected.
+ for(let p=-5040;p<=5040;p+=210)for(let q=-5145;q<=5145;q+=105){
+  add(p-27.2,q,0,5.8);add(p+27.2,q,Math.PI,5.8);
+  add(q,p+27.2,Math.PI/2,5.8);add(q,p-27.2,-Math.PI/2,5.8);
+ }
+ // Local streets: alternating pavement sides, mid-block every 210 units.
  let li=0;
  for(let c=-5180;c<=5180;c+=70){
   if(Math.round(c/70)%3===0)continue;
@@ -608,69 +758,29 @@ function removeStreetlightsInRect(x,z,halfX,halfZ){
    add(q,c+side*6.2,side<0?-Math.PI/2:Math.PI/2,5.2);
   }
  }
- const N=specs.length;
- const poleGeo=new THREE.CylinderGeometry(.3,.52,H,10);poleGeo.translate(0,H/2,0);
- const armGeo=new THREE.CylinderGeometry(.16,.22,1,8);armGeo.rotateZ(-Math.PI/2);armGeo.translate(.5,H-.7,0);   // unit arm, scaled per lamp
- const headGeo=new THREE.BoxGeometry(2.6,.42,1.0);headGeo.translate(0,H-.5,0);
- const hoodGeo=new THREE.BoxGeometry(2.9,.22,1.2);hoodGeo.translate(0,H-.2,0);
- const mk=(geo,material)=>{const m=new THREE.InstancedMesh(geo,material,N);m.frustumCulled=false;scene.add(m);slMeshes.push(m);return m;};
- const poles=mk(poleGeo,poleMat),arms=mk(armGeo,poleMat),heads=mk(headGeo,lampGlow),hoods=mk(hoodGeo,poleMat);
- // Soft radial texture for the light pool and halo.
+ // Shared radial texture/materials are allocated once; cell-owned GPU buffers are temporary.
  const rcv=document.createElement('canvas');rcv.width=rcv.height=256;const rc=rcv.getContext('2d');
  const rg=rc.createRadialGradient(128,128,0,128,128,128);
  rg.addColorStop(0,'rgba(255,255,255,1)');rg.addColorStop(.22,'rgba(255,255,255,.6)');rg.addColorStop(.55,'rgba(255,255,255,.2)');rg.addColorStop(1,'rgba(255,255,255,0)');
  rc.fillStyle=rg;rc.fillRect(0,0,256,256);const radialTex=new THREE.CanvasTexture(rcv);
  slPoolMat=new THREE.MeshBasicMaterial({map:radialTex,color:0xffc46e,transparent:true,opacity:0,blending:THREE.AdditiveBlending,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-4,polygonOffsetUnits:-4});
- const poolGeo=new THREE.PlaneGeometry(1,1);poolGeo.rotateX(-Math.PI/2);
- slPools=new THREE.InstancedMesh(poolGeo,slPoolMat,N);slPools.frustumCulled=false;slPools.renderOrder=2;slPools.visible=false;scene.add(slPools);slMeshes.push(slPools);
- const glowPos=new Float32Array(N*3);
- slGlowAttr=new THREE.BufferAttribute(glowPos,3);
- const glowGeo=new THREE.BufferGeometry();glowGeo.setAttribute('position',slGlowAttr);
  slGlowMat=new THREE.PointsMaterial({map:radialTex,color:0xffd8a0,size:10,sizeAttenuation:true,transparent:true,opacity:0,blending:THREE.AdditiveBlending,depthWrite:false});
- slGlow=new THREE.Points(glowGeo,slGlowMat);slGlow.frustumCulled=false;slGlow.visible=false;scene.add(slGlow);
- const d=new THREE.Object3D();
- specs.forEach((sp,i)=>{
-  const hOff=sp.arm-.6,hx=sp.x+Math.cos(sp.rot)*hOff,hz=sp.z-Math.sin(sp.rot)*hOff;
-  d.rotation.set(0,sp.rot,0);d.scale.set(1,1,1);
-  d.position.set(sp.x,0,sp.z);d.updateMatrix();poles.setMatrixAt(i,d.matrix);
-  d.scale.set(sp.arm,1,1);d.updateMatrix();arms.setMatrixAt(i,d.matrix);
-  d.scale.set(1,1,1);d.position.set(hx,0,hz);d.updateMatrix();heads.setMatrixAt(i,d.matrix);hoods.setMatrixAt(i,d.matrix);
-  const D=sp.arm>5.5?130:96;                                       // avenues get wider pools than local streets
-  d.scale.set(D,1,D);d.position.set(hx,.1,hz);d.updateMatrix();slPools.setMatrixAt(i,d.matrix);
-  slGlowAttr.setXYZ(i,hx,H-.6,hz);
-  const rec={x:sp.x,z:sp.z,hx,hz,i,removed:false};avenueLamps.push(rec);
-  const key=Math.floor(sp.x/16)+','+Math.floor(sp.z/16);let cell=slCells.get(key);if(!cell)slCells.set(key,cell=[]);cell.push(rec);
- });
- for(const m of slMeshes)m.instanceMatrix.needsUpdate=true;
- // A handful of real point lights follow the player and are moved onto the nearest lamps each update.
  const physical=parseInt(THREE.REVISION,10)>=155;
- for(let i=0;i<8;i++){
-  const L=new THREE.PointLight(0xffd28a,0,170,physical?1:1.5);
-  L.userData.peak=physical?120:2.2;scene.add(L);slRealLights.push(L);
- }
+ for(let i=0;i<8;i++){const L=new THREE.PointLight(0xffd28a,0,170,physical?1:1.5);L.userData.peak=physical?120:2.2;scene.add(L);slRealLights.push(L)}
 }
-// Called from setDay(): lamps come on at dusk, are fully bright at night and fade out at dawn.
 function updateStreetLighting(night){
- const level=Math.max(0,Math.min(1,(night-.45)/.35));
- lampGlow.emissiveIntensity=.12+level*3.4;
- slPoolMat.opacity=level*.85;slPools.visible=level>.01;
- slGlowMat.opacity=level*.95;slGlow.visible=level>.01;
+ const level=Math.max(0,Math.min(1,(night-.45)/.35));slNightLevel=level;
+ lampGlow.emissiveIntensity=.12+level*3.4;slPoolMat.opacity=level*.85;slGlowMat.opacity=level*.95;
+ slPools.visible=level>.01;slGlow.visible=level>.01;
+ for(const cell of streetlightChunks.values()){cell.pools.visible=level>.01;cell.glow.visible=level>.01}
  if(level>.01)renderer.toneMappingExposure+=level*.2;
- const best=[];
- if(level>.01){
-  const px=player.position.x,pz=player.position.z;
-  for(const l of avenueLamps){
-   if(l.removed)continue;
-   const dd=(l.hx-px)*(l.hx-px)+(l.hz-pz)*(l.hz-pz);
-   if(best.length<slRealLights.length||dd<best[best.length-1].dd){
-    best.push({l,dd});best.sort((u,v)=>u.dd-v.dd);if(best.length>slRealLights.length)best.pop();
-   }
-  }
+ const best=[],px=player.position.x,pz=player.position.z;
+ if(level>.01)for(const l of avenueLamps){
+  if(l.removed)continue;const dd=(l.hx-px)*(l.hx-px)+(l.hz-pz)*(l.hz-pz);
+  if(dd>2200000)continue;
+  if(best.length<slRealLights.length||dd<best[best.length-1].dd){best.push({l,dd});best.sort((u,v)=>u.dd-v.dd);if(best.length>slRealLights.length)best.pop()}
  }
- slRealLights.forEach((L,i)=>{
-  if(best[i]){L.position.set(best[i].l.hx,STREETLIGHT_HEIGHT-1,best[i].l.hz);L.intensity=L.userData.peak*level;}
-  else L.intensity=0;
- });
+ slRealLights.forEach((L,i)=>{if(best[i]){L.position.set(best[i].l.hx,STREETLIGHT_HEIGHT-1,best[i].l.hz);L.intensity=L.userData.peak*level}else L.intensity=0});
 }
 
 // Stop lines on every avenue arm entering an avenue/avenue junction.
@@ -715,7 +825,7 @@ for(let local=-5180;local<=5180;local+=70){
  }
 }
 // Submit all flat road paint and arrows as instanced batches to limit draw calls.
-flushRoadPaint();flushRoadArrows();
+flushRoadPaint();flushRoadArrows();roadMarkDataFinalized=true;
 
 // District palette and building families.
 const wallPalette=[0xd9d1bd,0xe2dfd1,0xc8d3c9,0xd6c3a8,0xbfc9c4,0xe8e2d2,0xc7b8a5,0xd7d9cf].map(c=>mat(c));
@@ -1178,20 +1288,69 @@ for(let gx=-5145;gx<=5145;gx+=70){
   cityMapBuildings.push({x:fit.x,z:fit.z,w:fit.w,d:fit.d,kind});
  }
 }
-// Split instanced buildings into 25 geographic chunks for frustum-friendly rendering.
-for(let tx=-2;tx<=2;tx++)for(let tz=-2;tz<=2;tz++){
- const records=expandedBuildingRecords.filter(b=>Math.floor((b.x+5250)/2100)===tx+2&&Math.floor((b.z+5250)/2100)===tz+2);
- if(!records.length)continue;
- const group=new THREE.Group();scene.add(group);
- const body=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),new THREE.MeshStandardMaterial({color:0xffffff,roughness:.86}),records.length);
- const roof=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),roofMat,records.length);
- const dummy=new THREE.Object3D(),color=new THREE.Color();
- records.forEach((b,i)=>{
-  dummy.position.set(b.x,b.h/2,b.z);dummy.scale.set(b.w,b.h,b.d);dummy.updateMatrix();body.setMatrixAt(i,dummy.matrix);
-  color.setHex(b.color);body.setColorAt(i,color);
-  dummy.position.set(b.x,b.h+.25,b.z);dummy.scale.set(b.w+1,.5,b.d+1);dummy.updateMatrix();roof.setMatrixAt(i,dummy.matrix);
- });
- body.instanceMatrix.needsUpdate=true;roof.instanceMatrix.needsUpdate=true;body.frustumCulled=true;roof.frustumCulled=true;group.add(body,roof);
+// v0.682: expanded buildings are indexed into 300m cells and instantiated only
+// for the player's active 5x5 window. The lightweight placement records remain
+// available to the map/collision systems; render buffers are created on demand.
+const EXPANDED_RENDER_CELL=300,EXPANDED_RENDER_GRID=35;
+const expandedRecordsByCell=new Map(),loadedExpandedCells=new Map(),expandedCellQueue=[];
+const expandedBodyGeometry=new THREE.BoxGeometry(1,1,1);
+const expandedBodyMaterial=new THREE.MeshStandardMaterial({color:0xffffff,roughness:.86});
+const expandedRoofGeometry=new THREE.BoxGeometry(1,1,1);
+const expandedRenderDummy=new THREE.Object3D(),expandedRenderColor=new THREE.Color();
+let expandedStreamCenter='';
+for(const b of expandedBuildingRecords){
+ const cx=Math.max(0,Math.min(EXPANDED_RENDER_GRID-1,Math.floor((b.x+5250)/EXPANDED_RENDER_CELL)));
+ const cz=Math.max(0,Math.min(EXPANDED_RENDER_GRID-1,Math.floor((b.z+5250)/EXPANDED_RENDER_CELL)));
+ const key=cx+','+cz;let list=expandedRecordsByCell.get(key);
+ if(!list)expandedRecordsByCell.set(key,list=[]);
+ list.push(b);
+}
+function buildExpandedRenderCell(cx,cz){
+ const key=cx+','+cz,records=expandedRecordsByCell.get(key);
+ if(!records||!records.length)return;
+ const group=new THREE.Group();group.name='expanded-buildings-cell-'+key;
+ const body=new THREE.InstancedMesh(expandedBodyGeometry,expandedBodyMaterial,records.length);
+ const roof=new THREE.InstancedMesh(expandedRoofGeometry,roofMat,records.length);
+ for(let i=0;i<records.length;i++){
+  const b=records[i];
+  expandedRenderDummy.position.set(b.x,b.h/2,b.z);expandedRenderDummy.scale.set(b.w,b.h,b.d);expandedRenderDummy.updateMatrix();body.setMatrixAt(i,expandedRenderDummy.matrix);
+  expandedRenderColor.setHex(b.color);body.setColorAt(i,expandedRenderColor);
+  expandedRenderDummy.position.set(b.x,b.h+.25,b.z);expandedRenderDummy.scale.set(b.w+1,.5,b.d+1);expandedRenderDummy.updateMatrix();roof.setMatrixAt(i,expandedRenderDummy.matrix);
+ }
+ body.instanceMatrix.needsUpdate=true;roof.instanceMatrix.needsUpdate=true;
+ body.frustumCulled=true;roof.frustumCulled=true;group.add(body,roof);scene.add(group);
+ loadedExpandedCells.set(key,{group,body,roof});
+}
+function disposeExpandedRenderCell(key){
+ const cell=loadedExpandedCells.get(key);if(!cell)return;
+ scene.remove(cell.group);
+ // InstancedMesh owns its per-instance GPU attributes; shared geometry/materials
+ // are deliberately retained for the next time this cell is visited.
+ if(typeof cell.body.dispose==='function')cell.body.dispose();
+ if(typeof cell.roof.dispose==='function')cell.roof.dispose();
+ cell.group.clear();loadedExpandedCells.delete(key);
+}
+function updateExpandedBuildingStreaming(force=false){
+ const px=Math.max(-5250,Math.min(5249.99,player.position.x));
+ const pz=Math.max(-5250,Math.min(5249.99,player.position.z));
+ const cx=Math.floor((px+5250)/EXPANDED_RENDER_CELL),cz=Math.floor((pz+5250)/EXPANDED_RENDER_CELL);
+ const center=cx+','+cz;
+ if(!force&&center===expandedStreamCenter){
+  let budget=2;while(budget-->0&&expandedCellQueue.length){const item=expandedCellQueue.shift();if(item&&item.key&&item.desired&&item.desired.has(item.key)&&!loadedExpandedCells.has(item.key))buildExpandedRenderCell(item.cx,item.cz)}
+  return;
+ }
+ expandedStreamCenter=center;
+ const desired=new Set();
+ for(let x=Math.max(0,cx-2);x<=Math.min(EXPANDED_RENDER_GRID-1,cx+2);x++)for(let z=Math.max(0,cz-2);z<=Math.min(EXPANDED_RENDER_GRID-1,cz+2);z++)desired.add(x+','+z);
+ for(const key of Array.from(loadedExpandedCells.keys()))if(!desired.has(key))disposeExpandedRenderCell(key);
+ expandedCellQueue.length=0;
+ const pending=[];
+ for(const key of desired)if(!loadedExpandedCells.has(key)){
+  const [x,z]=key.split(',').map(Number);pending.push({key,cx:x,cz:z,dist:(x-cx)*(x-cx)+(z-cz)*(z-cz)});
+ }
+ pending.sort((a,b)=>a.dist-b.dist);
+ for(const item of pending)expandedCellQueue.push({...item,desired});
+ let budget=2;while(budget-->0&&expandedCellQueue.length){const item=expandedCellQueue.shift();if(item.desired.has(item.key)&&!loadedExpandedCells.has(item.key))buildExpandedRenderCell(item.cx,item.cz)}
 }
 // Spatial hash for the enlarged building stock keeps amenity and shelter placement efficient.
 const EXPANDED_COLLISION_CELL=100,expandedBuildingGrid=new Map();
@@ -2146,7 +2305,7 @@ let uiUpdateElapsed=0;
 // Nothing was removed from the city. Instead, everything static is grouped into 300m cells and only the
 // cells that are inside the camera frustum AND within draw distance are drawn:
 //  * the city-wide instanced meshes (560,000 road-paint dashes, 176,000 pavement/kerb slabs, 19,600 street
-//    lamps x5 parts, lamp glow) are split per cell, so the GPU only draws the instances around the player;
+//    streetlights now build their five instanced parts and glow only for the active 5x5 cells;
 //  * ~30,000 individual meshes/groups are parked in per-cell groups whose whole subtree is skipped when
 //    the cell is hidden, and whose matrices are frozen (no per-frame matrix work for static scenery).
 // Draw distance is graded by object size: small detail 800m, mid-size 1500m, big structures 2600m.
@@ -2161,7 +2320,7 @@ function getCullCell(cls,cx,cz,master=null){
   const group=new THREE.Group();group.matrixAutoUpdate=false;
   group.updateMatrixWorld=function(){};     // frozen subtree: static scenery needs no per-frame matrix work
   const mx=(cx+.5)*CULL_CELL,mz=(cz+.5)*CULL_CELL;
-  c={group,cx:mx,cz:mz,dist:CULL_DIST[cls]||CULL_DIST.far,master,sphere:new THREE.Sphere(new THREE.Vector3(mx,CULL_SPHERE_Y,mz),CULL_SPHERE_R),streamActive:true,gpuReleased:false};
+  c={group,cx:mx,cz:mz,dist:CULL_DIST[cls]||CULL_DIST.far,master,sphere:new THREE.Sphere(new THREE.Vector3(mx,CULL_SPHERE_Y,mz),CULL_SPHERE_R)};
   cullCellMap.set(key,c);cullCells.push(c);scene.add(group);
  }
  return c;
@@ -2209,33 +2368,11 @@ function optimizeWorldForView(){
  const keep=new Set([player,rainGroup,camera]);
  let chunks=0,grouped=0,rootKept=0;
  for(const L of slRealLights)keep.add(L);
- // Trees keep their own per-chunk LOD/visibility logic; their chunk objects are simply parked in the same cells
- // so that hidden cells skip them entirely (their own .visible flags still work inside a visible cell).
- for(const ch of treeChunks.values()){
-  const cell=getCullCell('near',Math.floor(ch.cx/CULL_CELL),Math.floor(ch.cz/CULL_CELL));
-  for(const t of [ch.near,ch.far,ch.decals]){cell.group.add(t);grouped++}
- }
- const glowSrc=slGlow,glowAttr=slGlowAttr,glowMat=slGlowMat,poolSrc=slPools;
- const glowFlag={visible:false},poolFlag={visible:false};
+ // Palm-tree meshes are owned by the independent 300m streamer and are not parked
+ // in permanent cull cells; only active-window tree meshes are attached to the scene.
  for(const o of scene.children.slice()){
   if(keep.has(o)||o.isLight||o.isCamera)continue;
-  if(glowSrc&&o===glowSrc){
-   const pos=glowAttr.array,N=glowAttr.count,bk=new Map();
-   for(let i=0;i<N;i++){
-    if(pos[i*3+1]<-1000)continue;                    // removed lamps
-    const cx=Math.floor(pos[i*3]/CULL_CELL),cz=Math.floor(pos[i*3+2]/CULL_CELL),key=cx+','+cz;
-    let b=bk.get(key);if(!b)bk.set(key,b={cx,cz,idx:[]});b.idx.push(i);
-   }
-   for(const b of bk.values()){
-    const a=new Float32Array(b.idx.length*3);
-    b.idx.forEach((i,j)=>{a[j*3]=pos[i*3];a[j*3+1]=pos[i*3+1];a[j*3+2]=pos[i*3+2]});
-    const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.BufferAttribute(a,3));geo.computeBoundingSphere();
-    const pts=new THREE.Points(geo,glowMat);pts.renderOrder=glowSrc.renderOrder;
-    getCullCell('glow',b.cx,b.cz,glowFlag).group.add(pts);chunks++;
-   }
-   scene.remove(o);continue;
-  }
-  if(o.isInstancedMesh){chunks+=chunkInstanced(o,o===poolSrc?'pool':null,o===poolSrc?poolFlag:null);continue}
+  if(o.isInstancedMesh){chunks+=chunkInstanced(o);continue}
   if(o.isPoints||o.isLine||o.isSprite)continue;
   cullBox.setFromObject(o);
   if(cullBox.isEmpty())continue;
@@ -2245,40 +2382,15 @@ function optimizeWorldForView(){
   const cell=getCullCell(cullClassFromSize(cullSize.x,cullSize.y,cullSize.z),Math.floor(cullCtr.x/CULL_CELL),Math.floor(cullCtr.z/CULL_CELL));
   cell.group.add(o);grouped++;
  }
- // The street-light module toggles these flags at dusk/dawn; they now switch whole sets of chunked pools / glow points.
- slPools=poolFlag;slGlow=glowFlag;
- console.info('This Is Lagos v0.69 5x5 cell streaming:',{cells:cullCells.length,instancedChunks:chunks,objectsParkedInCells:grouped,hugeObjectsKeptAtRoot:rootKept,sceneRootChildren:scene.children.length});
+ console.info('This Is Lagos v0.68 view culling:',{cells:cullCells.length,instancedChunks:chunks,objectsParkedInCells:grouped,hugeObjectsKeptAtRoot:rootKept,sceneRootChildren:scene.children.length});
  updateCullCells();
-}
-// v0.69: keep only a 5x5 grid of 300m cells attached to the live scene around the player.
-// InstancedMesh GPU-side instance buffers are released when a cell leaves the window;
-// the CPU-side instance data and shared geometry/materials remain available for reactivation.
-const STREAM_RADIUS_CELLS=2;
-function setCellStreamingActive(c,active){
- if(active===c.streamActive)return;
- c.streamActive=active;
- if(active){
-  scene.add(c.group);
-  c.group.traverse(o=>{if(o.isInstancedMesh){if(o.instanceMatrix)o.instanceMatrix.needsUpdate=true;if(o.instanceColor)o.instanceColor.needsUpdate=true;}});
-  c.gpuReleased=false;
- }else{
-  scene.remove(c.group);
-  if(!c.gpuReleased){
-   c.group.traverse(o=>{if(o.isInstancedMesh&&typeof o.dispose==='function')o.dispose();});
-   c.gpuReleased=true;
-  }
- }
 }
 function updateCullCells(){
  camera.updateMatrixWorld();
  cellProj.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);cellFrustum.setFromProjectionMatrix(cellProj);
- const px=player.position.x,pz=player.position.z;
- const pcx=Math.floor(px/CULL_CELL),pcz=Math.floor(pz/CULL_CELL);
+ camera.getWorldPosition(camWorld);
+ const px=camWorld.x,pz=camWorld.z;
  for(const c of cullCells){
-  const cx=Math.floor(c.cx/CULL_CELL),cz=Math.floor(c.cz/CULL_CELL);
-  const inWindow=Math.abs(cx-pcx)<=STREAM_RADIUS_CELLS&&Math.abs(cz-pcz)<=STREAM_RADIUS_CELLS;
-  setCellStreamingActive(c,inWindow);
-  if(!inWindow){c.group.visible=false;continue;}
   const dx=c.cx-px,dz=c.cz-pz,reach=c.dist+250;
   let vis=dx*dx+dz*dz<reach*reach;
   if(vis&&c.master)vis=c.master.visible!==false;
@@ -2350,11 +2462,16 @@ function animate(){
  }
  updateActivityFacilityProximity();
  if(weather==='Rain'){for(const d of drops){d.position.y-=uiDt*18;if(d.position.y<0){d.position.y=35;d.position.x=player.position.x+(Math.random()-.5)*180;d.position.z=player.position.z+(Math.random()-.5)*180}}}
- updateCamera();updateCullCells();if((cullFrame++%3)===0){updateVisibleBuildings();updateTreeVisibility();}renderer.render(scene,camera);
+ updateExpandedBuildingStreaming();updateRoadsideStreaming();updateRoadMarkingStreaming();updateStreetlightStreaming();updateTreeStreaming();updateCamera();updateCullCells();if((cullFrame++%3)===0){updateVisibleBuildings();updateTreeVisibility();}renderer.render(scene,camera);
 }
 updateCamera();
 console.info('This Is Lagos v0.66 expanded city:',{landAreaMultiplier:25,linearFootprintMultiplier:5,districts:districtDefs.length,buildings:cityMapBuildings.length,facilities:cityMapFacilities.length,sportsCentres:sportsCentreNames.length});
 optimizeWorldForView();
+updateExpandedBuildingStreaming(true);updateRoadsideStreaming(true);updateRoadMarkingStreaming(true);updateStreetlightStreaming(true);updateTreeStreaming(true);
+console.info('This Is Lagos v0.686 palm-tree streamer:',{activeCells:treeChunks.size,queuedCells:treeCellQueue.length,records:treeCellData.size,cellSize:TREE_CELL,window:'5x5'});
+console.info('This Is Lagos v0.685 streetlight streamer:',{activeCells:streetlightChunks.size,records:avenueLamps.length,cellSize:STREETLIGHT_CELL,window:'5x5'});
+console.info('This Is Lagos v0.684 road-marking streamer:',{activeCells:roadMarkChunks.size,queuedCells:roadMarkCellData.size,cellSize:ROAD_MARK_CELL,window:'5x5'});
+console.info('This Is Lagos v0.682 expanded-building streamer:',{activeCells:loadedExpandedCells.size,queuedCells:expandedCellQueue.length,records:expandedBuildingRecords.length,cellSize:EXPANDED_RENDER_CELL,window:'5x5'});
 const clock=new THREE.Clock();animate();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setPixelRatio(maxDevicePixelRatio*renderScale);renderer.setSize(innerWidth,innerHeight)});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)clock.getDelta()});
