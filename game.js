@@ -832,7 +832,54 @@ function rebuildAvatar(opts = avatarSettings) {
 }
 player.add(fallbackAvatar);
 
-function shrinkTexture(tex, max) {   // downscale oversized GLB textures before the first GPU upload
+// ----------------------------------------------------------------------------
+// CHARACTER (GLB) TEXTURE BUDGET
+// A 4K/8K texture decodes to 64-256 MB each (plus mipmaps on the GPU), so a single
+// character can cost gigabytes. Textures are capped BEFORE they are decoded (Chrome/Android
+// path), with a post-decode shrink as the fallback (Safari/iOS path).
+// ----------------------------------------------------------------------------
+const AVATAR_TEX_MAX = IS_MOBILE ? 1024 : 2048;
+function imageSizeOf(b) {   // read width/height from the file header without decoding the pixels
+  if (b[0] === 0x89 && b[1] === 0x50)   // PNG
+    return { w: ((b[16] << 24) | (b[17] << 16) | (b[18] << 8) | b[19]) >>> 0, h: ((b[20] << 24) | (b[21] << 16) | (b[22] << 8) | b[23]) >>> 0 };
+  if (b[0] === 0xff && b[1] === 0xd8) {   // JPEG: walk the markers to the first SOF
+    let i = 2;
+    while (i + 9 < b.length) {
+      if (b[i] !== 0xff) { i++; continue; }
+      const m = b[i + 1];
+      if (m === 0xff) { i++; continue; }
+      if (m === 0x01 || (m >= 0xd0 && m <= 0xd9)) { i += 2; continue; }
+      if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return { h: (b[i + 5] << 8) | b[i + 6], w: (b[i + 7] << 8) | b[i + 8] };
+      i += 2 + ((b[i + 2] << 8) | b[i + 3]);
+    }
+    return null;
+  }
+  if (b[0] === 0x52 && b[1] === 0x49 && b[8] === 0x57) {   // WebP
+    const t = String.fromCharCode(b[12], b[13], b[14], b[15]);
+    if (t === 'VP8X') return { w: 1 + (b[24] | (b[25] << 8) | (b[26] << 16)), h: 1 + (b[27] | (b[28] << 8) | (b[29] << 16)) };
+    if (t === 'VP8 ') return { w: (b[26] | (b[27] << 8)) & 0x3fff, h: (b[28] | (b[29] << 8)) & 0x3fff };
+    if (t === 'VP8L') return { w: 1 + (b[21] | ((b[22] & 0x3f) << 8)), h: 1 + ((b[22] >> 6) | (b[23] << 2) | ((b[24] & 0x0f) << 10)) };
+  }
+  return null;
+}
+function capImageDecode(max) {   // while the GLB loads, decode oversized textures at a reduced size; returns an undo function
+  const native = window.createImageBitmap;
+  if (!native) return () => {};
+  window.createImageBitmap = async function (src, opts) {
+    try {
+      if (src instanceof Blob) {
+        const s = imageSizeOf(new Uint8Array(await src.slice(0, 262144).arrayBuffer()));
+        if (s && s.w && s.h && Math.max(s.w, s.h) > max) {
+          const k = max / Math.max(s.w, s.h);
+          return await native.call(window, src, { ...(opts || {}), resizeWidth: Math.max(1, Math.round(s.w * k)), resizeHeight: Math.max(1, Math.round(s.h * k)), resizeQuality: 'medium' });
+        }
+      }
+    } catch (_e) { /* fall through to a normal decode */ }
+    return native.call(window, src, opts);
+  };
+  return () => { window.createImageBitmap = native; };
+}
+function shrinkTexture(tex, max) {   // post-decode fallback (Safari/iOS decode on their own)
   const img = tex?.image;
   if (!img || !img.width || Math.max(img.width, img.height) <= max) return;
   const k = max / Math.max(img.width, img.height), cv = document.createElement('canvas');
@@ -843,7 +890,6 @@ function shrinkTexture(tex, max) {   // downscale oversized GLB textures before 
 }
 
 let avatarMixer = null, avatarModel = null, avatarActions = {}, activeAvatarAction = null;
-player.visible = false;
 try {
   const saved = JSON.parse(localStorage.getItem('til-character') || 'null');
   if (saved) {
@@ -854,29 +900,43 @@ try {
 } catch (_e) {}
 player.position.set(0, 0, 5);
 
+// The simple built-in character is shown straight away, so there is always a visible player
+// (even while a big GLB downloads, or if it fails on a phone). The GLB replaces it when ready.
+rebuildAvatar(avatarSettings);
+player.visible = true;
+
 const loadingBadge = document.createElement('div');
 loadingBadge.id = 'modelLoading'; loadingBadge.textContent = 'Loading your character…';
 document.body.appendChild(loadingBadge);
-if (NO_AVATAR) { rebuildAvatar(avatarSettings); player.visible = true; loadingBadge.remove(); }
-else new GLTFLoader().load('./models/The_Miami_Dealer.glb', gltf => {
-  avatarModel = gltf.scene;
-  const size = new THREE.Box3().setFromObject(avatarModel).getSize(new THREE.Vector3());
-  avatarModel.scale.setScalar(2.35 / (size.y || 2.3));
-  avatarModel.position.y -= new THREE.Box3().setFromObject(avatarModel).min.y;
-  avatarModel.traverse(o => {
+
+const AVATAR_FULL = './models/The_Miami_Dealer.glb';
+const AVATAR_MOBILE = './models/The_Miami_Dealer_mobile.glb';   // optional small export (see notes); used first on phones
+const avatarUrls = IS_MOBILE ? [AVATAR_MOBILE, AVATAR_FULL] : [AVATAR_FULL];
+
+function attachAvatar(gltf) {
+  const model = gltf.scene;
+  const size = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3());
+  model.scale.setScalar(2.35 / (size.y || 2.3));
+  model.position.y -= new THREE.Box3().setFromObject(model).min.y;
+  model.traverse(o => {
     if (!o.isMesh) return;
     o.castShadow = o.receiveShadow = false;
-    if (!IS_MOBILE) return;
+    o.frustumCulled = false;   // skinned meshes can be culled wrongly by their bind-pose bounds
     for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+      if (!m) continue;
+      if (IS_MOBILE) {   // phones: no normal/AO maps (small on screen, costly in memory and fill-rate)
+        for (const k of ['normalMap', 'aoMap']) if (m[k]) { m[k].image?.close?.(); m[k] = null; m.needsUpdate = true; }
+      }
       for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap']) {
-        if (!m?.[k]) continue;
-        shrinkTexture(m[k], 1024);
-        if (k === 'map') { m[k].generateMipmaps = false; m[k].minFilter = THREE.LinearFilter; }
+        if (!m[k]) continue;
+        shrinkTexture(m[k], AVATAR_TEX_MAX);
+        if (IS_MOBILE && k === 'map') { m[k].generateMipmaps = false; m[k].minFilter = THREE.LinearFilter; }
       }
     }
   });
   fallbackAvatar.visible = false; body = undefined;
-  player.add(avatarModel); player.visible = true;
+  avatarModel = model;
+  player.add(avatarModel);
   if (gltf.animations?.length) {
     avatarMixer = new THREE.AnimationMixer(avatarModel);
     for (const clip of gltf.animations) {
@@ -886,14 +946,29 @@ else new GLTFLoader().load('./models/The_Miami_Dealer.glb', gltf => {
     activeAvatarAction = avatarActions[Object.keys(avatarActions).find(n => n.includes('idle')) || Object.keys(avatarActions)[0]];
     activeAvatarAction?.play();
   }
-  loadingBadge.remove();
-  toast('Character loaded');
-}, undefined, () => {
-  rebuildAvatar(avatarSettings);
-  player.visible = true;
-  loadingBadge.textContent = 'Using local character preview';
-  setTimeout(() => loadingBadge.remove(), 2200);
-});
+}
+
+function loadAvatar(i = 0) {
+  const restoreDecode = capImageDecode(AVATAR_TEX_MAX);
+  let settled = false;
+  const fail = err => {
+    if (settled) return; settled = true; restoreDecode();
+    console.warn('Character model failed:', avatarUrls[i], err);
+    if (i + 1 < avatarUrls.length) { loadAvatar(i + 1); return; }
+    loadingBadge.textContent = 'Using local character preview';   // procedural character stays visible
+    setTimeout(() => loadingBadge.remove(), 2200);
+  };
+  new GLTFLoader().load(avatarUrls[i], gltf => {
+    if (settled) return;
+    try { attachAvatar(gltf); } catch (err) { fail(err); return; }
+    settled = true; restoreDecode();
+    loadingBadge.remove();
+    toast('Character loaded');
+  }, xhr => {
+    if (xhr.lengthComputable && xhr.total) loadingBadge.textContent = 'Loading your character… ' + Math.round((xhr.loaded / xhr.total) * 100) + '%';
+  }, fail);
+}
+if (NO_AVATAR) loadingBadge.remove(); else loadAvatar(0);
 
 // ============================================================================
 // WEATHER, CAMERA, DAY/NIGHT
