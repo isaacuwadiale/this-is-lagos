@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.72-MOBILE: lazy world generation + streamed, instanced chunks, staged chunk jobs
+// THIS IS LAGOS v0.74-MOBILE: lazy world generation + streamed, instanced chunks, staged chunk jobs
 // Target: < 400 MB on phones. Add ?debug to the URL to log draw calls / GPU memory.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -911,7 +911,29 @@ document.body.appendChild(loadingBadge);
 
 const AVATAR_FULL = './models/The_Miami_Dealer.glb';
 const AVATAR_MOBILE = './models/The_Miami_Dealer_mobile.glb';   // optional small export (see notes); used first on phones
-const avatarUrls = IS_MOBILE ? [AVATAR_MOBILE, AVATAR_FULL] : [AVATAR_FULL];
+// Phones never download the full model: it is what was crashing them. Without a *_mobile.glb they keep the simple built-in character.
+const avatarUrls = IS_MOBILE ? [AVATAR_MOBILE] : [AVATAR_FULL];
+const AVATAR_MAX_BYTES = IS_MOBILE ? 12 * 1048576 : Infinity;
+let avatarInfo = 'not loaded yet';
+// Downloads the model while counting the REAL (decompressed) bytes, and stops as soon as the limit is passed.
+// (Content-Length / xhr.total are the gzip size, which is why the old progress showed values like 380%.)
+async function fetchCapped(url, maxBytes, onBytes) {
+  const r = await fetch(url);
+  if (!r.ok) { const e = new Error('HTTP ' + r.status); e.missing = true; throw e; }
+  const reader = r.body.getReader(), parts = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    got += value.length;
+    if (got > maxBytes) { reader.cancel(); const e = new Error('too big'); e.tooBig = true; throw e; }
+    parts.push(value); onBytes?.(got);
+  }
+  const buf = new Uint8Array(got); let o = 0;
+  for (const p of parts) { buf.set(p, o); o += p.length; }
+  return buf.buffer;
+}
+}
 
 function attachAvatar(gltf) {
   const model = gltf.scene;
@@ -948,24 +970,37 @@ function attachAvatar(gltf) {
   }
 }
 
-function loadAvatar(i = 0) {
+async function loadAvatar(i = 0) {
+  const url = avatarUrls[i];
+  const next = () => {
+    if (i + 1 < avatarUrls.length) { loadAvatar(i + 1); return; }
+    loadingBadge.textContent = 'Using simple character preview';   // procedural character stays visible
+    setTimeout(() => loadingBadge.remove(), 2600);
+  };
+  avatarInfo = 'downloading ' + url;
+  let buf;
+  try {
+    buf = await fetchCapped(url, AVATAR_MAX_BYTES, n => { loadingBadge.textContent = 'Loading your character… ' + (n / 1048576).toFixed(1) + ' MB'; });
+  } catch (err) {
+    avatarInfo = err.tooBig ? 'skipped: over ' + Math.round(AVATAR_MAX_BYTES / 1048576) + ' MB real size, too big for phone ' + url : err.missing ? 'missing ' + url : 'download failed ' + url;
+    console.warn('Character model not used:', url, err.message);
+    next(); return;
+  }
+  avatarInfo = (buf.byteLength / 1048576).toFixed(1) + ' MB real size ' + url;
   const restoreDecode = capImageDecode(AVATAR_TEX_MAX);
   let settled = false;
   const fail = err => {
     if (settled) return; settled = true; restoreDecode();
-    console.warn('Character model failed:', avatarUrls[i], err);
-    if (i + 1 < avatarUrls.length) { loadAvatar(i + 1); return; }
-    loadingBadge.textContent = 'Using local character preview';   // procedural character stays visible
-    setTimeout(() => loadingBadge.remove(), 2200);
+    avatarInfo = 'failed ' + url; console.warn('Character model failed:', url, err);
+    next();
   };
-  new GLTFLoader().load(avatarUrls[i], gltf => {
+  new GLTFLoader().parse(buf, url.slice(0, url.lastIndexOf('/') + 1), gltf => {
     if (settled) return;
     try { attachAvatar(gltf); } catch (err) { fail(err); return; }
     settled = true; restoreDecode();
+    avatarInfo += ' - loaded';
     loadingBadge.remove();
     toast('Character loaded');
-  }, xhr => {
-    if (xhr.lengthComputable && xhr.total) loadingBadge.textContent = 'Loading your character… ' + Math.round((xhr.loaded / xhr.total) * 100) + '%';
   }, fail);
 }
 if (NO_AVATAR) loadingBadge.remove(); else loadAvatar(0);
@@ -1187,7 +1222,7 @@ function animate() {
   fpsSampleTime += rawDt; fpsFrames++;
   if (fpsSampleTime >= 2) {   // adaptive resolution: drops when slow, recovers when there is headroom
     const fps = fpsFrames / fpsSampleTime;
-    if (dbgEl) dbgEl.textContent = `fps ${fps.toFixed(0)}  scale ${renderScale.toFixed(2)}\ncalls ${renderer.info.render.calls}  tris ${(renderer.info.render.triangles / 1000).toFixed(0)}k\ngeometries ${renderer.info.memory.geometries}  textures ${renderer.info.memory.textures}\nchunks ${loadedChunks.size}  jobs ${taskQueue.length}\nJS heap ${performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) + ' MB' : 'n/a'}`;
+    if (dbgEl) dbgEl.textContent = `fps ${fps.toFixed(0)}  scale ${renderScale.toFixed(2)}\ncalls ${renderer.info.render.calls}  tris ${(renderer.info.render.triangles / 1000).toFixed(0)}k\ngeometries ${renderer.info.memory.geometries}  textures ${renderer.info.memory.textures}\nchunks ${loadedChunks.size}  jobs ${taskQueue.length}\nJS heap ${performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) + ' MB' : 'n/a'}\nv0.74  avatar: ${avatarInfo}`;
     fpsSampleTime = 0; fpsFrames = 0;
     if (fps < 26) { slowSamples++; fastSamples = 0; } else if (fps > 55) { fastSamples++; slowSamples = 0; } else slowSamples = fastSamples = 0;
     if (slowSamples >= 2 && renderScale > 0.6) { renderScale = Math.max(0.6, renderScale - 0.1); applyResolution(); slowSamples = 0; }
