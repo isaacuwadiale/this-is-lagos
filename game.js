@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.76-MOBILE: lazy world generation + streamed, instanced chunks, staged chunk jobs
+// THIS IS LAGOS v0.77-RESTORED-STREET-FEATURES: lazy world generation + streamed, instanced chunks, staged chunk jobs
 // Target: < 400 MB on phones. Add ?debug to the URL to log draw calls / GPU memory.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -277,6 +277,24 @@ const BUS_SHELTER_HEIGHT = 18.33;
 const STREETLIGHT_HEIGHT = BUS_SHELTER_HEIGHT * 1.5;
 const poleMat = mat(0x59645e, 0.55);
 const lampGlow = newMat({ color: 0xffe7ad, emissive: 0xffc66b, emissiveIntensity: 0.15, roughness: 0.3 });
+// Lightweight bus shelter parts: shared assets, instanced per streamed chunk.
+// Keep the established 18.33-unit shelter height; do not compress it to the roof height
+// used by the earlier compact placeholder version.
+const shelterRoofMat = mat(0x263b43, 0.7), shelterGlassMat = mat(0x8bb8bb, 0.35), shelterBenchMat = mat(0x8a6947, 0.8), shelterFrameMat = mat(0x34434a, 0.65);
+const shelterRoofHeight = BUS_SHELTER_HEIGHT;
+const shelterWallHeight = BUS_SHELTER_HEIGHT - 0.8;
+const busLaneCanvas = document.createElement('canvas');
+busLaneCanvas.width = 256; busLaneCanvas.height = 128;
+const busLaneCtx = busLaneCanvas.getContext('2d');
+busLaneCtx.clearRect(0, 0, 256, 128);
+busLaneCtx.textAlign = 'center'; busLaneCtx.textBaseline = 'middle';
+busLaneCtx.font = '900 94px Arial, sans-serif';
+busLaneCtx.lineWidth = 10; busLaneCtx.strokeStyle = 'rgba(20,25,24,0.72)';
+busLaneCtx.strokeText('BUS', 128, 66); busLaneCtx.fillStyle = '#f7f4e8'; busLaneCtx.fillText('BUS', 128, 66);
+const busLaneTexture = new THREE.CanvasTexture(busLaneCanvas);
+busLaneTexture.generateMipmaps = false; busLaneTexture.minFilter = THREE.LinearFilter;
+if ('colorSpace' in busLaneTexture) busLaneTexture.colorSpace = THREE.SRGBColorSpace;
+const busLaneMarkMat = new THREE.MeshBasicMaterial({ map: busLaneTexture, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
 const poleGeo = new THREE.CylinderGeometry(0.3, 0.52, STREETLIGHT_HEIGHT, 7); poleGeo.translate(0, STREETLIGHT_HEIGHT / 2, 0);
 const armGeo = new THREE.CylinderGeometry(0.16, 0.22, 1, 6); armGeo.rotateZ(-Math.PI / 2); armGeo.translate(0.5, STREETLIGHT_HEIGHT - 0.7, 0);
 const headGeo = new THREE.BoxGeometry(2.6, 0.42, 1.0); headGeo.translate(0, STREETLIGHT_HEIGHT - 0.5, 0);
@@ -466,11 +484,7 @@ for (const d of districtDefs) {   // district gateways
   const gx = alongZ ? ax : Math.round(d[1] / 70) * 70 + 35, gz = alongZ ? Math.round(d[2] / 70) * 70 + 35 : az;
   registerSign(d[0], gx, gz, DISTRICT_POLE_OFFSET * 2 - 1.4, 0x2a72a8, DISTRICT_POLE_HEIGHT - 3.4, 'gateway', alongZ ? 'z' : 'x');
 }
-for (let k = -75; k <= 75; k++) {
-  const roadPos = k * 70, half = (k % 3 === 0) ? 24 : 4;
-  registerSign(streetName('x', k), roadPos + half + 2.0, -2455, 12 * STREET_SIGN_SCALE, 0x10446f, STREET_SIGN_POLE_HEIGHT - 1.1, 'street', 'x');
-  registerSign(streetName('z', k), -2455, roadPos + half + 2.0, 12 * STREET_SIGN_SCALE, 0x10446f, STREET_SIGN_POLE_HEIGHT - 1.1, 'street', 'z');
-}
+// Street-name signs are generated inside each active chunk below, beside its actual roads.
 
 const CITY_PARKING = { name: 'Public City Parking', x: 105, z: 105 };
 amenityColliders.push({ minX: CITY_PARKING.x - 22, maxX: CITY_PARKING.x + 22, minZ: CITY_PARKING.z - 22, maxZ: CITY_PARKING.z + 22 });
@@ -604,6 +618,7 @@ function buildRoads(cx, cz, group, asphaltRecs) {
   const xMin = cx * CHUNK_SIZE, xMax = xMin + CHUNK_SIZE, zMin = cz * CHUNK_SIZE, zMax = zMin + CHUNK_SIZE;
   const midX = (xMin + xMax) / 2, midZ = (zMin + zMax) / 2;
   const pvm = [], kerb = [], white = [], yellow = [], poles = [], arms = [], heads = [], pools = [];
+  const shelterRoofs = [], shelterBacks = [], shelterSides = [], shelterBenches = [], shelterFrames = [], busLaneMarks = [];
   const spansZ = spansAlong(zMin, zMax), spansX = spansAlong(xMin, xMax);
 
   for (let gx = Math.floor(xMin / 70) * 70; gx < xMax; gx += 70) {   // roads running along z
@@ -622,14 +637,35 @@ function buildRoads(cx, cz, group, asphaltRecs) {
           white.push({ x: gx - 12, y: 0.095, z: q, sx: 0.15, sy: 0.03, sz: 4 }, { x: gx + 12, y: 0.095, z: q, sx: 0.15, sy: 0.03, sz: 4 });
       } else for (let q = Math.ceil((s0 + 2) / 28) * 28; q <= e0 - 2; q += 28) white.push({ x: gx, y: 0.03, z: q, sx: 0.12, sy: 0.03, sz: 4 });
     }
-    if (isAve) for (let q = Math.ceil(zMin / 105) * 105; q < zMax; q += 105) {
+    // Streetlights on avenues and local roads. Local roads use a wider spacing.
+    {
+      const spacing = isAve ? 105 : 140, offset = half + (isAve ? 3.2 : 6.5);
+      for (let q = Math.ceil((zMin + 35) / spacing) * spacing + 35; q < zMax; q += spacing) {
+        if (poleInRoad(q)) continue;
+        for (const side of [-1, 1]) {
+          const px = gx + side * offset, rot = side < 0 ? 0 : Math.PI, armLen = isAve ? 5.8 : 4.0;
+          const hx = px + Math.cos(rot) * armLen * 0.9;
+          poles.push({ x: px, y: 0, z: q, ry: rot, sx: 1, sy: 1, sz: 1 });
+          arms.push({ x: px, y: 0, z: q, ry: rot, sx: armLen, sy: 1, sz: 1 });
+          heads.push({ x: hx, y: 0, z: q, ry: rot, sx: 1, sy: 1, sz: 1 });
+          if (isAve) pools.push({ x: hx, y: 0.1, z: q, sx: 120, sy: 1, sz: 120 });
+        }
+      }
+    }
+    // A compact shelter every 630 m on major avenues, on both pavements.
+    if (isAve) for (let q = Math.ceil((zMin + 35) / 630) * 630 + 35; q < zMax; q += 630) {
       if (poleInRoad(q)) continue;
       for (const side of [-1, 1]) {
-        const px = gx + side * 27.2, rot = side < 0 ? 0 : Math.PI, hx = px + Math.cos(rot) * 5.2;
-        poles.push({ x: px, y: 0, z: q, ry: rot, sx: 1, sy: 1, sz: 1 });
-        arms.push({ x: px, y: 0, z: q, ry: rot, sx: 5.8, sy: 1, sz: 1 });
-        heads.push({ x: hx, y: 0, z: q, ry: rot, sx: 1, sy: 1, sz: 1 });
-        pools.push({ x: hx, y: 0.1, z: q, sx: 120, sy: 1, sz: 120 });
+        const sx = gx + side * 32.5;
+        // One shelter on each pavement, directly opposite its matching shelter.
+        shelterRoofs.push({ x: sx, y: shelterRoofHeight - 0.16, z: q, sx: 3.4, sy: 0.32, sz: 7.2 });
+        shelterBacks.push({ x: sx - side * 1.55, y: shelterWallHeight / 2, z: q, sx: 0.16, sy: shelterWallHeight, sz: 6.8 });
+        shelterSides.push({ x: sx, y: shelterWallHeight / 2, z: q - 3.3, sx: 3.1, sy: shelterWallHeight, sz: 0.14 }, { x: sx, y: shelterWallHeight / 2, z: q + 3.3, sx: 3.1, sy: shelterWallHeight, sz: 0.14 });
+        for (const dx of [-1.48, 1.48]) for (const dz of [-3.18, 3.18])
+          shelterFrames.push({ x: sx + dx, y: shelterRoofHeight / 2, z: q + dz, sx: 0.16, sy: shelterRoofHeight, sz: 0.16 });
+        shelterBenches.push({ x: sx + side * 0.35, y: 0.62, z: q, sx: 0.55, sy: 0.18, sz: 5.4 });
+        // Painted BUS legend in the traffic lane immediately beside this shelter.
+        busLaneMarks.push({ x: gx + side * 16.5, y: 0.115, z: q, sx: 8.5, sy: 1, sz: 2.8, ry: Math.PI / 2 });
       }
     }
   }
@@ -649,6 +685,37 @@ function buildRoads(cx, cz, group, asphaltRecs) {
           white.push({ x: q, y: 0.095, z: gz - 12, sx: 4, sy: 0.03, sz: 0.15 }, { x: q, y: 0.095, z: gz + 12, sx: 4, sy: 0.03, sz: 0.15 });
       } else for (let q = Math.ceil((s0 + 2) / 28) * 28; q <= e0 - 2; q += 28) white.push({ x: q, y: 0.03, z: gz, sx: 4, sy: 0.03, sz: 0.12 });
     }
+    // Streetlights on avenues and local roads running along the x axis.
+    {
+      const spacing = isAve ? 105 : 140, offset = half + (isAve ? 3.2 : 6.5);
+      for (let q = Math.ceil((xMin + 35) / spacing) * spacing + 35; q < xMax; q += spacing) {
+        if (poleInRoad(q)) continue;
+        for (const side of [-1, 1]) {
+          const pz = gz + side * offset, rot = side < 0 ? Math.PI / 2 : -Math.PI / 2, armLen = isAve ? 5.8 : 4.0;
+          const hz = pz + Math.sin(rot) * armLen * 0.9;
+          poles.push({ x: q, y: 0, z: pz, ry: rot, sx: 1, sy: 1, sz: 1 });
+          arms.push({ x: q, y: 0, z: pz, ry: rot, sx: armLen, sy: 1, sz: 1 });
+          heads.push({ x: q, y: 0, z: hz, ry: rot, sx: 1, sy: 1, sz: 1 });
+          if (isAve) pools.push({ x: q, y: 0.1, z: hz, sx: 120, sy: 1, sz: 120 });
+        }
+      }
+    }
+    // Matching shelters for major avenues running along x.
+    if (isAve) for (let q = Math.ceil((xMin + 35) / 630) * 630 + 35; q < xMax; q += 630) {
+      if (poleInRoad(q)) continue;
+      for (const side of [-1, 1]) {
+        const sz = gz + side * 32.5;
+        // Opposing shelter pair on the two pavements of this avenue.
+        shelterRoofs.push({ x: q, y: shelterRoofHeight - 0.16, z: sz, sx: 7.2, sy: 0.32, sz: 3.4 });
+        shelterBacks.push({ x: q, y: shelterWallHeight / 2, z: sz - side * 1.55, sx: 6.8, sy: shelterWallHeight, sz: 0.16 });
+        shelterSides.push({ x: q - 3.3, y: shelterWallHeight / 2, z: sz, sx: 0.14, sy: shelterWallHeight, sz: 3.1 }, { x: q + 3.3, y: shelterWallHeight / 2, z: sz, sx: 0.14, sy: shelterWallHeight, sz: 3.1 });
+        for (const dx of [-3.18, 3.18]) for (const dz of [-1.48, 1.48])
+          shelterFrames.push({ x: q + dx, y: shelterRoofHeight / 2, z: sz + dz, sx: 0.16, sy: shelterRoofHeight, sz: 0.16 });
+        shelterBenches.push({ x: q, y: 0.62, z: sz + side * 0.35, sx: 5.4, sy: 0.18, sz: 0.55 });
+        // BUS marking is on the lane nearest the matching pavement shelter.
+        busLaneMarks.push({ x: q, y: 0.115, z: gz + side * 16.5, sx: 8.5, sy: 1, sz: 2.8 });
+      }
+    }
   }
   batch(asphaltRecs, UNIT_BOX, asphaltMat, group);
   batch(pvm, UNIT_BOX, pavementMat, group);
@@ -658,6 +725,12 @@ function buildRoads(cx, cz, group, asphaltRecs) {
   batch(poles, poleGeo, poleMat, group);
   batch(arms, armGeo, poleMat, group);
   batch(heads, headGeo, lampGlow, group);
+  batch(shelterRoofs, UNIT_BOX, shelterRoofMat, group);
+  batch(shelterBacks, UNIT_BOX, shelterGlassMat, group);
+  batch(shelterSides, UNIT_BOX, shelterGlassMat, group);
+  batch(shelterBenches, UNIT_BOX, shelterBenchMat, group);
+  batch(shelterFrames, UNIT_BOX, shelterFrameMat, group);
+  batch(busLaneMarks, UNIT_PLANE_XZ, busLaneMarkMat, group, false, 3);
   if (!IS_MOBILE) batch(pools, UNIT_PLANE_XZ, slPoolMat, group, false, 2);   // additive overdraw: desktop only
 }
 
@@ -733,8 +806,7 @@ function buildChunkContent(cx, cz) {
     }
   });
   job(() => {                                                               // 5. signs
-    if (!bp) return;
-    for (const s of bp.signs) {
+    for (const s of (bp ? bp.signs : [])) {
       const tex = makeCompactSignTexture(s.text, s.color);
       const faceMat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
       entry.disposables.push(tex, faceMat);
@@ -752,6 +824,27 @@ function buildChunkContent(cx, cz) {
         board.scale.set(s.width, s.type === 'street' ? 2 : 5, 1); board.rotation.y = yaw; board.position.set(s.x, s.y, s.z);
         group.add(board);
       }
+    }
+    // Place readable street-name signs throughout this loaded chunk, rather than at one remote city edge.
+    const x0 = cx * CHUNK_SIZE, x1 = x0 + CHUNK_SIZE, z0 = cz * CHUNK_SIZE, z1 = z0 + CHUNK_SIZE;
+    const addStreetNameSign = (label, x, z, axis) => {
+      const tex = makeCompactSignTexture(label, 0x10446f);
+      const material = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
+      entry.disposables.push(tex, material);
+      const pole = new THREE.Mesh(streetSignPoleGeo, streetSignPoleMat);
+      pole.position.set(x, STREET_SIGN_POLE_HEIGHT / 2, z); group.add(pole);
+      const board = new THREE.Mesh(UNIT_PLANE_XY, material);
+      board.scale.set(12 * STREET_SIGN_SCALE, 2, 1);
+      board.rotation.y = axis === 'x' ? Math.PI / 2 : 0;
+      board.position.set(x, STREET_SIGN_POLE_HEIGHT - 1.1, z); group.add(board);
+    };
+    for (let gx = Math.ceil(x0 / 70) * 70; gx < x1 && gx >= -5180 && gx <= 5180; gx += 70) {
+      const half = roadHalfAt(gx);
+      addStreetNameSign(streetName('x', Math.round(gx / 70)), gx + half + 2, (z0 + z1) / 2, 'x');
+    }
+    for (let gz = Math.ceil(z0 / 70) * 70; gz < z1 && gz >= -5180 && gz <= 5180; gz += 70) {
+      const half = roadHalfAt(gz);
+      addStreetNameSign(streetName('z', Math.round(gz / 70)), (x0 + x1) / 2, gz + half + 2, 'z');
     }
   });
 }
