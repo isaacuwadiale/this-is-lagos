@@ -933,7 +933,6 @@ async function fetchCapped(url, maxBytes, onBytes) {
   for (const p of parts) { buf.set(p, o); o += p.length; }
   return buf.buffer;
 }
-}
 
 function attachAvatar(gltf) {
   const model = gltf.scene;
