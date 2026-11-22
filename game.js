@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.77-RESTORED-STREET-FEATURES: lazy world generation + streamed, instanced chunks, staged chunk jobs
+// THIS IS LAGOS v0.78-BUILDING-ROAD-CLEARANCE: restored street features + streamed, instanced chunks
 // Target: < 400 MB on phones. Add ?debug to the URL to log draw calls / GPU memory.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -341,7 +341,11 @@ function makeCompactSignTexture(text, bgHex, subtext = '') {
 // ============================================================================
 // PLOT / ROAD HELPERS
 // ============================================================================
-const ROAD_EDGE_CLEARANCE = 4.8, BLOCK_SETBACK = 5.6, BUILDING_SCALE = 4;
+// Keep every building at least one major-road lane width from the road edge.
+// Major avenues are 48 units wide; using four traffic lanes gives a 12-unit lane.
+// Apply the same 12-unit road-edge clearance to local roads for consistent setbacks.
+const MAJOR_LANE_WIDTH = 12;
+const ROAD_EDGE_CLEARANCE = MAJOR_LANE_WIDTH, BLOCK_SETBACK = MAJOR_LANE_WIDTH, BUILDING_SCALE = 4;
 const roadHalfWidthAt = v => (Math.abs((Math.round(v / 70) * 70) % 210) === 0 ? 24 : 4);
 function blockSpan(v) {
   const a = Math.floor(v / 70) * 70, b = a + 70;
@@ -353,10 +357,16 @@ function fitToBlock(x, z, w, d) {
 }
 function clearBuildingPlot(x, z, w, d, extra = 1) {
   const halfW = w / 2 + extra, halfD = d / 2 + extra;
-  for (let k = Math.floor((x - halfW) / 70) - 1, e = Math.ceil((x + halfW) / 70) + 1; k <= e; k++)
-    if (Math.abs(x - k * 70) < halfW + (k % 3 === 0 ? 24 : 4) + ROAD_EDGE_CLEARANCE) return false;
-  for (let k = Math.floor((z - halfD) / 70) - 1, e = Math.ceil((z + halfD) / 70) + 1; k <= e; k++)
-    if (Math.abs(z - k * 70) < halfD + (k % 3 === 0 ? 24 : 4) + ROAD_EDGE_CLEARANCE) return false;
+  // Measure from the actual road edge (centreline +/- half-width), not its centre.
+  // The footprint edge must remain one full major-road lane width beyond that edge.
+  for (let k = Math.floor((x - halfW) / 70) - 1, e = Math.ceil((x + halfW) / 70) + 1; k <= e; k++) {
+    const roadX = k * 70, roadHalf = roadHalfWidthAt(roadX);
+    if (Math.abs(x - roadX) < halfW + roadHalf + ROAD_EDGE_CLEARANCE) return false;
+  }
+  for (let k = Math.floor((z - halfD) / 70) - 1, e = Math.ceil((z + halfD) / 70) + 1; k <= e; k++) {
+    const roadZ = k * 70, roadHalf = roadHalfWidthAt(roadZ);
+    if (Math.abs(z - roadZ) < halfD + roadHalf + ROAD_EDGE_CLEARANCE) return false;
+  }
   if ((x - halfW) < 130 && (x + halfW) > -130 && Math.abs(z + 22) < halfD + 8.75) return false;
   return true;
 }
