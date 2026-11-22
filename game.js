@@ -1,13 +1,14 @@
-// THIS IS LAGOS v0.71-MOBILE: lazy world generation + streamed, instanced chunks
+// THIS IS LAGOS v0.72-MOBILE: lazy world generation + streamed, instanced chunks, staged chunk jobs
 // Target: < 400 MB on phones. Add ?debug to the URL to log draw calls / GPU memory.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-const IS_MOBILE = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || innerWidth < 768;
+const IS_MOBILE = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || innerWidth < 768 || /[?&]low/.test(location.search);
 const DEBUG = /[?&]debug/.test(location.search);
+const NO_AVATAR = /[?&]noavatar/.test(location.search);   // diagnostic: skip the GLB character
 const CITY_HALF = 5250, CHUNK_SIZE = 300;
-const LOAD_RADIUS = IS_MOBILE ? 750 : 1050;
-const UNLOAD_RADIUS = LOAD_RADIUS + 300;
+const LOAD_RADIUS = IS_MOBILE ? 480 : 1050;
+const UNLOAD_RADIUS = LOAD_RADIUS + (IS_MOBILE ? 150 : 300);
 const FOG_FAR = LOAD_RADIUS * 0.95;            // fog fully hides the edge of the loaded area (no pop-in)
 const TREE_SHADE_DECALS = !IS_MOBILE;          // transparent decals cost fill-rate on phones
 
@@ -28,7 +29,7 @@ const renderer = new THREE.WebGLRenderer({
   powerPreference: IS_MOBILE ? 'default' : 'high-performance',
   stencil: false
 });
-let renderScale = 1.0;
+let renderScale = IS_MOBILE ? 0.85 : 1.0;
 const MAX_DPR = IS_MOBILE ? 1.0 : Math.min(devicePixelRatio || 1, 1.15);
 renderer.setPixelRatio(MAX_DPR * renderScale);
 renderer.setSize(innerWidth, innerHeight);
@@ -92,7 +93,7 @@ function staticBox(w, h, d, m, x, y, z) {
   o.scale.set(w, h, d); o.position.set(x, y + h / 2, z);
   o.matrixAutoUpdate = false; o.updateMatrix(); scene.add(o);
 }
-staticBox(10500, 0.35, 10500, cityGroundMat, 0, -0.42, 0);
+staticBox(10500, 0.35, 10500, cityGroundMat, 0, -0.55, 0);   // top at -0.20: roads sit well above it
 staticBox(690, 0.5, 230, lagoonMat, 610, -0.52, 930);   // top now sits just above the ground (was a 0.22 slab)
 staticBox(720, 0.12, 34, sandMat, 590, -0.12, 805);
 
@@ -288,7 +289,7 @@ slPoolMat.visible = false;
 const slRealLights = [];
 {
   const physical = parseInt(THREE.REVISION, 10) >= 155;
-  for (let i = 0; i < (IS_MOBILE ? 3 : 6); i++) {
+  for (let i = 0; i < (IS_MOBILE ? 0 : 6); i++) {   // point lights multiply per-pixel cost: desktop only
     const L = new THREE.PointLight(0xffd28a, 0, 170, physical ? 1 : 1.5);
     L.userData.peak = physical ? 120 : 2.2;
     scene.add(L); slRealLights.push(L);
@@ -570,6 +571,7 @@ function chunkTrees(cx, cz) {
           const x = axis === 'z' ? off : jq, z = axis === 'z' ? jq : off;
           if (Math.floor(x / CHUNK_SIZE) !== cx || Math.floor(z / CHUNK_SIZE) !== cz) continue;
           if (treeOnRoad(x, z, 3.5)) continue;
+          if (IS_MOBILE && treeHash(x, z, 21) < 0.5) continue;   // half density on phones
           out.push({
             x, z, type: Math.floor(treeHash(x, z) * 2) % 2,
             s: (0.8 + treeHash(x, z, 9) * 0.35) * (0.88 + treeHash(x, z, 3) * 0.28),
@@ -586,44 +588,67 @@ function chunkTrees(cx, cz) {
 // ============================================================================
 // CHUNK BUILD / DISPOSE / STREAM QUEUE
 // ============================================================================
+const roadHalfAt = g => (Math.abs(g % 210) < 1 ? 24 : 4);
+// Stretches of a road BETWEEN the roads that cross it, so kerbs, pavements and markings never run through an intersection
+function spansAlong(lo, hi) {
+  const out = [];
+  for (let g = Math.floor(lo / 70) * 70 - 70; g <= hi; g += 70) {
+    const s0 = Math.max(g + roadHalfAt(g), lo), e0 = Math.min(g + 70 - roadHalfAt(g + 70), hi);
+    if (e0 - s0 > 0.5) out.push([s0, e0]);
+  }
+  return out;
+}
+const poleInRoad = q => { const g = Math.round(q / 70) * 70; return Math.abs(q - g) < roadHalfAt(g) + 1.5; };
+
 function buildRoads(cx, cz, group, asphaltRecs) {
   const xMin = cx * CHUNK_SIZE, xMax = xMin + CHUNK_SIZE, zMin = cz * CHUNK_SIZE, zMax = zMin + CHUNK_SIZE;
   const midX = (xMin + xMax) / 2, midZ = (zMin + zMax) / 2;
   const pvm = [], kerb = [], white = [], yellow = [], poles = [], arms = [], heads = [], pools = [];
-  for (let gx = Math.floor(xMin / 70) * 70; gx < xMax; gx += 70) {
+  const spansZ = spansAlong(zMin, zMax), spansX = spansAlong(xMin, xMax);
+
+  for (let gx = Math.floor(xMin / 70) * 70; gx < xMax; gx += 70) {   // roads running along z
     if (gx < -5180 || gx > 5180 || gx < xMin) continue;
     const isAve = Math.abs(gx % 210) < 1, half = isAve ? 24 : 4;
     asphaltRecs.push({ x: gx, y: isAve ? -0.12 : -0.16, z: midZ, sx: half * 2, sy: isAve ? 0.18 : 0.12, sz: CHUNK_SIZE });
-    for (const side of [-1, 1]) {
-      kerb.push({ x: gx + side * (half + 0.12), y: 0.05, z: midZ, sx: 0.24, sy: 0.18, sz: CHUNK_SIZE });
-      pvm.push({ x: gx + side * (half + 1.49), y: 0.02, z: midZ, sx: 2.5, sy: 0.12, sz: CHUNK_SIZE });
+    for (const [s0, e0] of spansZ) {
+      const mz = (s0 + e0) / 2, len = e0 - s0;
+      for (const side of [-1, 1]) {
+        kerb.push({ x: gx + side * (half + 0.12), y: 0.05, z: mz, sx: 0.24, sy: 0.18, sz: len });
+        pvm.push({ x: gx + side * (half + 1.49), y: 0.02, z: mz, sx: 2.5, sy: 0.12, sz: len });
+      }
+      if (isAve) {
+        yellow.push({ x: gx - 0.42, y: 0.095, z: mz, sx: 0.22, sy: 0.03, sz: len }, { x: gx + 0.42, y: 0.095, z: mz, sx: 0.22, sy: 0.03, sz: len });
+        for (let q = Math.ceil((s0 + 2) / 14) * 14; q <= e0 - 2; q += 14)
+          white.push({ x: gx - 12, y: 0.095, z: q, sx: 0.15, sy: 0.03, sz: 4 }, { x: gx + 12, y: 0.095, z: q, sx: 0.15, sy: 0.03, sz: 4 });
+      } else for (let q = Math.ceil((s0 + 2) / 28) * 28; q <= e0 - 2; q += 28) white.push({ x: gx, y: 0.03, z: q, sx: 0.12, sy: 0.03, sz: 4 });
     }
-    if (isAve) {
-      yellow.push({ x: gx - 0.42, y: 0.095, z: midZ, sx: 0.22, sy: 0.03, sz: CHUNK_SIZE }, { x: gx + 0.42, y: 0.095, z: midZ, sx: 0.22, sy: 0.03, sz: CHUNK_SIZE });
-      for (let q = Math.ceil(zMin / 14) * 14; q < zMax; q += 14)
-        white.push({ x: gx - 12, y: 0.095, z: q, sx: 0.15, sy: 0.03, sz: 4 }, { x: gx + 12, y: 0.095, z: q, sx: 0.15, sy: 0.03, sz: 4 });
-      for (let q = Math.ceil(zMin / 105) * 105; q < zMax; q += 105) for (const side of [-1, 1]) {
+    if (isAve) for (let q = Math.ceil(zMin / 105) * 105; q < zMax; q += 105) {
+      if (poleInRoad(q)) continue;
+      for (const side of [-1, 1]) {
         const px = gx + side * 27.2, rot = side < 0 ? 0 : Math.PI, hx = px + Math.cos(rot) * 5.2;
         poles.push({ x: px, y: 0, z: q, ry: rot, sx: 1, sy: 1, sz: 1 });
         arms.push({ x: px, y: 0, z: q, ry: rot, sx: 5.8, sy: 1, sz: 1 });
         heads.push({ x: hx, y: 0, z: q, ry: rot, sx: 1, sy: 1, sz: 1 });
         pools.push({ x: hx, y: 0.1, z: q, sx: 120, sy: 1, sz: 120 });
       }
-    } else for (let q = Math.ceil(zMin / 28) * 28; q < zMax; q += 28) white.push({ x: gx, y: 0.03, z: q, sx: 0.12, sy: 0.03, sz: 4 });
+    }
   }
-  for (let gz = Math.floor(zMin / 70) * 70; gz < zMax; gz += 70) {
+  for (let gz = Math.floor(zMin / 70) * 70; gz < zMax; gz += 70) {   // roads running along x
     if (gz < -5180 || gz > 5180 || gz < zMin) continue;
     const isAve = Math.abs(gz % 210) < 1, half = isAve ? 24 : 4;
     asphaltRecs.push({ x: midX, y: isAve ? -0.12 : -0.16, z: gz, sx: CHUNK_SIZE, sy: isAve ? 0.18 : 0.12, sz: half * 2 });
-    for (const side of [-1, 1]) {
-      kerb.push({ x: midX, y: 0.05, z: gz + side * (half + 0.12), sx: CHUNK_SIZE, sy: 0.18, sz: 0.24 });
-      pvm.push({ x: midX, y: 0.02, z: gz + side * (half + 1.49), sx: CHUNK_SIZE, sy: 0.12, sz: 2.5 });
+    for (const [s0, e0] of spansX) {
+      const mx = (s0 + e0) / 2, len = e0 - s0;
+      for (const side of [-1, 1]) {
+        kerb.push({ x: mx, y: 0.05, z: gz + side * (half + 0.12), sx: len, sy: 0.18, sz: 0.24 });
+        pvm.push({ x: mx, y: 0.02, z: gz + side * (half + 1.49), sx: len, sy: 0.12, sz: 2.5 });
+      }
+      if (isAve) {
+        yellow.push({ x: mx, y: 0.095, z: gz - 0.42, sx: len, sy: 0.03, sz: 0.22 }, { x: mx, y: 0.095, z: gz + 0.42, sx: len, sy: 0.03, sz: 0.22 });
+        for (let q = Math.ceil((s0 + 2) / 14) * 14; q <= e0 - 2; q += 14)
+          white.push({ x: q, y: 0.095, z: gz - 12, sx: 4, sy: 0.03, sz: 0.15 }, { x: q, y: 0.095, z: gz + 12, sx: 4, sy: 0.03, sz: 0.15 });
+      } else for (let q = Math.ceil((s0 + 2) / 28) * 28; q <= e0 - 2; q += 28) white.push({ x: q, y: 0.03, z: gz, sx: 4, sy: 0.03, sz: 0.12 });
     }
-    if (isAve) {
-      yellow.push({ x: midX, y: 0.095, z: gz - 0.42, sx: CHUNK_SIZE, sy: 0.03, sz: 0.22 }, { x: midX, y: 0.095, z: gz + 0.42, sx: CHUNK_SIZE, sy: 0.03, sz: 0.22 });
-      for (let q = Math.ceil(xMin / 14) * 14; q < xMax; q += 14)
-        white.push({ x: q, y: 0.095, z: gz - 12, sx: 4, sy: 0.03, sz: 0.15 }, { x: q, y: 0.095, z: gz + 12, sx: 4, sy: 0.03, sz: 0.15 });
-    } else for (let q = Math.ceil(xMin / 28) * 28; q < xMax; q += 28) white.push({ x: q, y: 0.03, z: gz, sx: 4, sy: 0.03, sz: 0.12 });
   }
   batch(asphaltRecs, UNIT_BOX, asphaltMat, group);
   batch(pvm, UNIT_BOX, pavementMat, group);
@@ -633,34 +658,34 @@ function buildRoads(cx, cz, group, asphaltRecs) {
   batch(poles, poleGeo, poleMat, group);
   batch(arms, armGeo, poleMat, group);
   batch(heads, headGeo, lampGlow, group);
-  batch(pools, UNIT_PLANE_XZ, slPoolMat, group, false, 2);
+  if (!IS_MOBILE) batch(pools, UNIT_PLANE_XZ, slPoolMat, group, false, 2);   // additive overdraw: desktop only
 }
 
+// A chunk is built in small jobs spread over frames, so no single frame does all the work.
+const taskQueue = [];
 function buildChunkContent(cx, cz) {
   const key = chunkKey(cx, cz);
   if (loadedChunks.has(key)) return;
-  const group = new THREE.Group(), disposables = [];
-  const entry = { cx, cz, group, disposables };
+  const entry = { cx, cz, group: new THREE.Group(), disposables: [], dead: false };
   loadedChunks.set(key, entry);
   const xMin = cx * CHUNK_SIZE, zMin = cz * CHUNK_SIZE;
   if (xMin + CHUNK_SIZE < -CITY_HALF || xMin > CITY_HALF || zMin + CHUNK_SIZE < -CITY_HALF || zMin > CITY_HALF) return; // off the map
-
-  const boxes = [];   // every coloured box in this chunk -> ONE instanced draw call
+  scene.add(entry.group);
+  const group = entry.group, bp = chunkBlueprints.get(key), boxes = [], asphalt = [];
   const box = (w, h, d, color, x, y, z) => boxes.push({ x, y: y + h / 2, z, sx: w, sy: h, sz: d, color });
-  const asphalt = [], bp = chunkBlueprints.get(key);
+  const job = fn => taskQueue.push({ entry, fn });
 
-  // Infill buildings (computed from block coordinates, assigned to the chunk holding their centre)
-  for (let bi = Math.floor(xMin / 70) - 1, e = Math.ceil((xMin + CHUNK_SIZE) / 70) + 1; bi <= e; bi++)
-    for (let bj = Math.floor(zMin / 70) - 1, f = Math.ceil((zMin + CHUNK_SIZE) / 70) + 1; bj <= f; bj++) {
-      const r = infillAt(bi, bj);
-      if (!r || Math.floor(r.x / CHUNK_SIZE) !== cx || Math.floor(r.z / CHUNK_SIZE) !== cz) continue;
-      boxes.push({ x: r.x, y: r.h / 2, z: r.z, sx: r.w, sy: r.h, sz: r.d, color: r.color });
-      boxes.push({ x: r.x, y: r.h + 0.25, z: r.z, sx: r.w + 1, sy: 0.5, sz: r.d + 1, color: 0x8e5140 });
-    }
-
-  if (bp) {
+  job(() => {   // 1. collect every coloured box (buildings, roofs, windows, facilities)
+    for (let bi = Math.floor(xMin / 70) - 1, e = Math.ceil((xMin + CHUNK_SIZE) / 70) + 1; bi <= e; bi++)
+      for (let bj = Math.floor(zMin / 70) - 1, f = Math.ceil((zMin + CHUNK_SIZE) / 70) + 1; bj <= f; bj++) {
+        const r = infillAt(bi, bj);
+        if (!r || Math.floor(r.x / CHUNK_SIZE) !== cx || Math.floor(r.z / CHUNK_SIZE) !== cz) continue;
+        boxes.push({ x: r.x, y: r.h / 2, z: r.z, sx: r.w, sy: r.h, sz: r.d, color: r.color });
+        boxes.push({ x: r.x, y: r.h + 0.25, z: r.z, sx: r.w + 1, sy: 0.5, sz: r.d + 1, color: 0x8e5140 });
+      }
+    if (!bp) return;
     const S = BUILDING_SCALE, stepY = IS_MOBILE ? 6.4 : 3.2;
-    for (const b of bp.buildings) {   // detailed district buildings
+    for (const b of bp.buildings) {
       boxes.push({ x: b.x, y: S * b.h / 2, z: b.z, sx: b.w * S, sy: b.h * S, sz: b.d * S, color: WALLS[Math.abs(b.seed) % WALLS.length] });
       boxes.push({ x: b.x, y: S * (b.h + 0.18), z: b.z, sx: (b.w + 0.35) * S, sy: 0.5 * S, sz: (b.d + 0.35) * S, color: ROOFS[Math.abs(b.seed + 2) % ROOFS.length] });
       if (b.kind === 'office' || b.kind === 'apartment' || b.kind === 'residential')
@@ -684,10 +709,35 @@ function buildChunkContent(cx, cz) {
         box(12 * s, 4.4 * s, 7 * s, C.hall, f.x + 9 * s, 0, f.z + 9 * s);
       }
     }
+  });
+  job(() => { batch(boxes, UNIT_BOX, instMat, group, true); });          // 2. one draw call for all boxes
+  job(() => { buildRoads(cx, cz, group, asphalt); });                       // 3. roads, kerbs, markings, lamps
+  job(() => {                                                               // 4. palms
+    const trees = chunkTrees(cx, cz);
+    if (!trees.length) return;
+    for (let type = 0; type < 2; type++) {
+      const recs = [];
+      for (const t of trees) {
+        if (t.type !== type) continue;
+        const sc = t.s * TREE_TYPES[type].base;
+        recs.push({ x: t.x, y: 0, z: t.z, ry: t.rot, sx: sc, sy: IS_MOBILE ? sc * TREE_FAR_STRETCH[type] : sc, sz: sc, tr: t.tr, tg: t.tg, tb: t.tb });
+      }
+      batch(recs, IS_MOBILE ? TREE_FAR_GEO : TREE_TYPES[type].geo, treeMat, group, true);
+    }
+    if (TREE_SHADE_DECALS) {
+      batch(trees.map(t => {
+        const T = TREE_TYPES[t.type], sc = t.s * T.base, h = T.crownY * sc;
+        const ox = (-TREE_SUN.x / TREE_SUN.y) * h, oz = (-TREE_SUN.z / TREE_SUN.y) * h, w = T.shade * sc * 1.5;
+        return { x: t.x + ox, y: 0.16, z: t.z + oz, ry: Math.atan2(-oz, ox), sx: w, sy: 1, sz: w };
+      }), UNIT_PLANE_XZ, shadeMat, group, false, 2);
+    }
+  });
+  job(() => {                                                               // 5. signs
+    if (!bp) return;
     for (const s of bp.signs) {
       const tex = makeCompactSignTexture(s.text, s.color);
       const faceMat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
-      disposables.push(tex, faceMat);
+      entry.disposables.push(tex, faceMat);
       const yaw = s.axis === 'z' ? 0 : Math.PI / 2;
       if (s.type === 'gateway') {
         const g = new THREE.Group();
@@ -703,37 +753,13 @@ function buildChunkContent(cx, cz) {
         group.add(board);
       }
     }
-  }
-
-  buildRoads(cx, cz, group, asphalt);
-  batch(boxes, UNIT_BOX, instMat, group, true);
-
-  const trees = chunkTrees(cx, cz);
-  if (trees.length) {
-    for (let type = 0; type < 2; type++) {
-      const recs = [];
-      for (const t of trees) {
-        if (t.type !== type) continue;
-        const sc = t.s * TREE_TYPES[type].base;
-        recs.push({ x: t.x, y: 0, z: t.z, ry: t.rot, sx: sc, sy: IS_MOBILE ? sc * TREE_FAR_STRETCH[type] : sc, sz: sc, tr: t.tr, tg: t.tg, tb: t.tb });
-      }
-      batch(recs, IS_MOBILE ? TREE_FAR_GEO : TREE_TYPES[type].geo, treeMat, group, true);
-    }
-    if (TREE_SHADE_DECALS) {
-      const recs = trees.map(t => {
-        const T = TREE_TYPES[t.type], sc = t.s * T.base, h = T.crownY * sc;
-        const ox = (-TREE_SUN.x / TREE_SUN.y) * h, oz = (-TREE_SUN.z / TREE_SUN.y) * h, w = T.shade * sc * 1.5;
-        return { x: t.x + ox, y: 0.16, z: t.z + oz, ry: Math.atan2(-oz, ox), sx: w, sy: 1, sz: w };
-      });
-      batch(recs, UNIT_PLANE_XZ, shadeMat, group, false, 2);
-    }
-  }
-  scene.add(group);
+  });
 }
 
 function unloadChunk(key) {
   const ch = loadedChunks.get(key);
   if (!ch) return;
+  ch.dead = true;
   scene.remove(ch.group);
   ch.group.traverse(o => { if (o.isInstancedMesh) o.dispose(); });   // frees instance buffers; shared geometry/materials stay
   for (const d of ch.disposables) d.dispose();                         // per-chunk sign textures + materials
@@ -761,10 +787,19 @@ function updateStreamedChunks(force = false) {
   buildQueue.sort((a, b) => a.d - b.d);
   for (const [key, ch] of loadedChunks) if (distToChunk(ch.cx, ch.cz) > UNLOAD_RADIUS) unloadChunk(key);
 }
-function pumpChunks(budgetMs, minCount = 1) {   // spread builds over frames
+function pumpChunks(budgetMs, minTasks = 1) {   // run queued chunk jobs until the frame budget is spent
   const t0 = performance.now();
   let n = 0;
-  while (buildQueue.length && (n < minCount || performance.now() - t0 < budgetMs)) { const c = buildQueue.shift(); buildChunkContent(c.cx, c.cz); n++; }
+  for (;;) {
+    if (n >= minTasks && performance.now() - t0 >= budgetMs) break;
+    if (!taskQueue.length) {
+      if (!buildQueue.length) break;
+      const c = buildQueue.shift(); buildChunkContent(c.cx, c.cz); continue;
+    }
+    const t = taskQueue.shift();
+    if (!t.entry.dead) t.fn();
+    n++;
+  }
 }
 
 // ============================================================================
@@ -822,7 +857,8 @@ player.position.set(0, 0, 5);
 const loadingBadge = document.createElement('div');
 loadingBadge.id = 'modelLoading'; loadingBadge.textContent = 'Loading your character…';
 document.body.appendChild(loadingBadge);
-new GLTFLoader().load('./models/The_Miami_Dealer.glb', gltf => {
+if (NO_AVATAR) { rebuildAvatar(avatarSettings); player.visible = true; loadingBadge.remove(); }
+else new GLTFLoader().load('./models/The_Miami_Dealer.glb', gltf => {
   avatarModel = gltf.scene;
   const size = new THREE.Box3().setFromObject(avatarModel).getSize(new THREE.Vector3());
   avatarModel.scale.setScalar(2.35 / (size.y || 2.3));
@@ -1057,6 +1093,12 @@ document.querySelectorAll('.mobile-pad button').forEach(b => {
 // ============================================================================
 // MAIN LOOP
 // ============================================================================
+let dbgEl = null;
+if (DEBUG) {
+  dbgEl = document.createElement('div');
+  dbgEl.style.cssText = 'position:fixed;left:6px;top:6px;z-index:13000;background:rgba(0,0,0,.7);color:#9f9;font:11px/1.35 monospace;padding:6px 8px;border-radius:6px;pointer-events:none;white-space:pre';
+  document.body.appendChild(dbgEl);
+}
 const clockEl = document.querySelector('#clock'), districtEl = document.querySelector('.stat-row b');
 let uiUpdateElapsed = 1, fpsSampleTime = 0, fpsFrames = 0, slowSamples = 0, fastSamples = 0;
 const clock = new THREE.Clock();
@@ -1070,7 +1112,7 @@ function animate() {
   fpsSampleTime += rawDt; fpsFrames++;
   if (fpsSampleTime >= 2) {   // adaptive resolution: drops when slow, recovers when there is headroom
     const fps = fpsFrames / fpsSampleTime;
-    if (DEBUG) console.log(`fps ${fps.toFixed(0)} calls ${renderer.info.render.calls} tris ${renderer.info.render.triangles} geo ${renderer.info.memory.geometries} tex ${renderer.info.memory.textures} chunks ${loadedChunks.size} scale ${renderScale.toFixed(1)}`);
+    if (dbgEl) dbgEl.textContent = `fps ${fps.toFixed(0)}  scale ${renderScale.toFixed(2)}\ncalls ${renderer.info.render.calls}  tris ${(renderer.info.render.triangles / 1000).toFixed(0)}k\ngeometries ${renderer.info.memory.geometries}  textures ${renderer.info.memory.textures}\nchunks ${loadedChunks.size}  jobs ${taskQueue.length}\nJS heap ${performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) + ' MB' : 'n/a'}`;
     fpsSampleTime = 0; fpsFrames = 0;
     if (fps < 26) { slowSamples++; fastSamples = 0; } else if (fps > 55) { fastSamples++; slowSamples = 0; } else slowSamples = fastSamples = 0;
     if (slowSamples >= 2 && renderScale > 0.6) { renderScale = Math.max(0.6, renderScale - 0.1); applyResolution(); slowSamples = 0; }
@@ -1131,13 +1173,13 @@ function animate() {
   }
 
   updateStreamedChunks();
-  pumpChunks(IS_MOBILE ? 4 : 8, 1);
+  pumpChunks(IS_MOBILE ? 3 : 6, 1);
   updateCamera();
   if (!contextLost) renderer.render(scene, camera);
 }
 
 updateStreamedChunks(true);
-pumpChunks(0, 9);        // nearest chunks immediately, the rest are queued across frames
+pumpChunks(0, 30);       // first jobs immediately, the rest are spread across frames
 setDay();
 updateCamera();
 animate();
