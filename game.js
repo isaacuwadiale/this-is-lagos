@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.78-BUILDING-ROAD-CLEARANCE: restored street features + streamed, instanced chunks
+// THIS IS LAGOS v0.79-RED-WALKWAYS-BUS-STOPS: restored street features + streamed, instanced chunks
 // Target: < 400 MB on phones. Add ?debug to the URL to log draw calls / GPU memory.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -80,7 +80,7 @@ const cityGroundMat = newMat({ color: 0x789b70, roughness: 0.85 });
 cityGroundMat.polygonOffset = true; cityGroundMat.polygonOffsetFactor = 2; cityGroundMat.polygonOffsetUnits = 2;
 const asphaltMat = newMat({ color: 0x303735, roughness: 0.85 });
 asphaltMat.polygonOffset = true; asphaltMat.polygonOffsetFactor = -1; asphaltMat.polygonOffsetUnits = -1;
-const pavementMat = mat(0xcbd1c7), kerbEdgeMat = mat(0xaeb8ad);
+const pavementMat = mat(0xa8452f, 0.92), kerbEdgeMat = mat(0xd8d2c4);   // red brick walkway + pale kerb
 const paintWhite = basicMat(0xf4f2df, -2), paintYellow = basicMat(0xf1c84b, -2);
 const lagoonMat = mat(0x3f8f9a, 0.35, 0.12), sandMat = mat(0xc7ad83);
 
@@ -579,22 +579,27 @@ function treeOnRoad(x, z, margin = 3.4) {
   return Math.abs(x - gx) < hx + margin || Math.abs(z - gz) < hz + margin;
 }
 function chunkTrees(cx, cz) {
+  // Trees stand on the HOUSE side of the red walkway (TREE_LINE from the road edge), never on the walkway itself,
+  // and keep clear of the crossing-road corners, lamp poles and bus shelters.
   const out = [], lo = [cx * CHUNK_SIZE, cz * CHUNK_SIZE];
   for (const axis of ['z', 'x']) {
     const aLo = axis === 'z' ? lo[0] : lo[1], qLo = axis === 'z' ? lo[1] : lo[0];
-    for (let g = Math.ceil((aLo - 32) / 70) * 70; g <= aLo + CHUNK_SIZE + 32; g += 70) {
+    for (let g = Math.ceil((aLo - 44) / 70) * 70; g <= aLo + CHUNK_SIZE + 44; g += 70) {
       if (g < -5180 || g > 5180) continue;
       const avenue = Math.abs(g % 210) < 1, half = avenue ? 24 : 4, SP = avenue ? 10 : 12;
+      const fa = furnitureAlong(g, qLo - 12, qLo + CHUNK_SIZE + 12);
       for (const side of [-1, 1]) {
         const q0 = -5140 + (side > 0 ? SP / 2 : 0);
         for (let n = Math.max(0, Math.floor((qLo - 2 - q0) / SP)), nMax = Math.ceil((qLo + CHUNK_SIZE + 2 - q0) / SP); n <= nMax; n++) {
           const q = q0 + n * SP;
           if (q > 5140) break;
           const jq = q + (treeHash(g, q, 11 + side) - 0.5) * 1.6;
-          const off = g + side * (half + 3.5 + treeHash(q, g, 13) * 0.4);
+          const off = g + side * (half + TREE_LINE + treeHash(q, g, 13) * 0.4);
           const x = axis === 'z' ? off : jq, z = axis === 'z' ? jq : off;
           if (Math.floor(x / CHUNK_SIZE) !== cx || Math.floor(z / CHUNK_SIZE) !== cz) continue;
-          if (treeOnRoad(x, z, 3.5)) continue;
+          const gc = Math.round(jq / 70) * 70;                                    // nearest crossing road
+          if (Math.abs(jq - gc) < roadHalfAt(gc) + CORNER_PAD) continue;           // keep the corner walkways clear
+          if (fa.poles.some(p => Math.abs(p - jq) < 4) || fa.stops.some(p => Math.abs(p - jq) < 8.5)) continue;
           if (IS_MOBILE && treeHash(x, z, 21) < 0.5) continue;   // half density on phones
           out.push({
             x, z, type: Math.floor(treeHash(x, z) * 2) % 2,
@@ -624,12 +629,36 @@ function spansAlong(lo, hi) {
 }
 const poleInRoad = q => { const g = Math.round(q / 70) * 70; return Math.abs(q - g) < roadHalfAt(g) + 1.5; };
 
+// ---- Street furniture layout ---------------------------------------------------------------------------------
+// Every road has a RED WALKWAY filling the whole gap between its kerb and the building line (WALK_W = the 12-unit setback).
+// Lamp poles and trees stand on the house side of that walkway; bus shelters stand near the kerb, open to the road.
+const WALK_W = ROAD_EDGE_CLEARANCE;
+const SHELTER_OFFSET = 4.6;                    // shelter centre, from the road edge
+const TREE_LINE = 8.9, POLE_LINE = 10.7;       // tree trunks / lamp poles, from the road edge (house side of the walkway)
+const AVE_ARM = 9.5, LOCAL_ARM = 8.5;          // lamp arm lengths: they reach out over the kerb
+const CORNER_PAD = WALK_W + 1.5;               // keep furniture out of the crossing road's own walkway
+// Furniture positions along road line g (a constant x or z) for along-road coordinates in [lo, hi).
+// One lamp per block on avenues (every second block on local roads); a bus stop in every second avenue block.
+function furnitureAlong(g, lo, hi) {
+  const avenue = Math.abs(g % 210) < 1, out = { poles: [], stops: [], avenue };
+  for (let a = Math.floor(lo / 70) * 70 - 70; a < hi; a += 70) {
+    if (a < -5180 || a + 70 > 5180) continue;
+    const l0 = a + roadHalfAt(a) + CORNER_PAD, l1 = a + 70 - roadHalfAt(a + 70) - CORNER_PAD;
+    if (l1 - l0 < 8) continue;
+    const mid = (l0 + l1) / 2, even = Math.round(a / 70) % 2 === 0, stop = avenue && even;
+    if (stop && mid >= lo && mid < hi) out.stops.push(mid);
+    if (avenue || even) { const q = mid + (stop ? 6 : 0); if (q >= lo && q < hi) out.poles.push(q); }   // pole sits beside the shelter, not behind it
+  }
+  return out;
+}
+
 function buildRoads(cx, cz, group, asphaltRecs) {
   const xMin = cx * CHUNK_SIZE, xMax = xMin + CHUNK_SIZE, zMin = cz * CHUNK_SIZE, zMax = zMin + CHUNK_SIZE;
   const midX = (xMin + xMax) / 2, midZ = (zMin + zMax) / 2;
   const pvm = [], kerb = [], white = [], yellow = [], poles = [], arms = [], heads = [], pools = [];
   const shelterRoofs = [], shelterBacks = [], shelterSides = [], shelterBenches = [], shelterFrames = [], busLaneMarks = [];
   const spansZ = spansAlong(zMin, zMax), spansX = spansAlong(xMin, xMax);
+  const PAVE_W = WALK_W - 0.24, PAVE_C = 0.24 + PAVE_W / 2;   // red walkway: from the kerb out to the building line
 
   for (let gx = Math.floor(xMin / 70) * 70; gx < xMax; gx += 70) {   // roads running along z
     if (gx < -5180 || gx > 5180 || gx < xMin) continue;
@@ -639,7 +668,7 @@ function buildRoads(cx, cz, group, asphaltRecs) {
       const mz = (s0 + e0) / 2, len = e0 - s0;
       for (const side of [-1, 1]) {
         kerb.push({ x: gx + side * (half + 0.12), y: 0.05, z: mz, sx: 0.24, sy: 0.18, sz: len });
-        pvm.push({ x: gx + side * (half + 1.49), y: 0.02, z: mz, sx: 2.5, sy: 0.12, sz: len });
+        pvm.push({ x: gx + side * (half + PAVE_C), y: 0.02, z: mz, sx: PAVE_W, sy: 0.12, sz: len });
       }
       if (isAve) {
         yellow.push({ x: gx - 0.42, y: 0.095, z: mz, sx: 0.22, sy: 0.03, sz: len }, { x: gx + 0.42, y: 0.095, z: mz, sx: 0.22, sy: 0.03, sz: len });
@@ -647,36 +676,29 @@ function buildRoads(cx, cz, group, asphaltRecs) {
           white.push({ x: gx - 12, y: 0.095, z: q, sx: 0.15, sy: 0.03, sz: 4 }, { x: gx + 12, y: 0.095, z: q, sx: 0.15, sy: 0.03, sz: 4 });
       } else for (let q = Math.ceil((s0 + 2) / 28) * 28; q <= e0 - 2; q += 28) white.push({ x: gx, y: 0.03, z: q, sx: 0.12, sy: 0.03, sz: 4 });
     }
-    // Streetlights on avenues and local roads. Local roads use a wider spacing.
-    {
-      const spacing = isAve ? 105 : 140, offset = half + (isAve ? 3.2 : 6.5);
-      for (let q = Math.ceil((zMin + 35) / spacing) * spacing + 35; q < zMax; q += spacing) {
-        if (poleInRoad(q)) continue;
-        for (const side of [-1, 1]) {
-          const px = gx + side * offset, rot = side < 0 ? 0 : Math.PI, armLen = isAve ? 5.8 : 4.0;
-          const hx = px + Math.cos(rot) * armLen * 0.9;
-          poles.push({ x: px, y: 0, z: q, ry: rot, sx: 1, sy: 1, sz: 1 });
-          arms.push({ x: px, y: 0, z: q, ry: rot, sx: armLen, sy: 1, sz: 1 });
-          heads.push({ x: hx, y: 0, z: q, ry: rot, sx: 1, sy: 1, sz: 1 });
-          if (isAve) pools.push({ x: hx, y: 0.1, z: q, sx: 120, sy: 1, sz: 120 });
-        }
-      }
+    const fa = furnitureAlong(gx, zMin, zMax);
+    // Streetlights: pole on the house side of the walkway, arm reaching out toward the road, lamp head on the arm's end.
+    const armLen = isAve ? AVE_ARM : LOCAL_ARM;
+    for (const q of fa.poles) for (const side of [-1, 1]) {
+      const px = gx + side * (half + POLE_LINE), toRoad = -side;
+      const rot = side < 0 ? 0 : Math.PI;                     // the arm's local +x axis must point toward the road
+      const hx = px + toRoad * armLen * 0.9;
+      poles.push({ x: px, y: 0, z: q, ry: rot, sx: 1, sy: 1, sz: 1 });
+      arms.push({ x: px, y: 0, z: q, ry: rot, sx: armLen, sy: 1, sz: 1 });
+      heads.push({ x: hx, y: 0, z: q, ry: rot, sx: 1, sy: 1, sz: 1 });
+      if (isAve) pools.push({ x: hx, y: 0.1, z: q, sx: 120, sy: 1, sz: 120 });
     }
-    // A compact shelter every 630 m on major avenues, on both pavements.
-    if (isAve) for (let q = Math.ceil((zMin + 35) / 630) * 630 + 35; q < zMax; q += 630) {
-      if (poleInRoad(q)) continue;
-      for (const side of [-1, 1]) {
-        const sx = gx + side * 32.5;
-        // One shelter on each pavement, directly opposite its matching shelter.
-        shelterRoofs.push({ x: sx, y: shelterRoofHeight - 0.16, z: q, sx: 3.4, sy: 0.32, sz: 7.2 });
-        shelterBacks.push({ x: sx - side * 1.55, y: shelterWallHeight / 2, z: q, sx: 0.16, sy: shelterWallHeight, sz: 6.8 });
-        shelterSides.push({ x: sx, y: shelterWallHeight / 2, z: q - 3.3, sx: 3.1, sy: shelterWallHeight, sz: 0.14 }, { x: sx, y: shelterWallHeight / 2, z: q + 3.3, sx: 3.1, sy: shelterWallHeight, sz: 0.14 });
-        for (const dx of [-1.48, 1.48]) for (const dz of [-3.18, 3.18])
-          shelterFrames.push({ x: sx + dx, y: shelterRoofHeight / 2, z: q + dz, sx: 0.16, sy: shelterRoofHeight, sz: 0.16 });
-        shelterBenches.push({ x: sx + side * 0.35, y: 0.62, z: q, sx: 0.55, sy: 0.18, sz: 5.4 });
-        // Painted BUS legend in the traffic lane immediately beside this shelter.
-        busLaneMarks.push({ x: gx + side * 16.5, y: 0.115, z: q, sx: 8.5, sy: 1, sz: 2.8, ry: Math.PI / 2 });
-      }
+    // Bus shelters on both pavements of every avenue, directly opposite each other, open side toward the road,
+    // with a BUS legend painted in the kerb lane right in front of each one.
+    if (isAve) for (const q of fa.stops) for (const side of [-1, 1]) {
+      const sx = gx + side * (half + SHELTER_OFFSET);
+      shelterRoofs.push({ x: sx, y: shelterRoofHeight - 0.16, z: q, sx: 3.4, sy: 0.32, sz: 7.2 });
+      shelterBacks.push({ x: sx + side * 1.55, y: shelterWallHeight / 2, z: q, sx: 0.16, sy: shelterWallHeight, sz: 6.8 });   // back wall on the house side
+      shelterSides.push({ x: sx, y: shelterWallHeight / 2, z: q - 3.3, sx: 3.1, sy: shelterWallHeight, sz: 0.14 }, { x: sx, y: shelterWallHeight / 2, z: q + 3.3, sx: 3.1, sy: shelterWallHeight, sz: 0.14 });
+      for (const dx of [-1.48, 1.48]) for (const dz of [-3.18, 3.18])
+        shelterFrames.push({ x: sx + dx, y: shelterRoofHeight / 2, z: q + dz, sx: 0.16, sy: shelterRoofHeight, sz: 0.16 });
+      shelterBenches.push({ x: sx + side * 1.0, y: 0.62, z: q, sx: 0.55, sy: 0.18, sz: 5.4 });
+      busLaneMarks.push({ x: gx + side * (half - 6), y: 0.115, z: q, sx: 9, sy: 1, sz: 3.2, ry: side > 0 ? Math.PI / 2 : -Math.PI / 2 });
     }
   }
   for (let gz = Math.floor(zMin / 70) * 70; gz < zMax; gz += 70) {   // roads running along x
@@ -687,7 +709,7 @@ function buildRoads(cx, cz, group, asphaltRecs) {
       const mx = (s0 + e0) / 2, len = e0 - s0;
       for (const side of [-1, 1]) {
         kerb.push({ x: mx, y: 0.05, z: gz + side * (half + 0.12), sx: len, sy: 0.18, sz: 0.24 });
-        pvm.push({ x: mx, y: 0.02, z: gz + side * (half + 1.49), sx: len, sy: 0.12, sz: 2.5 });
+        pvm.push({ x: mx, y: 0.02, z: gz + side * (half + PAVE_C), sx: len, sy: 0.12, sz: PAVE_W });
       }
       if (isAve) {
         yellow.push({ x: mx, y: 0.095, z: gz - 0.42, sx: len, sy: 0.03, sz: 0.22 }, { x: mx, y: 0.095, z: gz + 0.42, sx: len, sy: 0.03, sz: 0.22 });
@@ -695,36 +717,28 @@ function buildRoads(cx, cz, group, asphaltRecs) {
           white.push({ x: q, y: 0.095, z: gz - 12, sx: 4, sy: 0.03, sz: 0.15 }, { x: q, y: 0.095, z: gz + 12, sx: 4, sy: 0.03, sz: 0.15 });
       } else for (let q = Math.ceil((s0 + 2) / 28) * 28; q <= e0 - 2; q += 28) white.push({ x: q, y: 0.03, z: gz, sx: 4, sy: 0.03, sz: 0.12 });
     }
-    // Streetlights on avenues and local roads running along the x axis.
-    {
-      const spacing = isAve ? 105 : 140, offset = half + (isAve ? 3.2 : 6.5);
-      for (let q = Math.ceil((xMin + 35) / spacing) * spacing + 35; q < xMax; q += spacing) {
-        if (poleInRoad(q)) continue;
-        for (const side of [-1, 1]) {
-          const pz = gz + side * offset, rot = side < 0 ? Math.PI / 2 : -Math.PI / 2, armLen = isAve ? 5.8 : 4.0;
-          const hz = pz + Math.sin(rot) * armLen * 0.9;
-          poles.push({ x: q, y: 0, z: pz, ry: rot, sx: 1, sy: 1, sz: 1 });
-          arms.push({ x: q, y: 0, z: pz, ry: rot, sx: armLen, sy: 1, sz: 1 });
-          heads.push({ x: q, y: 0, z: hz, ry: rot, sx: 1, sy: 1, sz: 1 });
-          if (isAve) pools.push({ x: q, y: 0.1, z: hz, sx: 120, sy: 1, sz: 120 });
-        }
-      }
+    const fa = furnitureAlong(gz, xMin, xMax);
+    const armLen = isAve ? AVE_ARM : LOCAL_ARM;
+    for (const q of fa.poles) for (const side of [-1, 1]) {
+      const pz = gz + side * (half + POLE_LINE), toRoad = -side;
+      // Rotating by +/-90 degrees turns the arm's local +x axis to world -/+z, so the sign is side * 90 degrees.
+      // (The old code used the opposite sign, so the arm pointed away from the road while the lamp head sat on the other side.)
+      const rot = side * Math.PI / 2;
+      const hz = pz + toRoad * armLen * 0.9;
+      poles.push({ x: q, y: 0, z: pz, ry: rot, sx: 1, sy: 1, sz: 1 });
+      arms.push({ x: q, y: 0, z: pz, ry: rot, sx: armLen, sy: 1, sz: 1 });
+      heads.push({ x: q, y: 0, z: hz, ry: rot, sx: 1, sy: 1, sz: 1 });
+      if (isAve) pools.push({ x: q, y: 0.1, z: hz, sx: 120, sy: 1, sz: 120 });
     }
-    // Matching shelters for major avenues running along x.
-    if (isAve) for (let q = Math.ceil((xMin + 35) / 630) * 630 + 35; q < xMax; q += 630) {
-      if (poleInRoad(q)) continue;
-      for (const side of [-1, 1]) {
-        const sz = gz + side * 32.5;
-        // Opposing shelter pair on the two pavements of this avenue.
-        shelterRoofs.push({ x: q, y: shelterRoofHeight - 0.16, z: sz, sx: 7.2, sy: 0.32, sz: 3.4 });
-        shelterBacks.push({ x: q, y: shelterWallHeight / 2, z: sz - side * 1.55, sx: 6.8, sy: shelterWallHeight, sz: 0.16 });
-        shelterSides.push({ x: q - 3.3, y: shelterWallHeight / 2, z: sz, sx: 0.14, sy: shelterWallHeight, sz: 3.1 }, { x: q + 3.3, y: shelterWallHeight / 2, z: sz, sx: 0.14, sy: shelterWallHeight, sz: 3.1 });
-        for (const dx of [-3.18, 3.18]) for (const dz of [-1.48, 1.48])
-          shelterFrames.push({ x: q + dx, y: shelterRoofHeight / 2, z: sz + dz, sx: 0.16, sy: shelterRoofHeight, sz: 0.16 });
-        shelterBenches.push({ x: q, y: 0.62, z: sz + side * 0.35, sx: 5.4, sy: 0.18, sz: 0.55 });
-        // BUS marking is on the lane nearest the matching pavement shelter.
-        busLaneMarks.push({ x: q, y: 0.115, z: gz + side * 16.5, sx: 8.5, sy: 1, sz: 2.8 });
-      }
+    if (isAve) for (const q of fa.stops) for (const side of [-1, 1]) {
+      const sz = gz + side * (half + SHELTER_OFFSET);
+      shelterRoofs.push({ x: q, y: shelterRoofHeight - 0.16, z: sz, sx: 7.2, sy: 0.32, sz: 3.4 });
+      shelterBacks.push({ x: q, y: shelterWallHeight / 2, z: sz + side * 1.55, sx: 6.8, sy: shelterWallHeight, sz: 0.16 });
+      shelterSides.push({ x: q - 3.3, y: shelterWallHeight / 2, z: sz, sx: 0.14, sy: shelterWallHeight, sz: 3.1 }, { x: q + 3.3, y: shelterWallHeight / 2, z: sz, sx: 0.14, sy: shelterWallHeight, sz: 3.1 });
+      for (const dx of [-3.18, 3.18]) for (const dz of [-1.48, 1.48])
+        shelterFrames.push({ x: q + dx, y: shelterRoofHeight / 2, z: sz + dz, sx: 0.16, sy: shelterRoofHeight, sz: 0.16 });
+      shelterBenches.push({ x: q, y: 0.62, z: sz + side * 1.0, sx: 5.4, sy: 0.18, sz: 0.55 });
+      busLaneMarks.push({ x: q, y: 0.115, z: gz + side * (half - 6), sx: 9, sy: 1, sz: 3.2, ry: side > 0 ? 0 : Math.PI });
     }
   }
   batch(asphaltRecs, UNIT_BOX, asphaltMat, group);
@@ -1155,13 +1169,13 @@ function updateStreetLighting(level) {
   slPoolMat.opacity = level * 0.85;
   slPoolMat.visible = level > 0.01;
   if (level <= 0.01) { for (const L of slRealLights) L.intensity = 0; return; }
-  const ax = Math.round(player.position.x / 210) * 210, cz = Math.round(player.position.z / 105) * 105, cand = [];
-  for (const sx of [-27.2, 27.2]) for (let k = -2; k <= 2; k++) {   // real lights go on actual avenue poles nearest the player
-    const x = ax + sx, z = cz + k * 105;
-    cand.push({ x, z, d: (x - player.position.x) ** 2 + (z - player.position.z) ** 2 });
-  }
+  const ax = Math.round(player.position.x / 210) * 210, az = Math.round(player.position.z / 210) * 210, cand = [];
+  const headOff = 24 + POLE_LINE - AVE_ARM * 0.9;   // lamp heads hang over the kerb side of the walkway
+  const add = (x, z) => cand.push({ x, z, d: (x - player.position.x) ** 2 + (z - player.position.z) ** 2 });
+  for (const q of furnitureAlong(ax, player.position.z - 320, player.position.z + 320).poles) for (const sd of [-1, 1]) add(ax + sd * headOff, q);
+  for (const q of furnitureAlong(az, player.position.x - 320, player.position.x + 320).poles) for (const sd of [-1, 1]) add(q, az + sd * headOff);
   cand.sort((a, b) => a.d - b.d);
-  slRealLights.forEach((L, i) => { L.position.set(cand[i].x, STREETLIGHT_HEIGHT - 1, cand[i].z); L.intensity = L.userData.peak * level; });
+  slRealLights.forEach((L, i) => { if (!cand[i]) { L.intensity = 0; return; } L.position.set(cand[i].x, STREETLIGHT_HEIGHT - 1, cand[i].z); L.intensity = L.userData.peak * level; });
 }
 const worldTimeEl = document.querySelector('#worldTime');
 function setDay() {
