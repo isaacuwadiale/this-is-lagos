@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.80-MODERN-SHELTERS-JUNCTIONS: restored street features + streamed, instanced chunks
+// THIS IS LAGOS v0.81-HIGHRISE-AVENUES: avenues only, big modern high-rise towers, streamed + instanced chunks
 // Target: < 400 MB on phones. Add ?debug to the URL to log draw calls / GPU memory.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -349,32 +349,24 @@ function makeCompactSignTexture(text, bgHex, subtext = '') {
 // ============================================================================
 // PLOT / ROAD HELPERS
 // ============================================================================
-// Keep every building at least one major-road lane width from the road edge.
-// Major avenues are 48 units wide; using four traffic lanes gives a 12-unit lane.
-// Apply the same 12-unit road-edge clearance to local roads for consistent setbacks.
+// Only the 48-wide avenues remain (every 210 units). All the old 70-unit local streets are gone, so every block is
+// one big 210 x 210 plot (138 x 138 usable once the avenue + walkway setback is taken off) for a single large tower.
 const MAJOR_LANE_WIDTH = 12;
-const ROAD_EDGE_CLEARANCE = MAJOR_LANE_WIDTH, BLOCK_SETBACK = MAJOR_LANE_WIDTH, BUILDING_SCALE = 4;
-const roadHalfWidthAt = v => (Math.abs((Math.round(v / 70) * 70) % 210) === 0 ? 24 : 4);
+const ROAD_EDGE_CLEARANCE = MAJOR_LANE_WIDTH, BLOCK_SETBACK = MAJOR_LANE_WIDTH;
+const ROAD_SPACING = 210, AVE_HALF = 24, BLOCK_N = 25;      // blocks run from -25 to +24 in x and z
+const blockIndex = (bi, bj) => (bi + BLOCK_N) * (BLOCK_N * 2) + (bj + BLOCK_N);
+const roadHalfWidthAt = () => AVE_HALF;
 function blockSpan(v) {
-  const a = Math.floor(v / 70) * 70, b = a + 70;
-  return [a + roadHalfWidthAt(a) + BLOCK_SETBACK, b - roadHalfWidthAt(b) - BLOCK_SETBACK];
+  const a = Math.floor(v / ROAD_SPACING) * ROAD_SPACING, b = a + ROAD_SPACING;
+  return [a + AVE_HALF + BLOCK_SETBACK, b - AVE_HALF - BLOCK_SETBACK];
 }
-function fitToBlock(x, z, w, d) {
-  const [x0, x1] = blockSpan(x), [z0, z1] = blockSpan(z);
-  return { x: (x0 + x1) / 2, z: (z0 + z1) / 2, w: Math.min(w, x1 - x0), d: Math.min(d, z1 - z0) };
-}
-function clearBuildingPlot(x, z, w, d, extra = 1) {
+function clearBuildingPlot(x, z, w, d, extra = 0) {
   const halfW = w / 2 + extra, halfD = d / 2 + extra;
-  // Measure from the actual road edge (centreline +/- half-width), not its centre.
-  // The footprint edge must remain one full major-road lane width beyond that edge.
-  for (let k = Math.floor((x - halfW) / 70) - 1, e = Math.ceil((x + halfW) / 70) + 1; k <= e; k++) {
-    const roadX = k * 70, roadHalf = roadHalfWidthAt(roadX);
-    if (Math.abs(x - roadX) < halfW + roadHalf + ROAD_EDGE_CLEARANCE) return false;
-  }
-  for (let k = Math.floor((z - halfD) / 70) - 1, e = Math.ceil((z + halfD) / 70) + 1; k <= e; k++) {
-    const roadZ = k * 70, roadHalf = roadHalfWidthAt(roadZ);
-    if (Math.abs(z - roadZ) < halfD + roadHalf + ROAD_EDGE_CLEARANCE) return false;
-  }
+  // The footprint edge must stay one full lane width (12) beyond the avenue edge (centreline +/- 24).
+  for (let k = Math.floor((x - halfW) / ROAD_SPACING) - 1, e = Math.ceil((x + halfW) / ROAD_SPACING) + 1; k <= e; k++)
+    if (Math.abs(x - k * ROAD_SPACING) < halfW + AVE_HALF + ROAD_EDGE_CLEARANCE) return false;
+  for (let k = Math.floor((z - halfD) / ROAD_SPACING) - 1, e = Math.ceil((z + halfD) / ROAD_SPACING) + 1; k <= e; k++)
+    if (Math.abs(z - k * ROAD_SPACING) < halfD + AVE_HALF + ROAD_EDGE_CLEARANCE) return false;
   if ((x - halfW) < 130 && (x + halfW) > -130 && Math.abs(z + 22) < halfD + 8.75) return false;
   return true;
 }
@@ -383,11 +375,11 @@ const overlaps = (list, x, z, w, d) => list.some(c => x + w / 2 + 2 > c.minX && 
 const claimedBlocks = new Set();
 const sportsLayout = new Map();
 function claimOpenBlock(x, z, minW, minD) {
-  const bx0 = Math.floor(x / 70), bz0 = Math.floor(z / 70), cands = [];
-  for (let i = -7; i <= 7; i++) for (let j = -7; j <= 7; j++) {
+  const bx0 = Math.floor(x / ROAD_SPACING), bz0 = Math.floor(z / ROAD_SPACING), cands = [];
+  for (let i = -3; i <= 3; i++) for (let j = -3; j <= 3; j++) {
     const bx = bx0 + i, bz = bz0 + j, key = bx + ',' + bz;
     if (claimedBlocks.has(key)) continue;
-    const [x0, x1] = blockSpan(bx * 70 + 35), [z0, z1] = blockSpan(bz * 70 + 35);
+    const [x0, x1] = blockSpan(bx * ROAD_SPACING + ROAD_SPACING / 2), [z0, z1] = blockSpan(bz * ROAD_SPACING + ROAD_SPACING / 2);
     if (x1 - x0 < minW || z1 - z0 < minD) continue;
     const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
     cands.push({ key, cx, cz, x0, x1, z0, z1, w: x1 - x0, d: z1 - z0, dist: Math.hypot(cx - x, cz - z) });
@@ -401,37 +393,272 @@ function claimOpenBlock(x, z, minW, minD) {
 function registerSign(text, x, z, width = 22, color = 0x176b43, y = 7, type = 'board', axis = 'z') {
   blueprintAtWorld(x, z).signs.push({ text, x, z, width, color, y, type, axis });
 }
+
+// ----------------------------------------------------------------------------
+// MODERN HIGH-RISE FACADES
+// Every building is a podium (glazed lobby) + 1-3 stacked tiers, each wrapped in a procedural facade texture whose UVs are
+// set so windows line up with whole floors and whole bays. Glass towers and solid-material towers (concrete, brick, stone,
+// terracotta, bronze panels...) are picked at random from FACADE_PRESETS.
+// ----------------------------------------------------------------------------
+const FLOOR_H = 9, BAY_W = 4.5, PODIUM_H = 14, TEX_CELLS = 4;
+const TEX_PX = IS_MOBILE ? 256 : 512;
+const FACADE_PRESETS = [
+  { style: 'curtain', wall: 0x1f2a30, glass: 0x4f86a8, glassy: true },   // 0  blue curtain wall
+  { style: 'curtain', wall: 0xc9d0d4, glass: 0x3c8c8c, glassy: true },   // 1  teal, silver frame
+  { style: 'curtain', wall: 0x2a3036, glass: 0x34444f, glassy: true },   // 2  graphite mirror glass
+  { style: 'curtain', wall: 0x20302b, glass: 0x4f9a86, glassy: true },   // 3  green glass
+  { style: 'curtain', wall: 0x3b2f24, glass: 0x9a7b52, glassy: true },   // 4  bronze glass
+  { style: 'curtain', wall: 0xd7dde0, glass: 0x7f93a3, glassy: true },   // 5  pale silver glass
+  { style: 'fins',    wall: 0xe9e6dc, glass: 0x4f86a8, glassy: true },   // 6  glass with white fins
+  { style: 'fins',    wall: 0x383d42, glass: 0x4a9a9a, glassy: true },   // 7  glass with black fins
+  { style: 'ribbon',  wall: 0xb9b7b0, glass: 0x35566e },                 // 8  concrete + ribbon windows
+  { style: 'ribbon',  wall: 0xefece4, glass: 0x39556b },                 // 9  white render ribbon
+  { style: 'ribbon',  wall: 0xd2b48c, glass: 0x46606e },                 // 10 sandstone ribbon
+  { style: 'punched', wall: 0x9c5a46, glass: 0x2f3f4a },                 // 11 brick
+  { style: 'punched', wall: 0xc2774f, glass: 0x34424c },                 // 12 terracotta
+  { style: 'punched', wall: 0xdcd0b4, glass: 0x3a4a56 },                 // 13 limestone
+  { style: 'punched', wall: 0x3d4247, glass: 0x6e8da0 },                 // 14 charcoal metal
+  { style: 'grid',    wall: 0xa9aaa5, glass: 0x405565 },                 // 15 deep concrete grid
+  { style: 'grid',    wall: 0xf0eee8, glass: 0x4a6377 },                 // 16 white grid
+  { style: 'grid',    wall: 0x7d6a55, glass: 0x3a4c58 },                 // 17 bronze panel grid
+  { style: 'bands',   wall: 0x2d3236, glass: 0x7fb0c8 },                 // 18 dark spandrel bands
+  { style: 'bands',   wall: 0x8aa08a, glass: 0x5f93ab },                 // 19 sage spandrel bands
+  { style: 'bands',   wall: 0xcfc5b0, glass: 0x4e7a92 }                  // 20 stone spandrel bands
+];
+const GLASS_PRESETS = FACADE_PRESETS.map((p, i) => p.glassy ? i : -1).filter(i => i >= 0);
+const SOLID_PRESETS = FACADE_PRESETS.map((p, i) => p.glassy ? -1 : i).filter(i => i >= 0);
+const ROOF_COLORS = [0x5b6063, 0x6d6a64, 0x474c50, 0x7a7e80];
+const CANOPY_COLORS = [0x1d2327, 0xe9e6de, 0xb06f3c, 0x2f4d5f, 0x8a1f2b];
+const HEIGHT_FLOORS = { office: [10, 55], apartment: [9, 46], mixed: [6, 28], residential: [4, 20], tenement: [3, 12], shop: [2, 8], market: [2, 6], duplex: [2, 8] };
+
+function rngFrom(seed) {   // small deterministic PRNG (mulberry32)
+  let t = (seed ^ 0x9e3779b9) >>> 0;
+  return () => { t = (t + 0x6D2B79F5) >>> 0; let r = Math.imul(t ^ (t >>> 15), 1 | t); r ^= r + Math.imul(r ^ (r >>> 7), 61 | r); return ((r ^ (r >>> 14)) >>> 0) / 4294967296; };
+}
+const hexRGB = hex => [(hex >> 16) & 255, (hex >> 8) & 255, hex & 255];
+const cssHex = (hex, f = 1) => { const [r, g, b] = hexRGB(hex); return `rgb(${Math.min(255, r * f | 0)},${Math.min(255, g * f | 0)},${Math.min(255, b * f | 0)})`; };
+const cssMix = (a, b, t) => { const A = hexRGB(a), B = hexRGB(b); return `rgb(${A.map((v, i) => Math.round(v + (B[i] - v) * t)).join(',')})`; };
+function facadeTexture(cv) {
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  const maxA = renderer.capabilities && renderer.capabilities.getMaxAnisotropy ? renderer.capabilities.getMaxAnisotropy() : 1;
+  t.anisotropy = Math.min(IS_MOBILE ? 2 : 8, maxA);
+  if ('colorSpace' in t) t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+// One texture tile = 4 bays across x 4 floors high, with a little random variation window to window.
+function makeTowerTexture(pi) {
+  const p = FACADE_PRESETS[pi], S = TEX_PX, n = TEX_CELLS, c = S / n, cv = document.createElement('canvas');
+  cv.width = cv.height = S;
+  const g = cv.getContext('2d'), R = rngFrom(pi * 977 + 11);
+  g.fillStyle = cssHex(p.wall); g.fillRect(0, 0, S, S);
+  for (let fy = 0; fy < n; fy++) for (let bx = 0; bx < n; bx++) {
+    const x0 = bx * c, y0 = fy * c, v = 0.84 + R() * 0.3, lit = R() < 0.1;
+    const glass = lit ? cssMix(p.glass, 0xffe0a0, 0.5) : cssHex(p.glass, v);
+    const sheen = () => {
+      const gr = g.createLinearGradient(x0, y0, x0 + c, y0 + c);
+      gr.addColorStop(0, 'rgba(255,255,255,.24)'); gr.addColorStop(0.5, 'rgba(255,255,255,0)'); gr.addColorStop(1, 'rgba(0,0,0,.2)');
+      g.fillStyle = gr;
+    };
+    if (p.style === 'curtain') {
+      g.fillStyle = glass; g.fillRect(x0, y0, c, c);
+      sheen(); g.fillRect(x0, y0, c, c);
+      g.fillStyle = 'rgba(0,0,0,.3)'; g.fillRect(x0, y0 + c * 0.78, c, c * 0.22);          // opaque spandrel glass
+      g.fillStyle = cssHex(p.wall); g.fillRect(x0, y0, c * 0.035, c); g.fillRect(x0, y0, c, c * 0.04);   // mullion + slab edge
+    } else if (p.style === 'fins') {
+      g.fillStyle = glass; g.fillRect(x0, y0, c, c);
+      sheen(); g.fillRect(x0, y0, c, c);
+      g.fillStyle = cssHex(p.wall); g.fillRect(x0, y0, c * 0.2, c); g.fillRect(x0, y0 + c * 0.82, c, c * 0.18);
+    } else if (p.style === 'ribbon') {
+      g.fillStyle = glass; g.fillRect(x0, y0 + c * 0.18, c, c * 0.58);
+      sheen(); g.fillRect(x0, y0 + c * 0.18, c, c * 0.58);
+      g.fillStyle = cssHex(p.wall, 0.75); g.fillRect(x0, y0 + c * 0.18, c * 0.03, c * 0.58);
+      g.fillStyle = cssHex(p.wall, 1.15); g.fillRect(x0, y0 + c * 0.76, c, c * 0.035);
+    } else if (p.style === 'punched') {
+      const wx = x0 + c * 0.2, wy = y0 + c * 0.2, ww = c * 0.6, wh = c * 0.55;
+      g.fillStyle = cssHex(p.wall, 0.66); g.fillRect(wx - c * 0.03, wy - c * 0.03, ww + c * 0.06, wh + c * 0.06);
+      g.fillStyle = glass; g.fillRect(wx, wy, ww, wh);
+      sheen(); g.fillRect(wx, wy, ww, wh);
+      g.fillStyle = cssHex(p.wall, 0.8); g.fillRect(wx, wy + wh * 0.32, ww, c * 0.02);     // transom
+      g.fillStyle = cssHex(p.wall, 1.18); g.fillRect(wx - c * 0.05, wy + wh + c * 0.03, ww + c * 0.1, c * 0.04);   // sill
+      g.fillStyle = 'rgba(0,0,0,.22)'; g.fillRect(wx - c * 0.03, wy - c * 0.07, ww + c * 0.06, c * 0.04);          // lintel shadow
+    } else if (p.style === 'grid') {
+      g.fillStyle = cssHex(p.wall, 0.6); g.fillRect(x0 + c * 0.1, y0 + c * 0.1, c * 0.8, c * 0.72);   // deep reveal
+      g.fillStyle = glass; g.fillRect(x0 + c * 0.16, y0 + c * 0.16, c * 0.68, c * 0.6);
+      sheen(); g.fillRect(x0 + c * 0.16, y0 + c * 0.16, c * 0.68, c * 0.6);
+      g.fillStyle = cssHex(p.wall, 0.85); g.fillRect(x0 + c * 0.49, y0 + c * 0.16, c * 0.02, c * 0.6);
+    } else {   // bands: glazing above a solid spandrel panel
+      g.fillStyle = glass; g.fillRect(x0, y0, c, c * 0.6);
+      sheen(); g.fillRect(x0, y0, c, c * 0.6);
+      g.fillStyle = cssHex(p.wall); g.fillRect(x0, y0 + c * 0.6, c, c * 0.4);
+      g.fillStyle = cssHex(p.wall, 0.7); g.fillRect(x0, y0 + c * 0.6, c, c * 0.03); g.fillRect(x0, y0, c * 0.025, c * 0.6);
+    }
+  }
+  return facadeTexture(cv);
+}
+// Ground-floor lobby strip: tall glazed panels under a fascia band (one storey high, 4 bays across).
+function makeLobbyTexture(pi) {
+  const p = FACADE_PRESETS[pi], S = TEX_PX, c = S / TEX_CELLS, cv = document.createElement('canvas');
+  cv.width = cv.height = S;
+  const g = cv.getContext('2d'), R = rngFrom(pi * 331 + 5);
+  g.fillStyle = cssHex(p.wall, 0.92); g.fillRect(0, 0, S, S);
+  g.fillStyle = cssHex(p.wall, 0.7); g.fillRect(0, 0, S, S * 0.2);                           // fascia band
+  const pier = p.glassy ? c * 0.035 : c * 0.15, y = S * 0.23, h = S * 0.71;
+  for (let bx = 0; bx < TEX_CELLS; bx++) {
+    const x = bx * c + pier, w = c - 2 * pier;
+    g.fillStyle = cssHex(p.glass, 0.7 + R() * 0.25); g.fillRect(x, y, w, h);
+    const gr = g.createLinearGradient(x, y, x + w, y + h);
+    gr.addColorStop(0, 'rgba(255,255,255,.3)'); gr.addColorStop(0.5, 'rgba(255,255,255,0)'); gr.addColorStop(1, 'rgba(0,0,0,.2)');
+    g.fillStyle = gr; g.fillRect(x, y, w, h);
+    g.fillStyle = cssHex(p.wall, 0.85); g.fillRect(x + w / 2 - 1.5, y, 3, h);              // mullion
+    if (!p.glassy) g.fillRect(x, y + h * 0.4, w, 3);                                         // transom
+  }
+  g.fillStyle = 'rgba(0,0,0,.4)'; g.fillRect(0, S * 0.94, S, S * 0.06);                      // plinth
+  return facadeTexture(cv);
+}
+const towerTexCache = new Map(), lobbyTexCache = new Map(), facadeMatCache = new Map();
+function facadeMats(pi, tint) {
+  const key = pi * 4 + tint;
+  let m = facadeMatCache.get(key);
+  if (m) return m;
+  if (!towerTexCache.has(pi)) towerTexCache.set(pi, makeTowerTexture(pi));
+  if (!lobbyTexCache.has(pi)) lobbyTexCache.set(pi, makeLobbyTexture(pi));
+  const p = FACADE_PRESETS[pi], col = [0xffffff, 0xe6e6e6, 0xf4eadb][tint];
+  m = {
+    side: newMat({ map: towerTexCache.get(pi), color: col, roughness: p.glassy ? 0.24 : 0.82, metalness: p.glassy ? 0.18 : 0 }),
+    lobby: newMat({ map: lobbyTexCache.get(pi), color: col, roughness: 0.3, metalness: 0.1 })
+  };
+  facadeMatCache.set(key, m);
+  return m;
+}
+
+// Everything about one building is decided here, deterministically from its position: material, height, setbacks,
+// rooftop kit, entrance side/style/canopy, so no two towers come out alike.
+function designBuilding(x, z, w, d, kind, seedIn) {
+  const R = rngFrom(Math.imul(Math.round(x * 10) + 77777, 73856093) ^ Math.imul(Math.round(z * 10) + 99991, 19349663) ^ Math.imul(seedIn + 17, 83492791));
+  const [f0, f1] = HEIGHT_FLOORS[kind] || [8, 30];
+  const floors = Math.max(2, Math.round(f0 + Math.pow(R(), 1.2) * (f1 - f0)));
+  const pool = R() < 0.45 ? GLASS_PRESETS : SOLID_PRESETS;
+  const preset = pool[Math.floor(R() * pool.length)], tint = Math.floor(R() * 3);
+  const tiers = [];
+  const nT = floors >= 30 ? 1 + Math.floor(R() * 3) : floors >= 12 ? 1 + Math.floor(R() * 2) : 1;
+  let rem = floors, tw = w, td = d, tx = x, tz = z;
+  for (let t = 0; t < nT; t++) {
+    const share = Math.max(1, Math.min(rem, t === nT - 1 ? rem : Math.round(rem * (0.42 + R() * 0.28))));
+    tiers.push({ x: tx, z: tz, w: tw, d: td, floors: share });
+    rem -= share;
+    if (rem <= 0) break;
+    const nw = tw * (0.6 + R() * 0.28), nd = td * (0.6 + R() * 0.28);
+    tx += (R() - 0.5) * (tw - nw) * 0.8; tz += (R() - 0.5) * (td - nd) * 0.8;
+    tw = nw; td = nd;
+  }
+  if (rem > 0) tiers[tiers.length - 1].floors += rem;
+  const bx = x - Math.floor(x / ROAD_SPACING) * ROAD_SPACING, bz = z - Math.floor(z / ROAD_SPACING) * ROAD_SPACING;
+  const toAve = [[bz, 1], [ROAD_SPACING - bz, 0], [bx, 3], [ROAD_SPACING - bx, 2]].sort((a, b) => a[0] - b[0]);   // faces: 0 +z, 1 -z, 2 +x, 3 -x
+  const face = R() < 0.25 ? toAve[1][1] : toAve[0][1];
+  const faceW = (face < 2 ? w : d) + 4;
+  return {
+    x, z, w, d, kind, floors, preset, tint, tiers, h: PODIUM_H + floors * FLOOR_H,
+    roofColor: ROOF_COLORS[Math.floor(R() * ROOF_COLORS.length)],
+    plant: R() < 0.6 ? { fw: 0.25 + R() * 0.3, fd: 0.25 + R() * 0.3, h: 5 + R() * 8, ox: (R() - 0.5) * 0.3, oz: (R() - 0.5) * 0.3 } : null,
+    antenna: R() < 0.28 ? 14 + R() * 40 : 0,
+    door: { face, style: Math.floor(R() * 3), off: (R() - 0.5) * Math.max(0, faceW - 44) * 0.8, canopy: CANOPY_COLORS[Math.floor(R() * CANOPY_COLORS.length)] },
+    minX: x - w / 2 - 2.5, maxX: x + w / 2 + 2.5, minZ: z - d / 2 - 2.5, maxZ: z + d / 2 + 2.5
+  };
+}
+
+// Adds one building to a chunk: textured meshes (podium + tiers) straight into the group, small details into the shared box batch.
+function emitBuilding(s, group, entry, boxes) {
+  const B = (w, h, d, color, x, y, z) => boxes.push({ x, y: y + h / 2, z, sx: w, sy: h, sz: d, color });
+  const p = FACADE_PRESETS[s.preset], mats = facadeMats(s.preset, s.tint), roof = mat(s.roofColor, 0.9);
+  const solid = (w, h, d, x, y, z, material, lobby, vRep) => {
+    const g = new THREE.BoxGeometry(w, h, d), uv = g.attributes.uv, faceW = [d, d, 0, 0, w, w];
+    for (let f = 0; f < 6; f++) {
+      if (f === 2 || f === 3) continue;                        // top / bottom: plain roof colour, no windows
+      const bays = Math.max(1, Math.round(faceW[f] / BAY_W)), ru = lobby ? Math.max(1, Math.round(bays / TEX_CELLS)) : bays / TEX_CELLS;
+      for (let i = f * 4; i < f * 4 + 4; i++) uv.setXY(i, uv.getX(i) * ru, uv.getY(i) * vRep);
+    }
+    uv.needsUpdate = true;
+    const m = new THREE.Mesh(g, [material, material, roof, roof, material, material]);
+    m.position.set(x, y + h / 2, z); m.matrixAutoUpdate = false; m.updateMatrix();
+    group.add(m); entry.disposables.push(g);
+  };
+  solid(s.w + 4, PODIUM_H, s.d + 4, s.x, 0, s.z, mats.lobby, true, 1);
+  B(s.w + 5.6, 1.1, s.d + 5.6, p.wall, s.x, PODIUM_H - 0.2, s.z);                     // cornice between podium and tower
+  let y = PODIUM_H;
+  for (const t of s.tiers) {
+    const th = t.floors * FLOOR_H;
+    solid(t.w, th, t.d, t.x, y, t.z, mats.side, false, t.floors / TEX_CELLS);
+    y += th;
+    B(t.w + 1.4, 1.2, t.d + 1.4, p.wall, t.x, y - 0.1, t.z);                          // parapet / crown slab
+  }
+  const top = s.tiers[s.tiers.length - 1];
+  if (s.plant) B(top.w * s.plant.fw, s.plant.h, top.d * s.plant.fd, 0x858b90, top.x + top.w * s.plant.ox, y + 1.1, top.z + top.d * s.plant.oz);
+  if (s.antenna) B(0.9, s.antenna, 0.9, 0xcfd3d6, top.x, y + 1.1, top.z);
+
+  // Entrance: apron + frame + glass doors + canopy, built on the face looking at the nearest avenue.
+  const D = s.door, hw = (s.w + 4) / 2, hd = (s.d + 4) / 2, off = D.off;
+  const FB = (lx, yy, lo, bw, bh, bd, color) => {          // lx along the wall, lo outward from the wall plane
+    if (D.face === 0) B(bw, bh, bd, color, s.x + lx, yy, s.z + hd + lo);
+    else if (D.face === 1) B(bw, bh, bd, color, s.x - lx, yy, s.z - hd - lo);
+    else if (D.face === 2) B(bd, bh, bw, color, s.x + hw + lo, yy, s.z - lx);
+    else B(bd, bh, bw, color, s.x - hw - lo, yy, s.z + lx);
+  };
+  const DARK = 0x1b2024, GLASS = 0x9fd6e8, STEEL = 0xd9dde0;
+  FB(off, 0, 3.3, 26, 0.5, 6.6, 0xb7b5ae);                 // apron
+  if (D.style === 0) {                                      // double glass doors under a flat canopy
+    FB(off, 0.5, 0.25, 12, 9.6, 1.1, DARK);
+    for (const sx of [-1, 1]) { FB(off + sx * 2.7, 0.5, 0.5, 5.2, 8.6, 1.0, GLASS); FB(off + sx * 0.9, 3.2, 1.2, 0.22, 2.6, 0.5, STEEL); }
+    FB(off, 0.5, 0.7, 0.5, 8.6, 1.3, DARK);
+    FB(off, 10.4, 4.6, 20, 0.7, 9.2, D.canopy);
+    for (const sx of [-1, 1]) FB(off + sx * 9.2, 0.5, 8.8, 0.5, 10, 0.5, DARK);
+  } else if (D.style === 1) {                               // deep portal frame, centre door + sidelights
+    for (const sx of [-1, 1]) FB(off + sx * 7.4, 0, 2.1, 2.4, 12.6, 4.2, D.canopy);
+    FB(off, 10.4, 2.1, 17.2, 2.2, 4.2, D.canopy);
+    FB(off, 0.5, 0.25, 12.4, 9.8, 0.9, DARK);
+    FB(off, 0.5, 0.5, 4.4, 8.8, 1.0, GLASS);
+    for (const sx of [-1, 1]) { FB(off + sx * 4.4, 0.5, 0.5, 3.4, 8.8, 1.0, GLASS); FB(off + sx * 2.5, 0.5, 0.8, 0.4, 8.8, 1.3, DARK); }
+    FB(off + 1.4, 3.2, 1.2, 0.22, 2.6, 0.5, STEEL);
+  } else {                                                  // triple glass doors flanked by timber fins
+    FB(off, 0.5, 0.25, 16.6, 9.6, 1.1, DARK);
+    for (const i of [-1, 0, 1]) FB(off + i * 5.2, 0.5, 0.5, 4.6, 8.6, 1.0, GLASS);
+    for (const sx of [-1, 1]) { FB(off + sx * 2.6, 0.5, 0.8, 0.4, 8.6, 1.3, DARK); FB(off + sx * 10.6, 0, 1.8, 1.4, 12.4, 3.6, 0xa5764a); }
+    FB(off, 10.9, 3.4, 19, 0.5, 6.8, D.canopy);
+  }
+}
+
 function findBuildingPosition(x, z, w, d) {
-  const candidates = [[x, z]];
-  for (let r = 35; r <= 700; r += 35) for (let a = 0; a < 8; a++) candidates.push([x + Math.cos(a * Math.PI / 4) * r, z + Math.sin(a * Math.PI / 4) * r]);
-  for (const factor of [1, 0.85, 0.7, 0.58, 0.48, 0.38]) {
-    const fw = w * factor, fd = d * factor;
-    for (const [px, pz] of candidates) {
-      if (!clearBuildingPlot(px, pz, fw, fd, 2)) continue;
-      if (!overlaps(buildingColliders, px, pz, fw, fd) && !overlaps(amenityColliders, px, pz, fw, fd)) return { x: px, z: pz, fit: factor };
+  const bi0 = Math.floor(x / ROAD_SPACING), bj0 = Math.floor(z / ROAD_SPACING), cands = [];
+  for (let i = -6; i <= 6; i++) for (let j = -6; j <= 6; j++) {
+    const bi = bi0 + i, bj = bj0 + j;
+    if (bi < -BLOCK_N || bi >= BLOCK_N || bj < -BLOCK_N || bj >= BLOCK_N) continue;
+    const [x0, x1] = blockSpan(bi * ROAD_SPACING + ROAD_SPACING / 2), [z0, z1] = blockSpan(bj * ROAD_SPACING + ROAD_SPACING / 2);
+    const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+    cands.push({ cx, cz, maxW: x1 - x0 - 4, maxD: z1 - z0 - 4, dist: Math.hypot(cx - x, cz - z) });
+  }
+  cands.sort((a, b) => a.dist - b.dist);
+  for (const factor of [1, 0.85, 0.7, 0.58]) {
+    for (const c of cands) {
+      const fw = Math.min(w, c.maxW) * factor, fd = Math.min(d, c.maxD) * factor;
+      if (!clearBuildingPlot(c.cx, c.cz, fw + 4, fd + 4, 0)) continue;
+      if (!overlaps(buildingColliders, c.cx, c.cz, fw + 4, fd + 4) && !overlaps(amenityColliders, c.cx, c.cz, fw + 4, fd + 4)) return { x: c.cx, z: c.cz, w: fw, d: fd };
     }
   }
   return null;
 }
-const TOWER_FLOORS = [20, 25, 30, 35, 40];
 function makeBuilding(x, z, w, d, h, kind = 'residential', seed = 0) {
   const sizeFactor = kind === 'office' ? 1.22 : kind === 'apartment' ? 1.2 : 1.12;
-  w *= sizeFactor; d *= sizeFactor;
-  const sW = w * BUILDING_SCALE, sD = d * BUILDING_SCALE, a = Math.abs(seed);
-  if (kind === 'office') h = TOWER_FLOORS[a % TOWER_FLOORS.length] * 3.2;
-  else if (kind === 'apartment') h = [25, 30, 35, 40][a % 4] * 3.2;
-  else if (kind === 'residential' || kind === 'mixed') h = [5, 7, 10, 12][a % 4] * 3.1;
-  else if (kind === 'tenement') h = [3, 4, 5][a % 3] * 3.0;
-  else if (kind === 'shop' || kind === 'market') h = [1, 2][a % 2] * 3.0;
-  else if (kind === 'duplex') h = [2, 3][a % 2] * 3.1;
-  const placed = findBuildingPosition(x, z, sW, sD);
+  const R = rngFrom(Math.imul(seed + 3, 2654435761) ^ Math.round(x * 3) ^ Math.imul(Math.round(z * 5), 40503));
+  // old footprint x 2-3, capped to what a block can hold, then trimmed a little at random so the slabs differ in proportion
+  const mult = 2 + R();
+  const W = w * sizeFactor * 4 * mult * (0.72 + R() * 0.28), D = d * sizeFactor * 4 * mult * (0.72 + R() * 0.28);
+  const placed = findBuildingPosition(x, z, W, D);
   if (!placed) return null;
-  x = placed.x; z = placed.z; w *= placed.fit; d *= placed.fit;
-  const fw = sW * placed.fit, fd = sD * placed.fit;
-  buildingColliders.push({ minX: x - fw / 2 - 1, maxX: x + fw / 2 + 1, minZ: z - fd / 2 - 1, maxZ: z + fd / 2 + 1 });
-  cityMapBuildings.push({ x, z, w: fw, d: fd, kind });
-  blueprintAtWorld(x, z).buildings.push({ x, z, w, d, h, kind, seed });
-  return { position: { x, z } };
+  const spec = designBuilding(placed.x, placed.z, placed.w, placed.d, kind, seed);
+  buildingColliders.push({ minX: spec.minX, maxX: spec.maxX, minZ: spec.minZ, maxZ: spec.maxZ });
+  cityMapBuildings.push({ x: spec.x, z: spec.z, w: spec.w + 4, d: spec.d + 4, kind });
+  blueprintAtWorld(spec.x, spec.z).buildings.push(spec);
+  return { position: { x: spec.x, z: spec.z } };
 }
 
 // ============================================================================
@@ -472,7 +699,6 @@ baseDistrictDefs.forEach((d, i) => {
   } else if (type === 'market') {
     for (let k = 0; k < 7; k++) {
       const sh = makeBuilding(cx + (k % 4) * 13 - 20, cz + Math.floor(k / 4) * 15, 10, 10, 4, 'market', k);
-      if (sh) blueprintAtWorld(sh.position.x, sh.position.z).facilities.push({ type: 'canopy', x: sh.position.x, z: sh.position.z });
     }
     registerSign(name, cx, cz - 18, 30, 0x9a5b23);
     recordCityFacility('market', cx, cz, 78, 30, name);
@@ -499,7 +725,7 @@ for (const d of districtDefs) {   // district gateways
   const ax = Math.max(-5040, Math.min(5040, Math.round(d[1] / 210) * 210));
   const az = Math.max(-5040, Math.min(5040, Math.round(d[2] / 210) * 210));
   const alongZ = Math.abs(ax - d[1]) <= Math.abs(az - d[2]);
-  const gx = alongZ ? ax : Math.round(d[1] / 70) * 70 + 35, gz = alongZ ? Math.round(d[2] / 70) * 70 + 35 : az;
+  const gx = alongZ ? ax : Math.floor(d[1] / ROAD_SPACING) * ROAD_SPACING + ROAD_SPACING / 2, gz = alongZ ? Math.floor(d[2] / ROAD_SPACING) * ROAD_SPACING + ROAD_SPACING / 2 : az;
   registerSign(d[0], gx, gz, DISTRICT_POLE_OFFSET * 2 - 1.4, 0x2a72a8, DISTRICT_POLE_HEIGHT - 3.4, 'gateway', alongZ ? 'z' : 'x');
 }
 // Street-name signs are generated inside each active chunk below, beside its actual roads.
@@ -512,12 +738,12 @@ blueprintAtWorld(CITY_PARKING.x, CITY_PARKING.z).facilities.push({ type: 'parkin
 { // Sports centres on every 7th block (these blocks are skipped by infill)
   const reserved = amenityColliders.slice(), SPORTS_CENTRE_TARGET = 2500;
   let n = 0;
-  for (let ix = -73; ix <= 73 && n < SPORTS_CENTRE_TARGET; ix++) for (let iz = -73; iz <= 73 && n < SPORTS_CENTRE_TARGET; iz++) {
-    if (((ix + 74) * 148 + (iz + 74)) % 7 !== 0) continue;
-    const [bx0, bx1] = blockSpan(35 + ix * 70), [bz0, bz1] = blockSpan(35 + iz * 70);
+  for (let ix = -BLOCK_N; ix < BLOCK_N && n < SPORTS_CENTRE_TARGET; ix++) for (let iz = -BLOCK_N; iz < BLOCK_N && n < SPORTS_CENTRE_TARGET; iz++) {
+    if (blockIndex(ix, iz) % 7 !== 0) continue;
+    const [bx0, bx1] = blockSpan(ROAD_SPACING / 2 + ix * ROAD_SPACING), [bz0, bz1] = blockSpan(ROAD_SPACING / 2 + iz * ROAD_SPACING);
     const sc = Math.min(1, (bx1 - bx0) / 46, (bz1 - bz0) / 46);
     const x = (bx0 + bx1) / 2, z = (bz0 + bz1) / 2, sz = 44 * sc;
-    if (overlaps(reserved, x, z, sz, sz)) continue;
+    if (overlaps(reserved, x, z, sz, sz) || overlaps(buildingColliders, x, z, sz, sz)) continue;
     const label = `SPORTS CENTRE ${String(n + 1).padStart(4, '0')}`;
     recordCityFacility('sportscomplex', x, z, sz, sz, label);
     blueprintAtWorld(x, z).facilities.push({ type: 'sportscomplex', x, z, s: sc });
@@ -536,26 +762,26 @@ function nearestDistrictFor(x, z) {
 // ============================================================================
 const detailedBlocks = new Set();   // blocks already covered by detailed buildings / parking
 for (const c of [...buildingColliders, amenityColliders[amenityColliders.length - 1]])
-  for (let bi = Math.floor(c.minX / 70); bi <= Math.floor(c.maxX / 70); bi++)
-    for (let bj = Math.floor(c.minZ / 70); bj <= Math.floor(c.maxZ / 70); bj++) detailedBlocks.add((bi + 74) * 148 + (bj + 74));
+  for (let bi = Math.floor(c.minX / ROAD_SPACING); bi <= Math.floor(c.maxX / ROAD_SPACING); bi++)
+    for (let bj = Math.floor(c.minZ / ROAD_SPACING); bj <= Math.floor(c.maxZ / ROAD_SPACING); bj++) detailedBlocks.add(blockIndex(bi, bj));
 
 const infillCache = new Map();
 function infillAt(bi, bj) {
-  if (bi < -74 || bi > 73 || bj < -74 || bj > 73) return null;
-  const k = (bi + 74) * 148 + (bj + 74);
+  if (bi < -BLOCK_N || bi >= BLOCK_N || bj < -BLOCK_N || bj >= BLOCK_N) return null;
+  const k = blockIndex(bi, bj);
   let r = infillCache.get(k);
   if (r !== undefined) return r;
   r = null;
-  const gx = bi * 70 + 35, gz = bj * 70 + 35;
+  const gx = bi * ROAD_SPACING + ROAD_SPACING / 2, gz = bj * ROAD_SPACING + ROAD_SPACING / 2;
   if (k % 7 !== 0 && !detailedBlocks.has(k) && !claimedBlocks.has(bi + ',' + bj) &&
       !baseDistrictDefs.some(d => Math.hypot(gx - d[1], gz - d[2]) < 105)) {
-    const kind = (k % 5) < 3 ? ((k % 4 === 0) ? 'office' : 'apartment') : ['mixed', 'residential', 'tenement', 'shop'][k % 4];
-    const width = (kind === 'shop' ? 8 : 10) * (kind === 'office' ? 1.22 : 1.14) * 4;
-    const depth = (kind === 'shop' ? 9 : 12) * (kind === 'office' ? 1.22 : 1.14) * 4;
-    const height = (kind === 'office' ? [20, 25, 30, 35, 40][k % 5] * 3.2 : kind === 'apartment' ? [25, 30, 35, 40][k % 4] * 3.2 : [5, 7, 10, 12][k % 4] * 3.1) * 4;
-    const color = kind === 'office' ? 0x9ab8c4 : kind === 'apartment' ? 0xc5b9a0 : kind === 'shop' ? 0xd5a86c : kind === 'tenement' ? 0xb9a99a : 0xb8c8b2;
-    const f = fitToBlock(gx, gz, width, depth);
-    r = { x: f.x, z: f.z, w: f.w, d: f.d, h: height, color, kind, minX: f.x - f.w / 2 - 1, maxX: f.x + f.w / 2 + 1, minZ: f.z - f.d / 2 - 1, maxZ: f.z + f.d / 2 + 1 };
+    const R = rngFrom(k * 7919 + 13), roll = R();
+    const kind = roll < 0.2 ? 'office' : roll < 0.55 ? 'apartment' : roll < 0.7 ? 'mixed' : roll < 0.82 ? 'residential' : roll < 0.9 ? 'tenement' : roll < 0.96 ? 'shop' : 'duplex';
+    const [x0, x1] = blockSpan(gx), [z0, z1] = blockSpan(gz);
+    const maxW = x1 - x0 - 4, maxD = z1 - z0 - 4;                       // 134 x 134: roughly 2.0-3.0x the old footprints
+    const w = maxW * (0.68 + R() * 0.32), d = maxD * (0.68 + R() * 0.32);
+    const x = (x0 + x1) / 2 + (R() - 0.5) * (maxW - w), z = (z0 + z1) / 2 + (R() - 0.5) * (maxD - d);
+    r = designBuilding(x, z, w, d, kind, k);
   }
   infillCache.set(k, r);
   return r;
@@ -570,7 +796,7 @@ for (const b of buildingColliders)
       l.push(b);
     }
 function collidesWithBuilding(x, z) {
-  const r = infillAt(Math.floor(x / 70), Math.floor(z / 70));
+  const r = infillAt(Math.floor(x / ROAD_SPACING), Math.floor(z / ROAD_SPACING));
   if (r && x > r.minX && x < r.maxX && z > r.minZ && z < r.maxZ) return true;
   const list = detailGrid.get(Math.floor(x / CELL) + ',' + Math.floor(z / CELL));
   if (list) for (const b of list) if (x > b.minX && x < b.maxX && z > b.minZ && z < b.maxZ) return true;
@@ -581,10 +807,9 @@ function collidesWithBuilding(x, z) {
 // PER-CHUNK TREES (deterministic from treeHash, same layout as before, nothing stored)
 // ============================================================================
 function treeOnRoad(x, z, margin = 3.4) {
-  const gx = Math.max(-5180, Math.min(5180, Math.round(x / 70) * 70));
-  const gz = Math.max(-5180, Math.min(5180, Math.round(z / 70) * 70));
-  const hx = Math.abs(gx % 210) < 1 ? 24 : 4, hz = Math.abs(gz % 210) < 1 ? 24 : 4;
-  return Math.abs(x - gx) < hx + margin || Math.abs(z - gz) < hz + margin;
+  const gx = Math.max(-5040, Math.min(5040, Math.round(x / ROAD_SPACING) * ROAD_SPACING));
+  const gz = Math.max(-5040, Math.min(5040, Math.round(z / ROAD_SPACING) * ROAD_SPACING));
+  return Math.abs(x - gx) < AVE_HALF + margin || Math.abs(z - gz) < AVE_HALF + margin;
 }
 function chunkTrees(cx, cz) {
   // Trees stand on the HOUSE side of the red walkway (TREE_LINE from the road edge), never on the walkway itself,
@@ -592,9 +817,9 @@ function chunkTrees(cx, cz) {
   const out = [], lo = [cx * CHUNK_SIZE, cz * CHUNK_SIZE];
   for (const axis of ['z', 'x']) {
     const aLo = axis === 'z' ? lo[0] : lo[1], qLo = axis === 'z' ? lo[1] : lo[0];
-    for (let g = Math.ceil((aLo - 44) / 70) * 70; g <= aLo + CHUNK_SIZE + 44; g += 70) {
+    for (let g = Math.ceil((aLo - 44) / ROAD_SPACING) * ROAD_SPACING; g <= aLo + CHUNK_SIZE + 44; g += ROAD_SPACING) {
       if (g < -5180 || g > 5180) continue;
-      const avenue = Math.abs(g % 210) < 1, half = avenue ? 24 : 4, SP = avenue ? 10 : 12;
+      const half = AVE_HALF, SP = 10;
       const fa = furnitureAlong(g, qLo - 12, qLo + CHUNK_SIZE + 12);
       for (const side of [-1, 1]) {
         const q0 = -5140 + (side > 0 ? SP / 2 : 0);
@@ -605,7 +830,7 @@ function chunkTrees(cx, cz) {
           const off = g + side * (half + TREE_LINE + treeHash(q, g, 13) * 0.4);
           const x = axis === 'z' ? off : jq, z = axis === 'z' ? jq : off;
           if (Math.floor(x / CHUNK_SIZE) !== cx || Math.floor(z / CHUNK_SIZE) !== cz) continue;
-          const gc = Math.round(jq / 70) * 70;                                    // nearest crossing road
+          const gc = Math.round(jq / ROAD_SPACING) * ROAD_SPACING;                // nearest crossing avenue
           if (Math.abs(jq - gc) < roadHalfAt(gc) + CORNER_PAD) continue;           // keep the corner walkways clear
           if (fa.poles.some(p => Math.abs(p - jq) < 4) || fa.stops.some(p => Math.abs(p - jq) < SHELTER_LEN / 2 + 5.5)) continue;
           if (IS_MOBILE && treeHash(x, z, 21) < 0.5) continue;   // half density on phones
@@ -625,17 +850,17 @@ function chunkTrees(cx, cz) {
 // ============================================================================
 // CHUNK BUILD / DISPOSE / STREAM QUEUE
 // ============================================================================
-const roadHalfAt = g => (Math.abs(g % 210) < 1 ? 24 : 4);
+const roadHalfAt = () => AVE_HALF;   // only avenues exist now
 // Stretches of a road BETWEEN the roads that cross it, so kerbs, pavements and markings never run through an intersection
 function spansAlong(lo, hi) {
   const out = [];
-  for (let g = Math.floor(lo / 70) * 70 - 70; g <= hi; g += 70) {
-    const s0 = Math.max(g + roadHalfAt(g), lo), e0 = Math.min(g + 70 - roadHalfAt(g + 70), hi);
+  for (let g = Math.floor(lo / ROAD_SPACING) * ROAD_SPACING - ROAD_SPACING; g <= hi; g += ROAD_SPACING) {
+    const s0 = Math.max(g + AVE_HALF, lo), e0 = Math.min(g + ROAD_SPACING - AVE_HALF, hi);
     if (e0 - s0 > 0.5) out.push([s0, e0]);
   }
   return out;
 }
-const poleInRoad = q => { const g = Math.round(q / 70) * 70; return Math.abs(q - g) < roadHalfAt(g) + 1.5; };
+const poleInRoad = q => { const g = Math.round(q / ROAD_SPACING) * ROAD_SPACING; return Math.abs(q - g) < AVE_HALF + 1.5; };
 
 // ---- Street furniture layout ---------------------------------------------------------------------------------
 // Every road has a RED WALKWAY filling the whole gap between its kerb and the building line (WALK_W = the 12-unit setback).
@@ -650,17 +875,17 @@ const CORNER_PAD = WALK_W + 1.5;               // keep furniture out of the cros
 // Furniture positions along road line g (a constant x or z) for along-road coordinates in [lo, hi).
 // One lamp per block on avenues (every second block on local roads); a bus stop in every second avenue block.
 function furnitureAlong(g, lo, hi) {
-  const avenue = Math.abs(g % 210) < 1, out = { poles: [], stops: [], avenue };
-  for (let a = Math.floor(lo / 70) * 70 - 70; a < hi; a += 70) {
-    if (a < -5180 || a + 70 > 5180) continue;
-    const l0 = a + roadHalfAt(a) + CORNER_PAD, l1 = a + 70 - roadHalfAt(a + 70) - CORNER_PAD;
-    if (l1 - l0 < 8) continue;
-    const mid = (l0 + l1) / 2, even = Math.round(a / 70) % 2 === 0;
-    // Shelters are 21.6 long, so they only fit the wide local-to-local blocks (a = 70 + 210c); every BUS_STOP_EVERY-th of those gets one.
-    const c = (a - 70) / 210;
-    const stop = avenue && Number.isInteger(c) && (((c % BUS_STOP_EVERY) + BUS_STOP_EVERY) % BUS_STOP_EVERY === 0) && (l1 - l0) >= SHELTER_LEN + 8;
+  const out = { poles: [], stops: [], avenue: true };
+  for (let a = Math.floor(lo / ROAD_SPACING) * ROAD_SPACING - ROAD_SPACING; a < hi; a += ROAD_SPACING) {
+    if (a < -5180 || a + ROAD_SPACING > 5180) continue;
+    const l0 = a + AVE_HALF + CORNER_PAD, l1 = a + ROAD_SPACING - AVE_HALF - CORNER_PAD;
+    const mid = (l0 + l1) / 2, c = Math.round(a / ROAD_SPACING);
+    const stop = (((c % BUS_STOP_EVERY) + BUS_STOP_EVERY) % BUS_STOP_EVERY === 0);   // a shelter pair in every 3rd block = 630 units apart
     if (stop && mid >= lo && mid < hi) out.stops.push(mid);
-    if (avenue || even) { const q = mid + (stop ? SHELTER_LEN / 2 + 3.5 : 0); if (q >= lo && q < hi) out.poles.push(q); }   // pole stands beside the shelter, not behind it
+    for (const t of [0.12, 0.5, 0.88]) {                                              // three lamps per block, one beside the shelter if there is one
+      const q = l0 + (l1 - l0) * t + (t === 0.5 && stop ? SHELTER_LEN / 2 + 3.5 : 0);
+      if (q >= lo && q < hi) out.poles.push(q);
+    }
   }
   return out;
 }
@@ -673,9 +898,9 @@ function buildRoads(cx, cz, group, asphaltRecs) {
   const spansZ = spansAlong(zMin, zMax), spansX = spansAlong(xMin, xMax);
   const PAVE_W = WALK_W - 0.24, PAVE_C = 0.24 + PAVE_W / 2;   // red walkway: from the kerb out to the building line
 
-  for (let gx = Math.floor(xMin / 70) * 70; gx < xMax; gx += 70) {   // roads running along z
+  for (let gx = Math.floor(xMin / ROAD_SPACING) * ROAD_SPACING; gx < xMax; gx += ROAD_SPACING) {   // avenues running along z
     if (gx < -5180 || gx > 5180 || gx < xMin) continue;
-    const isAve = Math.abs(gx % 210) < 1, half = isAve ? 24 : 4;
+    const isAve = true, half = AVE_HALF;
     asphaltRecs.push({ x: gx, y: isAve ? -0.12 : -0.16, z: midZ, sx: half * 2, sy: isAve ? 0.18 : 0.12, sz: CHUNK_SIZE });
     for (const [s0, e0] of spansZ) {
       const mz = (s0 + e0) / 2, len = e0 - s0;
@@ -687,7 +912,7 @@ function buildRoads(cx, cz, group, asphaltRecs) {
         yellow.push({ x: gx - 0.42, y: 0.095, z: mz, sx: 0.22, sy: 0.03, sz: len }, { x: gx + 0.42, y: 0.095, z: mz, sx: 0.22, sy: 0.03, sz: len });
         for (let q = Math.ceil((s0 + 2) / 14) * 14; q <= e0 - 2; q += 14)
           white.push({ x: gx - 12, y: 0.095, z: q, sx: 0.15, sy: 0.03, sz: 4 }, { x: gx + 12, y: 0.095, z: q, sx: 0.15, sy: 0.03, sz: 4 });
-      } else for (let q = Math.ceil((s0 + 2) / 28) * 28; q <= e0 - 2; q += 28) white.push({ x: gx, y: 0.03, z: q, sx: 0.12, sy: 0.03, sz: 4 });
+      }
     }
     const fa = furnitureAlong(gx, zMin, zMax);
     // Streetlights: pole on the house side of the walkway, arm reaching out toward the road, lamp head on the arm's end.
@@ -714,9 +939,9 @@ function buildRoads(cx, cz, group, asphaltRecs) {
       busLaneMarks.push({ x: gx + side * (half - 6), y: 0.115, z: q, sx: BUS_MARK_W, sy: 1, sz: BUS_MARK_L, ry: side > 0 ? 0 : Math.PI });
     }
   }
-  for (let gz = Math.floor(zMin / 70) * 70; gz < zMax; gz += 70) {   // roads running along x
+  for (let gz = Math.floor(zMin / ROAD_SPACING) * ROAD_SPACING; gz < zMax; gz += ROAD_SPACING) {   // avenues running along x
     if (gz < -5180 || gz > 5180 || gz < zMin) continue;
-    const isAve = Math.abs(gz % 210) < 1, half = isAve ? 24 : 4;
+    const isAve = true, half = AVE_HALF;
     asphaltRecs.push({ x: midX, y: isAve ? -0.12 : -0.16, z: gz, sx: CHUNK_SIZE, sy: isAve ? 0.18 : 0.12, sz: half * 2 });
     for (const [s0, e0] of spansX) {
       const mx = (s0 + e0) / 2, len = e0 - s0;
@@ -728,7 +953,7 @@ function buildRoads(cx, cz, group, asphaltRecs) {
         yellow.push({ x: mx, y: 0.095, z: gz - 0.42, sx: len, sy: 0.03, sz: 0.22 }, { x: mx, y: 0.095, z: gz + 0.42, sx: len, sy: 0.03, sz: 0.22 });
         for (let q = Math.ceil((s0 + 2) / 14) * 14; q <= e0 - 2; q += 14)
           white.push({ x: q, y: 0.095, z: gz - 12, sx: 4, sy: 0.03, sz: 0.15 }, { x: q, y: 0.095, z: gz + 12, sx: 4, sy: 0.03, sz: 0.15 });
-      } else for (let q = Math.ceil((s0 + 2) / 28) * 28; q <= e0 - 2; q += 28) white.push({ x: q, y: 0.03, z: gz, sx: 4, sy: 0.03, sz: 0.12 });
+      }
     }
     const fa = furnitureAlong(gz, xMin, xMax);
     const armLen = isAve ? AVE_ARM : LOCAL_ARM;
@@ -757,9 +982,9 @@ function buildRoads(cx, cz, group, asphaltRecs) {
   // Junction markings. Every road approach gets a thick white STOP LINE across its approaching (right-hand) lanes, just before the
   // crossing road; every crossing gets a yellow BOX JUNCTION (square outline + diagonals) painted inside it. Each junction belongs to the chunk
   // that holds its centre, so nothing is drawn twice.
-  for (let ix = Math.ceil(xMin / 70) * 70; ix < xMax; ix += 70) {
+  for (let ix = Math.ceil(xMin / ROAD_SPACING) * ROAD_SPACING; ix < xMax; ix += ROAD_SPACING) {
     if (ix < -5180 || ix > 5180) continue;
-    for (let iz = Math.ceil(zMin / 70) * 70; iz < zMax; iz += 70) {
+    for (let iz = Math.ceil(zMin / ROAD_SPACING) * ROAD_SPACING; iz < zMax; iz += ROAD_SPACING) {
       if (iz < -5180 || iz > 5180) continue;
       const hx = roadHalfAt(ix), hz = roadHalfAt(iz);
       const yZ = hx > 4 ? 0.095 : 0.03, yX = hz > 4 ? 0.095 : 0.03, yB = (hx > 4 || hz > 4) ? 0.095 : 0.03;   // paint height follows each road's own lane-line convention
@@ -807,22 +1032,16 @@ function buildChunkContent(cx, cz) {
   const job = fn => taskQueue.push({ entry, fn });
 
   job(() => {   // 1. collect every coloured box (buildings, roofs, windows, facilities)
-    for (let bi = Math.floor(xMin / 70) - 1, e = Math.ceil((xMin + CHUNK_SIZE) / 70) + 1; bi <= e; bi++)
-      for (let bj = Math.floor(zMin / 70) - 1, f = Math.ceil((zMin + CHUNK_SIZE) / 70) + 1; bj <= f; bj++) {
+    const towers = [];
+    for (let bi = Math.floor(xMin / ROAD_SPACING) - 1, e = Math.ceil((xMin + CHUNK_SIZE) / ROAD_SPACING) + 1; bi <= e; bi++)
+      for (let bj = Math.floor(zMin / ROAD_SPACING) - 1, f = Math.ceil((zMin + CHUNK_SIZE) / ROAD_SPACING) + 1; bj <= f; bj++) {
         const r = infillAt(bi, bj);
         if (!r || Math.floor(r.x / CHUNK_SIZE) !== cx || Math.floor(r.z / CHUNK_SIZE) !== cz) continue;
-        boxes.push({ x: r.x, y: r.h / 2, z: r.z, sx: r.w, sy: r.h, sz: r.d, color: r.color });
-        boxes.push({ x: r.x, y: r.h + 0.25, z: r.z, sx: r.w + 1, sy: 0.5, sz: r.d + 1, color: 0x8e5140 });
+        towers.push(r);
       }
+    if (bp) for (const b of bp.buildings) towers.push(b);
+    for (const t of towers) emitBuilding(t, group, entry, boxes);
     if (!bp) return;
-    const S = BUILDING_SCALE, stepY = IS_MOBILE ? 6.4 : 3.2;
-    for (const b of bp.buildings) {
-      boxes.push({ x: b.x, y: S * b.h / 2, z: b.z, sx: b.w * S, sy: b.h * S, sz: b.d * S, color: WALLS[Math.abs(b.seed) % WALLS.length] });
-      boxes.push({ x: b.x, y: S * (b.h + 0.18), z: b.z, sx: (b.w + 0.35) * S, sy: 0.5 * S, sz: (b.d + 0.35) * S, color: ROOFS[Math.abs(b.seed + 2) % ROOFS.length] });
-      if (b.kind === 'office' || b.kind === 'apartment' || b.kind === 'residential')
-        for (let fl = 3.2; fl < b.h - 1.5; fl += stepY)
-          boxes.push({ x: b.x, y: S * (fl + 0.9), z: b.z + S * (b.d / 2 + 0.06), sx: b.w * 0.85 * S, sy: 1.8 * S, sz: 0.12 * S, color: C.glass });
-    }
     for (const f of bp.facilities) {
       if (f.type === 'parking') {
         asphalt.push({ x: f.x, y: -0.04, z: f.z, sx: 42, sy: 0.16, sz: 42 });
@@ -896,14 +1115,10 @@ function buildChunkContent(cx, cz) {
       board.rotation.y = axis === 'x' ? Math.PI / 2 : 0;
       board.position.set(x, STREET_SIGN_POLE_HEIGHT - 1.1, z); group.add(board);
     };
-    for (let gx = Math.ceil(x0 / 70) * 70; gx < x1 && gx >= -5180 && gx <= 5180; gx += 70) {
-      const half = roadHalfAt(gx);
-      addStreetNameSign(streetName('x', Math.round(gx / 70)), gx + half + 2, (z0 + z1) / 2, 'x');
-    }
-    for (let gz = Math.ceil(z0 / 70) * 70; gz < z1 && gz >= -5180 && gz <= 5180; gz += 70) {
-      const half = roadHalfAt(gz);
-      addStreetNameSign(streetName('z', Math.round(gz / 70)), (x0 + x1) / 2, gz + half + 2, 'z');
-    }
+    for (let gx = Math.ceil(x0 / ROAD_SPACING) * ROAD_SPACING; gx < x1 && gx >= -5180 && gx <= 5180; gx += ROAD_SPACING)
+      addStreetNameSign(streetName('x', Math.round(gx / ROAD_SPACING)), gx + AVE_HALF + 2, (z0 + z1) / 2, 'x');
+    for (let gz = Math.ceil(z0 / ROAD_SPACING) * ROAD_SPACING; gz < z1 && gz >= -5180 && gz <= 5180; gz += ROAD_SPACING)
+      addStreetNameSign(streetName('z', Math.round(gz / ROAD_SPACING)), (x0 + x1) / 2, gz + AVE_HALF + 2, 'z');
   });
 }
 
@@ -1305,7 +1520,7 @@ function buildStaticMapCache() {
   ctx.fillStyle = '#9ab8c4';
   const drawB = b => { const p = cityMapPoint(b.x, b.z, w, h); ctx.fillRect(p.x - (b.w * sx) / 2, p.y - (b.d * sz) / 2, Math.max(1, b.w * sx), Math.max(1, b.d * sz)); };
   for (const b of cityMapBuildings) drawB(b);
-  for (let bi = -74; bi <= 73; bi++) for (let bj = -74; bj <= 73; bj++) { const r = infillAt(bi, bj); if (r) drawB(r); }
+  for (let bi = -BLOCK_N; bi < BLOCK_N; bi++) for (let bj = -BLOCK_N; bj < BLOCK_N; bj++) { const r = infillAt(bi, bj); if (r) drawB({ x: r.x, z: r.z, w: r.w + 4, d: r.d + 4 }); }
   ctx.fillStyle = '#f0c64b';
   for (const f of cityMapFacilities) { const p = cityMapPoint(f.x, f.z, w, h); ctx.fillRect(p.x - 1.5, p.y - 1.5, 3, 3); }
   ctx.strokeStyle = '#a6b5a4'; ctx.lineWidth = 2.5;
