@@ -323,6 +323,28 @@ const slRealLights = [];
   }
 }
 
+// ---- Round blue BUS STOP sign: a thin blue disc on a metal bar, one beside every shelter, lettering on BOTH faces ----
+const BUS_SIGN_R = 2.8, BUS_SIGN_THICK = 0.4, BUS_SIGN_POLE_R = 0.14;
+const busSignPoleGeo = new THREE.CylinderGeometry(BUS_SIGN_POLE_R, BUS_SIGN_POLE_R, 1, 8); busSignPoleGeo.translate(0, 0.5, 0);   // unit-height bar, scaled per sign
+const busSignDiscGeo = new THREE.CylinderGeometry(BUS_SIGN_R, BUS_SIGN_R, BUS_SIGN_THICK, 28); busSignDiscGeo.rotateX(Math.PI / 2);   // axis along +z
+const busSignDiscMat = mat(0x0b4fc4, 0.45, 0.1);
+const busSignCanvas = document.createElement('canvas');
+busSignCanvas.width = 256; busSignCanvas.height = 256;
+{
+  const c = busSignCanvas.getContext('2d');
+  c.clearRect(0, 0, 256, 256);
+  c.strokeStyle = c.fillStyle = '#ffffff';
+  c.lineWidth = 9; c.beginPath(); c.arc(128, 128, 116, 0, Math.PI * 2); c.stroke();     // white ring just inside the rim
+  c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.font = '900 92px "Arial Black", Arial, sans-serif'; c.fillText('BUS', 128, 94);
+  c.font = '900 66px "Arial Black", Arial, sans-serif'; c.fillText('STOP', 128, 168);
+}
+const busSignTexture = new THREE.CanvasTexture(busSignCanvas);
+busSignTexture.generateMipmaps = false; busSignTexture.minFilter = THREE.LinearFilter;
+if ('colorSpace' in busSignTexture) busSignTexture.colorSpace = THREE.SRGBColorSpace;
+const busSignFaceMat = new THREE.MeshBasicMaterial({ map: busSignTexture, alphaTest: 0.5, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+const BUS_SIGN_Y = BUS_SHELTER_HEIGHT - BUS_SIGN_R;   // disc centre; the disc top is level with the shelter height
+
 const STREET_SIGN_POLE_HEIGHT = BUS_SHELTER_HEIGHT * 0.25;
 const STREET_SIGN_SCALE = 0.4;
 const streetSignPoleGeo = new THREE.CylinderGeometry(0.11, 0.15, STREET_SIGN_POLE_HEIGHT, 7);
@@ -895,9 +917,9 @@ function buildRoads(cx, cz, group, asphaltRecs) {
   const xMin = cx * CHUNK_SIZE, xMax = xMin + CHUNK_SIZE, zMin = cz * CHUNK_SIZE, zMax = zMin + CHUNK_SIZE;
   const midX = (xMin + xMax) / 2, midZ = (zMin + zMax) / 2;
   const pvm = [], kerb = [], white = [], yellow = [], poles = [], arms = [], heads = [], pools = [];
-  const shelterRoofs = [], shelterBacks = [], shelterSides = [], shelterBenches = [], shelterFrames = [], busLaneMarks = [];
+  const shelterRoofs = [], shelterBacks = [], shelterSides = [], shelterBenches = [], shelterFrames = [], busLaneMarks = [], busSignPoles = [], busSignDiscs = [], busSignFaces = [];
   const spansZ = spansAlong(zMin, zMax), spansX = spansAlong(xMin, xMax);
-  const ZW = WALK_W, ZEBRA_T = 0.15 * 3;   // zebra: stripes run along the drive direction, ZW long (= red walkway width), 3x the lane-line thickness
+  const ZW = WALK_W, ZEBRA_T = 0.15 * 3 * 2;   // zebra: stripes run along the drive direction, ZW long (= red walkway width), 6x the lane-line thickness (3x, then doubled)
   const PAVE_W = WALK_W - 0.24, PAVE_C = 0.24 + PAVE_W / 2;   // red walkway: from the kerb out to the building line
   // Zebra crossings fill the first WALK_W (12) units of every road beside each junction, so centre / lane lines start after them.
   const markSpan = (s0, e0) => {
@@ -942,7 +964,19 @@ function buildRoads(cx, cz, group, asphaltRecs) {
       for (const e of [-1, 1]) shelterSides.push({ x: sx + side * 1.7, y: GLASS_Y, z: q + e * (SHELTER_LEN / 2 - 0.07), sx: SHELTER_DEPTH / 2, sy: GLASS_H, sz: 0.14 });
       for (const dz of BACK_POSTS) shelterFrames.push({ x: bx, y: POST_H / 2, z: q + dz, sx: 0.3, sy: POST_H, sz: 0.3 });
       for (const dz of FRONT_POSTS) shelterFrames.push({ x: fx, y: POST_H / 2, z: q + dz, sx: 0.3, sy: POST_H, sz: 0.3 });
-      for (const dz of [-5.4, 5.4]) shelterBenches.push({ x: sx + side * 2.3, y: SEAT_Y, z: q + dz, sx: 1.1, sy: SEAT_THICK, sz: 7.0 });
+      // Seat slides back until it touches the metal back posts, and rests on a steel rail bolted to those posts.
+      for (const dz of [-5.4, 5.4]) {
+        shelterBenches.push({ x: bx - side * (0.15 + 0.55), y: SEAT_Y, z: q + dz, sx: 1.1, sy: SEAT_THICK, sz: 7.0 });
+        shelterFrames.push({ x: bx - side * 0.3, y: SEAT_TOP - SEAT_THICK - 0.15, z: q + dz, sx: 0.3, sy: 0.3, sz: 7.0 });
+      }
+      // Round blue BUS STOP sign on a metal bar, at the approach end of the shelter (disc faces along the road; text on both faces).
+      {
+        const px = gx + side * (half + 3.3), pz = q + side * (SHELTER_LEN / 2 + 1.5), fo = BUS_SIGN_THICK / 2 + 0.02;
+        busSignPoles.push({ x: px, y: 0, z: pz, sx: 1, sy: BUS_SIGN_Y, sz: 1 });
+        busSignDiscs.push({ x: px, y: BUS_SIGN_Y, z: pz, sx: 1, sy: 1, sz: 1 });
+        busSignFaces.push({ x: px, y: BUS_SIGN_Y, z: pz + fo, ry: 0, sx: BUS_SIGN_R * 2, sy: BUS_SIGN_R * 2, sz: 1 },
+                          { x: px, y: BUS_SIGN_Y, z: pz - fo, ry: Math.PI, sx: BUS_SIGN_R * 2, sy: BUS_SIGN_R * 2, sz: 1 });
+      }
       // BUS legend in the kerb lane in front of the shelter, upright for the driver (top of the letters = direction of travel; right-hand traffic).
       busLaneMarks.push({ x: gx + side * (half - 6), y: 0.115, z: q, sx: BUS_MARK_W, sy: 1, sz: BUS_MARK_L, ry: side > 0 ? 0 : Math.PI });
     }
@@ -984,7 +1018,17 @@ function buildRoads(cx, cz, group, asphaltRecs) {
       for (const e of [-1, 1]) shelterSides.push({ x: q + e * (SHELTER_LEN / 2 - 0.07), y: GLASS_Y, z: sz + side * 1.7, sx: 0.14, sy: GLASS_H, sz: SHELTER_DEPTH / 2 });
       for (const dx of BACK_POSTS) shelterFrames.push({ x: q + dx, y: POST_H / 2, z: bz, sx: 0.3, sy: POST_H, sz: 0.3 });
       for (const dx of FRONT_POSTS) shelterFrames.push({ x: q + dx, y: POST_H / 2, z: fz, sx: 0.3, sy: POST_H, sz: 0.3 });
-      for (const dx of [-5.4, 5.4]) shelterBenches.push({ x: q + dx, y: SEAT_Y, z: sz + side * 2.3, sx: 7.0, sy: SEAT_THICK, sz: 1.1 });
+      for (const dx of [-5.4, 5.4]) {
+        shelterBenches.push({ x: q + dx, y: SEAT_Y, z: bz - side * (0.15 + 0.55), sx: 7.0, sy: SEAT_THICK, sz: 1.1 });
+        shelterFrames.push({ x: q + dx, y: SEAT_TOP - SEAT_THICK - 0.15, z: bz - side * 0.3, sx: 7.0, sy: 0.3, sz: 0.3 });
+      }
+      {
+        const px = q - side * (SHELTER_LEN / 2 + 1.5), pz = gz + side * (half + 3.3), fo = BUS_SIGN_THICK / 2 + 0.02;
+        busSignPoles.push({ x: px, y: 0, z: pz, sx: 1, sy: BUS_SIGN_Y, sz: 1 });
+        busSignDiscs.push({ x: px, y: BUS_SIGN_Y, z: pz, ry: Math.PI / 2, sx: 1, sy: 1, sz: 1 });
+        busSignFaces.push({ x: px + fo, y: BUS_SIGN_Y, z: pz, ry: Math.PI / 2, sx: BUS_SIGN_R * 2, sy: BUS_SIGN_R * 2, sz: 1 },
+                          { x: px - fo, y: BUS_SIGN_Y, z: pz, ry: -Math.PI / 2, sx: BUS_SIGN_R * 2, sy: BUS_SIGN_R * 2, sz: 1 });
+      }
       busLaneMarks.push({ x: q, y: 0.115, z: gz + side * (half - 6), sx: BUS_MARK_W, sy: 1, sz: BUS_MARK_L, ry: side > 0 ? -Math.PI / 2 : Math.PI / 2 });
     }
   }
@@ -1034,6 +1078,9 @@ function buildRoads(cx, cz, group, asphaltRecs) {
   batch(shelterSides, UNIT_BOX, shelterGlassMat, group);
   batch(shelterBenches, UNIT_BOX, shelterBenchMat, group);
   batch(shelterFrames, UNIT_BOX, shelterFrameMat, group);
+  batch(busSignPoles, busSignPoleGeo, shelterFrameMat, group);
+  batch(busSignDiscs, busSignDiscGeo, busSignDiscMat, group);
+  batch(busSignFaces, UNIT_PLANE_XY, busSignFaceMat, group, false, 3);
   batch(busLaneMarks, UNIT_PLANE_XZ, busLaneMarkMat, group, false, 3);
   if (!IS_MOBILE) batch(pools, UNIT_PLANE_XZ, slPoolMat, group, false, 2);   // additive overdraw: desktop only
 }
