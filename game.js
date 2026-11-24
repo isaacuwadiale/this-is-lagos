@@ -1394,6 +1394,14 @@ rainGroup.add(rainPoints);
 rainGroup.visible = false;
 
 let cameraMode = 0, weather = 'Clear', worldMinutes = 12 * 60, daySpeed = 3, lookAngle = 0, lookPitch = 0.12, cameraDistance = 120;
+const CAMERA_DISTANCE_DEFAULT = 120, CAMERA_DISTANCE_MIN = 12, CAMERA_DISTANCE_MAX = CAMERA_DISTANCE_DEFAULT * 20;
+function changeZoom(factor) {
+  if (cameraMode === 1) { cameraMode = 0; camera.near = 1.0; camera.updateProjectionMatrix(); }
+  cameraDistance = Math.max(CAMERA_DISTANCE_MIN, Math.min(CAMERA_DISTANCE_MAX, cameraDistance * factor));
+  updateCamera();
+  const readout = document.querySelector('#zoomReadout');
+  if (readout) readout.textContent = `${Math.round(cameraDistance / CAMERA_DISTANCE_DEFAULT * 10) / 10}×`;
+}
 const modes = ['THIRD PERSON', 'FIRST PERSON', 'ISOMETRIC'];
 const keys = {};
 camera.rotation.order = 'YXZ';
@@ -1544,10 +1552,20 @@ function drawCityMap() {
 cityMapToggle.addEventListener('click', () => { cityMapOpen = !cityMapOpen; cityMapPanel.classList.toggle('open', cityMapOpen); if (cityMapOpen) drawCityMap(); });
 document.querySelector('#cityMapClose').addEventListener('click', () => { cityMapOpen = false; cityMapPanel.classList.remove('open'); });
 
+// Working camera zoom controls (up to 20x farther than the default view).
+const zoomUI = document.createElement('div');
+zoomUI.id = 'cameraZoomControls';
+zoomUI.style.cssText = 'position:fixed;right:14px;top:50%;transform:translateY(-50%);z-index:12000;display:flex;flex-direction:column;align-items:center;gap:7px;padding:7px;border-radius:14px;background:rgba(8,15,28,.78);border:1px solid rgba(255,255,255,.22);backdrop-filter:blur(6px);';
+zoomUI.innerHTML = '<button id="zoomInBtn" aria-label="Zoom in" style="width:42px;height:42px;border:0;border-radius:10px;font-size:26px;font-weight:700;color:#fff;background:#1769aa;">+</button><span id="zoomReadout" style="min-width:42px;text-align:center;color:#fff;font:12px Arial;">1×</span><button id="zoomOutBtn" aria-label="Zoom out" style="width:42px;height:42px;border:0;border-radius:10px;font-size:26px;font-weight:700;color:#fff;background:#1769aa;">−</button>';
+document.body.appendChild(zoomUI);
+document.querySelector('#zoomInBtn').addEventListener('click', () => changeZoom(1 / 1.35));
+document.querySelector('#zoomOutBtn').addEventListener('click', () => changeZoom(1.35));
+renderer.domElement.addEventListener('wheel', e => { e.preventDefault(); changeZoom(e.deltaY > 0 ? 1.18 : 1 / 1.18); }, { passive: false });
+
 // ============================================================================
 // INPUT
 // ============================================================================
-window.addEventListener('keydown', e => { const k = (e.key || '').toLowerCase(); keys[k] = true; if (k === 'c') document.querySelector('#cameraBtn')?.click(); });
+window.addEventListener('keydown', e => { const k = (e.key || '').toLowerCase(); keys[k] = true; if (k === 'c') document.querySelector('#cameraBtn')?.click(); if (k === '+' || k === '=') changeZoom(1 / 1.25); if (k === '-' || k === '_') changeZoom(1.25); });
 window.addEventListener('keyup', e => { keys[(e.key || '').toLowerCase()] = false; });
 let pointer = null;
 renderer.domElement.style.touchAction = 'none';
