@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.81-HIGHRISE-AVENUES: avenues only, big modern high-rise towers, streamed + instanced chunks
+// THIS IS LAGOS v0.83-LIVE-MAP (v0.81-HIGHRISE-AVENUES base): avenues only, big modern high-rise towers, streamed + instanced chunks
 // Target: < 400 MB on phones. Add ?debug to the URL to log draw calls / GPU memory.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -148,6 +148,7 @@ function streetName(axis, index) {
 const buildingColliders = [];   // detailed district buildings only (~150)
 const amenityColliders = [];
 const cityMapBuildings = [];
+const cityMapSpecs = [];   // full design of every detailed building (the map draws their real tiers + entrances)
 const cityMapFacilities = [];
 const recordCityFacility = (type, x, z, w, d, label) => cityMapFacilities.push({ type, x, z, w, d, label: label || type.toUpperCase() });
 
@@ -680,6 +681,7 @@ function makeBuilding(x, z, w, d, h, kind = 'residential', seed = 0) {
   const spec = designBuilding(placed.x, placed.z, placed.w, placed.d, kind, seed);
   buildingColliders.push({ minX: spec.minX, maxX: spec.maxX, minZ: spec.minZ, maxZ: spec.maxZ });
   cityMapBuildings.push({ x: spec.x, z: spec.z, w: spec.w + 4, d: spec.d + 4, kind });
+  cityMapSpecs.push(spec);
   blueprintAtWorld(spec.x, spec.z).buildings.push(spec);
   return { position: { x: spec.x, z: spec.z } };
 }
@@ -1585,60 +1587,531 @@ on('#vehiclesBtn', () => modal('Vehicle Garage', 'Manage your registered Lagos v
 on('#menuBtn', () => modal('THIS IS LAGOS', 'Mobile-optimized Lagos city prototype. Use WASD / touch pad to move and drag to look around.', [['Continue', null]]));
 
 // ============================================================================
-// CITY MAP (static layer cached offscreen, built on first open)
+// CITY MAP: Google-Maps style, drawn live from the real world data.
+// Drag to pan, wheel / pinch / +- to zoom, double-click to zoom in, tap a building or ground for details, search for places.
+// It follows the player (blue dot + direction beam + trail) until you drag away; the ◎ button snaps back to you.
+// Shows the lagoon, avenues (named), junctions with zebra crossings + stop lines, bus stops and shelters,
+// sports grounds / market / car park, and every building with its real footprint, setback tiers and entrance.
 // ============================================================================
-const cityMapStyle = document.createElement('style');
-cityMapStyle.textContent = `#cityMapToggle{position:fixed;top:14px;right:14px;z-index:12000;border:1px solid rgba(255,255,255,.22);border-radius:11px;background:#16834a;color:#fff;font:800 12px/1 system-ui,sans-serif;letter-spacing:1.1px;padding:12px 16px;cursor:pointer;touch-action:manipulation}
-#cityMapPanel{position:fixed;top:60px;right:14px;z-index:11999;width:min(340px,calc(100vw - 28px));padding:12px;border:1px solid rgba(255,255,255,.16);border-radius:15px;background:rgba(12,24,19,.96);color:#f5fff7;font:12px/1.35 system-ui,sans-serif;display:none}
+const MAP_MIN_SCALE = 0.04, MAP_MAX_SCALE = 8, MAP_DEFAULT_SCALE = 0.9;
+const mapStyleEl = document.createElement('style');
+mapStyleEl.textContent = `
+#cityMapPanel{position:fixed;left:50%;top:84px;bottom:20px;width:min(1100px,calc(100vw - 24px));transform:translateX(-50%);z-index:11999;border-radius:18px;overflow:hidden;background:#dfe3e8;box-shadow:0 18px 60px rgba(0,0,0,.45);display:none;font:13px/1.35 "DM Sans",system-ui,sans-serif;color:#202124;user-select:none;-webkit-user-select:none}
 #cityMapPanel.open{display:block}
-#cityMapHead{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}
-#cityMapClose{border:0;border-radius:8px;background:#ffffff18;color:white;font-size:20px;line-height:1;padding:4px 9px;cursor:pointer}
-#cityMapCanvas{display:block;width:100%;height:auto;aspect-ratio:1;background:#1e3029;border-radius:9px;border:1px solid #ffffff20}
-#cityMapFoot{display:flex;justify-content:space-between;margin-top:9px;color:#d6e8dc;font-size:11px}`;
-document.head.appendChild(cityMapStyle);
-const cityMapToggle = document.createElement('button');
-cityMapToggle.id = 'cityMapToggle'; cityMapToggle.type = 'button'; cityMapToggle.textContent = 'MAP';
+#cityMapCanvas{position:absolute;left:0;top:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+#cityMapCanvas.grabbing{cursor:grabbing}
+.mapChip{position:absolute;background:#fff;box-shadow:0 2px 8px rgba(60,64,67,.35);z-index:2}
+#mapSearchBox{left:12px;top:12px;width:min(340px,calc(100% - 76px));height:44px;border-radius:24px;display:flex;align-items:center;padding:0 12px}
+#mapSearchBox input{flex:1;min-width:0;border:0;outline:0;background:transparent;font:inherit;font-size:14px;color:#202124;padding:0 8px}
+#mapResults{position:absolute;left:12px;top:62px;width:min(340px,calc(100% - 76px));background:#fff;border-radius:14px;box-shadow:0 4px 16px rgba(60,64,67,.4);display:none;overflow:hidden;z-index:3}
+#mapResults button{display:block;width:100%;text-align:left;border:0;border-top:1px solid #f1f3f4;background:#fff;padding:9px 14px;font:inherit;color:#202124;cursor:pointer}
+#mapResults button:first-child{border-top:0}#mapResults button:hover{background:#f1f3f4}#mapResults small{display:block;color:#70757a;font-size:11px}
+#cityMapClose{position:absolute;right:12px;top:12px;width:44px;height:44px;border-radius:50%;border:0;background:#fff;box-shadow:0 2px 8px rgba(60,64,67,.35);font-size:24px;line-height:1;color:#5f6368;cursor:pointer;z-index:2}
+#mapCtl{right:12px;bottom:84px;border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
+#mapCtl button,#mapLocate{width:44px;height:44px;border:0;background:#fff;font-size:22px;line-height:1;color:#5f6368;cursor:pointer}
+#mapCtl button+button{border-top:1px solid #e8eaed}
+#mapLocate{right:12px;bottom:28px;border-radius:50%;box-shadow:0 2px 8px rgba(60,64,67,.35);position:absolute;z-index:2;font-size:24px}
+#mapLocate.on{color:#1a73e8}
+#mapCompass{right:12px;top:66px;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:11px;color:#d93025;letter-spacing:.5px}
+#mapFoot{left:12px;bottom:12px;max-width:calc(100% - 84px);padding:7px 12px;border-radius:12px;font-size:11.5px;color:#3c4043;display:flex;flex-direction:column;gap:4px}
+#mapScaleRow{display:flex;align-items:center;gap:8px;color:#5f6368;font-size:11px}
+#mapScaleBar{height:6px;border:2px solid #5f6368;border-top:0;display:inline-block;width:80px}
+#mapCard{left:12px;bottom:78px;width:min(330px,calc(100% - 84px));padding:14px 16px;border-radius:14px;display:none;z-index:3}
+#mapCard h4{margin:0 26px 2px 0;font-size:15px}#mapCard p{margin:3px 0;color:#5f6368;font-size:12px}#mapCard b{color:#202124}
+#mapCardX{position:absolute;right:8px;top:6px;border:0;background:transparent;font-size:20px;color:#5f6368;cursor:pointer}
+#mapCardGo{margin-top:8px;border:0;border-radius:18px;background:#1a73e8;color:#fff;padding:7px 14px;font:700 12px "DM Sans",system-ui,sans-serif;cursor:pointer}
+#mapOpenBtn{background:#fff!important;color:#138344!important;border:1.5px solid #138344!important;display:flex;align-items:center;justify-content:center;gap:7px}
+@media(max-width:700px){#cityMapPanel{left:8px;right:8px;top:70px;bottom:8px;width:auto;transform:none}#mapCard{bottom:84px}}`;
+document.head.appendChild(mapStyleEl);
+
 const cityMapPanel = document.createElement('section');
-cityMapPanel.id = 'cityMapPanel';
-cityMapPanel.innerHTML = '<div id="cityMapHead"><b>LAGOS CITY MAP</b><button id="cityMapClose" type="button">×</button></div><canvas id="cityMapCanvas" width="420" height="420"></canvas><div id="cityMapFoot"><span>▲ NORTH</span><span id="cityMapPosition">Locating…</span></div>';
-document.body.append(cityMapToggle, cityMapPanel);
-const cityMapCanvas = document.querySelector('#cityMapCanvas');
-const cityMapCtx = cityMapCanvas.getContext('2d');
-const cityMapPosEl = document.querySelector('#cityMapPosition');
-let cityMapOpen = false, cityMapElapsed = 0, staticMapBuffer = null;
-const CITY_MAP_MIN = -CITY_HALF, CITY_MAP_SPAN = CITY_HALF * 2;
-function cityMapPoint(x, z, w, h) { return { x: ((x - CITY_MAP_MIN) / CITY_MAP_SPAN) * w, y: ((z - CITY_MAP_MIN) / CITY_MAP_SPAN) * h }; }
-function buildStaticMapCache() {
-  staticMapBuffer = document.createElement('canvas');
-  const w = staticMapBuffer.width = cityMapCanvas.width, h = staticMapBuffer.height = cityMapCanvas.height;
-  const ctx = staticMapBuffer.getContext('2d'), sx = w / CITY_MAP_SPAN, sz = h / CITY_MAP_SPAN;
-  ctx.fillStyle = '#263d32'; ctx.fillRect(0, 0, w, h);
-  ctx.fillStyle = '#9ab8c4';
-  const drawB = b => { const p = cityMapPoint(b.x, b.z, w, h); ctx.fillRect(p.x - (b.w * sx) / 2, p.y - (b.d * sz) / 2, Math.max(1, b.w * sx), Math.max(1, b.d * sz)); };
-  for (const b of cityMapBuildings) drawB(b);
-  for (let bi = -BLOCK_N; bi < BLOCK_N; bi++) for (let bj = -BLOCK_N; bj < BLOCK_N; bj++) { const r = infillAt(bi, bj); if (r) drawB({ x: r.x, z: r.z, w: r.w + 4, d: r.d + 4 }); }
-  ctx.fillStyle = '#f0c64b';
-  for (const f of cityMapFacilities) { const p = cityMapPoint(f.x, f.z, w, h); ctx.fillRect(p.x - 1.5, p.y - 1.5, 3, 3); }
-  ctx.strokeStyle = '#a6b5a4'; ctx.lineWidth = 2.5;
-  for (let k = -75; k <= 75; k += 3) {
-    const p = cityMapPoint(k * 70, 0, w, h), q = cityMapPoint(0, k * 70, w, h);
-    ctx.beginPath(); ctx.moveTo(p.x, 0); ctx.lineTo(p.x, h); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0, q.y); ctx.lineTo(w, q.y); ctx.stroke();
+cityMapPanel.id = 'cityMapPanel'; cityMapPanel.setAttribute('aria-label', 'City map');
+cityMapPanel.innerHTML = `<canvas id="cityMapCanvas"></canvas>
+<div class="mapChip" id="mapSearchBox"><span>🔎</span><input id="mapSearch" type="text" placeholder="Search Lagos" autocomplete="off" spellcheck="false"></div>
+<div id="mapResults"></div>
+<button id="cityMapClose" type="button" aria-label="Close map">×</button>
+<div class="mapChip" id="mapCompass" title="North is up">▲N</div>
+<div class="mapChip" id="mapCtl"><button id="mapZoomIn" type="button" aria-label="Zoom in">＋</button><button id="mapZoomOut" type="button" aria-label="Zoom out">−</button></div>
+<button id="mapLocate" type="button" class="on" aria-label="My location">◎</button>
+<div class="mapChip" id="mapCard"><button id="mapCardX" type="button" aria-label="Close">×</button><h4 id="mapCardTitle"></h4><div id="mapCardBody"></div><button id="mapCardGo" type="button">Centre here</button></div>
+<div class="mapChip" id="mapFoot"><div id="mapScaleRow"><span id="mapScaleBar"></span><span id="mapScaleText"></span></div><div id="mapStatus">Locating…</div></div>`;
+document.body.appendChild(cityMapPanel);
+const mapOpenBtn = document.createElement('button');
+mapOpenBtn.id = 'mapOpenBtn'; mapOpenBtn.type = 'button'; mapOpenBtn.className = 'panel-button';
+mapOpenBtn.innerHTML = '🗺 Map view';
+// Lives inside the character panel (not floating), so it can never sit on top of another button.
+(document.querySelector('.left-panel') || document.body).appendChild(mapOpenBtn);
+
+const mapEl = id => cityMapPanel.querySelector('#' + id);
+const cityMapCanvas = mapEl('cityMapCanvas'), mapCtx = cityMapCanvas.getContext('2d');
+const mapSearchEl = mapEl('mapSearch'), mapResultsEl = mapEl('mapResults'), mapCardEl = mapEl('mapCard'), mapLocateEl = mapEl('mapLocate');
+const mapView = { cx: 0, cz: 0, scale: MAP_DEFAULT_SCALE, follow: true };
+let cityMapOpen = false, mapW = 800, mapH = 600, mapDpr = 1, mapDirty = true, mapSelected = null, mapPulse = 0, mapLastX = NaN, mapLastZ = NaN, mapLastR = NaN;
+const mapTrail = [];
+
+// ---- look-ups ---------------------------------------------------------------
+const MAP_KIND_LABEL = { office: 'Office tower', apartment: 'Apartment tower', mixed: 'Mixed-use tower', residential: 'Residential tower', tenement: 'Residential block', shop: 'Retail building', duplex: 'Duplex block', market: 'Market building' };
+const MAP_FACADE_LABEL = { curtain: 'Glass curtain wall', fins: 'Glass with vertical fins', ribbon: 'Ribbon windows', punched: 'Punched windows', grid: 'Deep window grid', bands: 'Glazed bands' };
+const MAP_FACILITY_LABEL = { football: 'Football arena', tennis: 'Tennis courts', basketball: 'Basketball court', sportscomplex: 'Sports centre', market: 'Market', parking: 'Car park' };
+const MAP_FACE_NAME = ['south', 'north', 'east', 'west'];
+const mapHexCss = h => '#' + h.toString(16).padStart(6, '0');
+const mapBlend = (hex, mixHex, t, f = 1) => { const a = [(hex >> 16) & 255, (hex >> 8) & 255, hex & 255], b = [(mixHex >> 16) & 255, (mixHex >> 8) & 255, mixHex & 255]; return `rgb(${a.map((v, i) => Math.min(255, Math.round((v + (b[i] - v) * t) * f))).join(',')})`; };
+const mapPresetCache = new Map();
+function mapPresetColors(pi) {   // soft map tones taken from the real facade of each tower
+  let c = mapPresetCache.get(pi);
+  if (!c) {
+    const p = FACADE_PRESETS[pi], base = p.glassy ? p.glass : p.wall;
+    c = { tiers: [0.9, 0.84, 0.78, 0.72].map(f => mapBlend(base, 0xe9e5db, 0.5, f)), edge: mapBlend(base, 0x9a958a, 0.45) };
+    mapPresetCache.set(pi, c);
   }
-  ctx.fillStyle = '#f2e9bb'; ctx.font = 'bold 9px system-ui, sans-serif'; ctx.textAlign = 'center';
-  for (const d of baseDistrictDefs) { const p = cityMapPoint(d[1], d[2], w, h); ctx.fillText(d[0], p.x, p.y); }
+  return c;
 }
+const mapFacilityStyle = {
+  football: ['#cdebc2', '#9fd18f'], tennis: ['#cdebc2', '#9fd18f'], basketball: ['#cdebc2', '#9fd18f'], sportscomplex: ['#d4edc9', '#a8d79a'],
+  market: ['#fbe6c2', '#e9c98b'], parking: ['#d9e6f8', '#a9c3ea']
+};
+const mapFacilityIcon = { football: '⚽', tennis: '🎾', basketball: '🏀', sportscomplex: '🏟', market: '🛍', parking: 'P' };
+
+// ---- view helpers -----------------------------------------------------------
+function mapResize() {
+  const r = cityMapCanvas.getBoundingClientRect();
+  mapW = Math.max(1, Math.round(r.width)); mapH = Math.max(1, Math.round(r.height));
+  mapDpr = Math.min(2, window.devicePixelRatio || 1);
+  cityMapCanvas.width = Math.round(mapW * mapDpr); cityMapCanvas.height = Math.round(mapH * mapDpr);
+  mapDirty = true;
+}
+const mapClampScale = s => Math.max(MAP_MIN_SCALE, Math.min(MAP_MAX_SCALE, s));
+function mapZoomAt(px, py, factor) {
+  if (mapView.follow) { px = mapW / 2; py = mapH / 2; }          // while following, zoom around the player
+  const wx = mapView.cx + (px - mapW / 2) / mapView.scale, wz = mapView.cz + (py - mapH / 2) / mapView.scale;
+  mapView.scale = mapClampScale(mapView.scale * factor);
+  mapView.cx = wx - (px - mapW / 2) / mapView.scale; mapView.cz = wz - (py - mapH / 2) / mapView.scale;
+  mapDirty = true;
+}
+function mapSetFollow(on) {
+  mapView.follow = on; mapLocateEl.classList.toggle('on', on); mapDirty = true;
+}
+function mapFlyTo(x, z, scale) {
+  mapSetFollow(false);
+  mapView.cx = x; mapView.cz = z;
+  if (scale) mapView.scale = mapClampScale(scale);
+  mapDirty = true;
+}
+function mapNearestDistrict(x, z) {
+  let best = null, bd = 1e12;
+  for (const d of baseDistrictDefs) { const dd = Math.hypot(d[1] - x, d[2] - z); if (dd < bd) { bd = dd; best = d[0]; } }
+  return best;
+}
+
+// ---- drawing ----------------------------------------------------------------
 function drawCityMap() {
-  if (!staticMapBuffer) buildStaticMapCache();
-  const w = cityMapCanvas.width, h = cityMapCanvas.height;
-  cityMapCtx.drawImage(staticMapBuffer, 0, 0);
-  const me = cityMapPoint(player.position.x, player.position.z, w, h);
-  cityMapCtx.fillStyle = '#ffffff'; cityMapCtx.strokeStyle = '#0b5d35'; cityMapCtx.lineWidth = 2.5;
-  cityMapCtx.beginPath(); cityMapCtx.arc(me.x, me.y, 6, 0, Math.PI * 2); cityMapCtx.fill(); cityMapCtx.stroke();
-  if (cityMapPosEl) cityMapPosEl.textContent = `${Math.round(player.position.x)}, ${Math.round(player.position.z)}`;
+  const ctx = mapCtx, W = mapW, H = mapH, S = mapView.scale, cx = mapView.cx, cz = mapView.cz;
+  ctx.setTransform(mapDpr, 0, 0, mapDpr, 0, 0);
+  ctx.setLineDash([]); ctx.globalAlpha = 1; ctx.lineCap = 'butt'; ctx.lineJoin = 'miter';
+  const X = x => (x - cx) * S + W / 2, Y = z => (z - cz) * S + H / 2;
+  const wx0 = cx - W / 2 / S, wx1 = cx + W / 2 / S, wz0 = cz - H / 2 / S, wz1 = cz + H / 2 / S;
+  const vis = (x, z, hw, hd) => x + hw >= wx0 && x - hw <= wx1 && z + hd >= wz0 && z - hd <= wz1;
+  const placed = [];                                   // label collision boxes
+  const label = (text, x, y, w, h) => {
+    if (x + w / 2 < 0 || x - w / 2 > W || y + h / 2 < 0 || y - h / 2 > H) return false;
+    for (const b of placed) if (Math.abs(b[0] - x) < (b[2] + w) / 2 && Math.abs(b[1] - y) < (b[3] + h) / 2) return false;
+    placed.push([x, y, w, h]); return true;
+  };
+  const halo = (text, x, y, color, size, weight = 600, letter = 0) => {
+    ctx.font = `${weight} ${size}px "DM Sans", system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    if ('letterSpacing' in ctx) ctx.letterSpacing = letter + 'px';
+    ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(255,255,255,.92)'; ctx.lineJoin = 'round'; ctx.strokeText(text, x, y);
+    ctx.fillStyle = color; ctx.fillText(text, x, y);
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+    ctx.lineJoin = 'miter';
+  };
+
+  // 1. ground, beach, lagoon
+  ctx.fillStyle = '#dfe3e8'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#f2efe9'; ctx.fillRect(X(-CITY_HALF), Y(-CITY_HALF), CITY_HALF * 2 * S, CITY_HALF * 2 * S);
+  ctx.fillStyle = '#f3e6c0'; ctx.fillRect(X(590 - 360), Y(805 - 17), 720 * S, 34 * S);
+  ctx.fillStyle = '#aadaff'; ctx.fillRect(X(610 - 345), Y(930 - 115), 690 * S, 230 * S);
+
+  // 2. parks / sports grounds / market / car park (ground fills)
+  for (const f of cityMapFacilities) {
+    if (!vis(f.x, f.z, f.w / 2, f.d / 2)) continue;
+    const st = mapFacilityStyle[f.type] || mapFacilityStyle.sportscomplex, w = f.w * S, h = f.d * S;
+    if (w < 1 && h < 1) continue;
+    ctx.fillStyle = st[0]; ctx.fillRect(X(f.x) - w / 2, Y(f.z) - h / 2, w, h);
+    const selF = mapSelected && mapSelected.f === f;
+    if (S >= 0.2 || selF) { ctx.strokeStyle = selF ? '#ea4335' : st[1]; ctx.lineWidth = selF ? 3 : 1.5; ctx.strokeRect(X(f.x) - w / 2, Y(f.z) - h / 2, w, h); }
+    if (S >= 0.6 && (f.type === 'football' || f.type === 'tennis' || f.type === 'basketball')) {   // pitch markings
+      ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.lineWidth = Math.max(1, 0.5 * S);
+      const iw = w * 0.9, ih = h * 0.88, x = X(f.x), y = Y(f.z);
+      ctx.strokeRect(x - iw / 2, y - ih / 2, iw, ih);
+      ctx.beginPath();
+      if (f.type === 'football') { if (w >= h) { ctx.moveTo(x, y - ih / 2); ctx.lineTo(x, y + ih / 2); } else { ctx.moveTo(x - iw / 2, y); ctx.lineTo(x + iw / 2, y); } ctx.moveTo(x + Math.min(iw, ih) * 0.14, y); ctx.arc(x, y, Math.min(iw, ih) * 0.14, 0, Math.PI * 2); }
+      else if (f.type === 'tennis') { ctx.moveTo(x - iw / 2, y); ctx.lineTo(x + iw / 2, y); }
+      else { ctx.moveTo(x + Math.min(iw, ih) * 0.16, y); ctx.arc(x, y, Math.min(iw, ih) * 0.16, 0, Math.PI * 2); }
+      ctx.stroke();
+    }
+  }
+
+  // 3. roads: walkways, casings, fills, then lane detail when zoomed in
+  const kx0 = Math.max(-24, Math.ceil((wx0 - 40) / ROAD_SPACING)), kx1 = Math.min(24, Math.floor((wx1 + 40) / ROAD_SPACING));
+  const kz0 = Math.max(-24, Math.ceil((wz0 - 40) / ROAD_SPACING)), kz1 = Math.min(24, Math.floor((wz1 + 40) / ROAD_SPACING));
+  const isMajor = k => ((k % 3) + 3) % 3 === 0;
+  const zLo = Math.max(wz0 - 60, -CITY_HALF), zHi = Math.min(wz1 + 60, CITY_HALF), xLo = Math.max(wx0 - 60, -CITY_HALF), xHi = Math.min(wx1 + 60, CITY_HALF);
+  const vRoad = (g, off, wd) => ctx.fillRect(X(g) - Math.max(wd * S, 1.4) / 2, Y(zLo), Math.max(wd * S, 1.4), (zHi - zLo) * S);   // a road along z
+  const hRoad = (g, off, wd) => ctx.fillRect(X(xLo), Y(g) - Math.max(wd * S, 1.4) / 2, (xHi - xLo) * S, Math.max(wd * S, 1.4));   // a road along x
+  if (S >= 0.3) {
+    ctx.fillStyle = '#e8dccf';
+    for (let k = kx0; k <= kx1; k++) vRoad(k * ROAD_SPACING, 0, 2 * (AVE_HALF + WALK_W));
+    for (let k = kz0; k <= kz1; k++) hRoad(k * ROAD_SPACING, 0, 2 * (AVE_HALF + WALK_W));
+  }
+  const casing = S < 0.3 ? 1.2 / S : 2.2 / S;
+  for (const major of [false, true]) {
+    ctx.fillStyle = major ? '#e5c46f' : '#cfd3d8';
+    for (let k = kx0; k <= kx1; k++) if (isMajor(k) === major) vRoad(k * ROAD_SPACING, 0, 2 * AVE_HALF + casing);
+    for (let k = kz0; k <= kz1; k++) if (isMajor(k) === major) hRoad(k * ROAD_SPACING, 0, 2 * AVE_HALF + casing);
+  }
+  for (const major of [false, true]) {
+    ctx.fillStyle = major ? '#fde293' : '#ffffff';
+    for (let k = kx0; k <= kx1; k++) if (isMajor(k) === major) vRoad(k * ROAD_SPACING, 0, 2 * AVE_HALF);
+    for (let k = kz0; k <= kz1; k++) if (isMajor(k) === major) hRoad(k * ROAD_SPACING, 0, 2 * AVE_HALF);
+  }
+  const detail = Math.max(0, Math.min(1, (S - 0.55) / 0.4));
+  if (detail > 0.01) {                                  // real asphalt + paint fade in as you zoom
+    ctx.globalAlpha = detail; ctx.fillStyle = '#50565a';
+    for (let k = kx0; k <= kx1; k++) vRoad(k * ROAD_SPACING, 0, 2 * AVE_HALF);
+    for (let k = kz0; k <= kz1; k++) hRoad(k * ROAD_SPACING, 0, 2 * AVE_HALF);
+    ctx.lineCap = 'butt';
+    const blocks = (lo, hi, fn) => { for (let a = Math.floor(lo / ROAD_SPACING) * ROAD_SPACING; a < hi; a += ROAD_SPACING) { if (a < -5180 || a + ROAD_SPACING > 5180) continue; fn(a, a + AVE_HALF + WALK_W, a + ROAD_SPACING - AVE_HALF - WALK_W); } };
+    const yellowW = Math.max(1, 1.06 * S), whiteW = Math.max(1, 0.15 * S);
+    for (let k = kx0; k <= kx1; k++) {                  // roads along z (constant x = g)
+      const g = k * ROAD_SPACING;
+      blocks(wz0 - 5, wz1 + 5, (a, m0, m1) => {
+        ctx.setLineDash([]); ctx.strokeStyle = '#f1c84b'; ctx.lineWidth = yellowW;
+        ctx.beginPath(); ctx.moveTo(X(g), Y(m0)); ctx.lineTo(X(g), Y(m1)); ctx.stroke();
+        const q0 = Math.ceil((m0 + 2) / 14) * 14 - 2;
+        ctx.strokeStyle = '#f4f2df'; ctx.lineWidth = whiteW; ctx.setLineDash([4 * S, 10 * S]);
+        for (const sd of [-12, 12]) { ctx.beginPath(); ctx.moveTo(X(g + sd), Y(q0)); ctx.lineTo(X(g + sd), Y(m1)); ctx.stroke(); }
+        ctx.setLineDash([]);
+      });
+    }
+    for (let k = kz0; k <= kz1; k++) {                  // roads along x (constant z = g)
+      const g = k * ROAD_SPACING;
+      blocks(wx0 - 5, wx1 + 5, (a, m0, m1) => {
+        ctx.setLineDash([]); ctx.strokeStyle = '#f1c84b'; ctx.lineWidth = yellowW;
+        ctx.beginPath(); ctx.moveTo(X(m0), Y(g)); ctx.lineTo(X(m1), Y(g)); ctx.stroke();
+        const q0 = Math.ceil((m0 + 2) / 14) * 14 - 2;
+        ctx.strokeStyle = '#f4f2df'; ctx.lineWidth = whiteW; ctx.setLineDash([4 * S, 10 * S]);
+        for (const sd of [-12, 12]) { ctx.beginPath(); ctx.moveTo(X(q0), Y(g + sd)); ctx.lineTo(X(m1), Y(g + sd)); ctx.stroke(); }
+        ctx.setLineDash([]);
+      });
+    }
+    // junctions: zebra crossings, stop lines, yellow box
+    const ZT = 0.9, ZW_ = WALK_W, ZN = Math.floor((2 * AVE_HALF - ZT) / (2 * ZT)) + 1, ZP = (2 * AVE_HALF - ZT) / (ZN - 1), SLT = 1.2, GAPM = 0.6;
+    for (let a = kx0; a <= kx1; a++) for (let b = kz0; b <= kz1; b++) {
+      const ix = a * ROAD_SPACING, iz = b * ROAD_SPACING, hw = AVE_HALF;
+      ctx.strokeStyle = '#f4f2df'; ctx.lineWidth = ZW_ * S; ctx.setLineDash([ZT * S, (ZP - ZT) * S]);
+      for (const sg of [-1, 1]) {
+        ctx.beginPath(); ctx.moveTo(X(ix - hw), Y(iz + sg * (hw + ZW_ / 2))); ctx.lineTo(X(ix + hw), Y(iz + sg * (hw + ZW_ / 2))); ctx.stroke();   // arms along z
+        ctx.beginPath(); ctx.moveTo(X(ix + sg * (hw + ZW_ / 2)), Y(iz - hw)); ctx.lineTo(X(ix + sg * (hw + ZW_ / 2)), Y(iz + hw)); ctx.stroke();   // arms along x
+      }
+      ctx.setLineDash([]); ctx.fillStyle = '#f4f2df';
+      const so = hw + ZW_ + GAPM + SLT / 2 + 0.2, sl = Math.max(SLT * S, 1.2);
+      ctx.fillRect(X(ix - hw), Y(iz - so) - sl / 2, (hw - GAPM) * S, sl);
+      ctx.fillRect(X(ix + GAPM), Y(iz + so) - sl / 2, (hw - GAPM) * S, sl);
+      ctx.fillRect(X(ix - so) - sl / 2, Y(iz + GAPM), sl, (hw - GAPM) * S);
+      ctx.fillRect(X(ix + so) - sl / 2, Y(iz - hw), sl, (hw - GAPM) * S);
+      if (S >= 1.0) {
+        const e = hw - 0.8;
+        ctx.strokeStyle = '#f1c84b'; ctx.lineWidth = Math.max(1, 0.3 * S);
+        ctx.strokeRect(X(ix - e), Y(iz - e), 2 * e * S, 2 * e * S);
+        ctx.beginPath(); ctx.moveTo(X(ix - e), Y(iz - e)); ctx.lineTo(X(ix + e), Y(iz + e)); ctx.moveTo(X(ix + e), Y(iz - e)); ctx.lineTo(X(ix - e), Y(iz + e)); ctx.stroke();
+      }
+    }
+    ctx.globalAlpha = 1; ctx.setLineDash([]);
+  }
+
+  // 4. bus stops (shelters) along the avenues
+  const stopPts = [];
+  if (S >= 0.45) {
+    for (let k = kx0; k <= kx1; k++) { const g = k * ROAD_SPACING; for (const q of furnitureAlong(g, wz0 - 40, wz1 + 40).stops) for (const sd of [-1, 1]) stopPts.push([g + sd * (AVE_HALF + SHELTER_OFFSET), q, SHELTER_DEPTH, SHELTER_LEN]); }
+    for (let k = kz0; k <= kz1; k++) { const g = k * ROAD_SPACING; for (const q of furnitureAlong(g, wx0 - 40, wx1 + 40).stops) for (const sd of [-1, 1]) stopPts.push([q, g + sd * (AVE_HALF + SHELTER_OFFSET), SHELTER_LEN, SHELTER_DEPTH]); }
+  }
+
+  // 5. buildings: real footprints, set-back tiers, entrance canopy
+  const drawSpec = b => {
+    const pw = (b.w + 4) * S, pd = (b.d + 4) * S, bx = X(b.x), by = Y(b.z);
+    if (bx + pw / 2 < 0 || bx - pw / 2 > W || by + pd / 2 < 0 || by - pd / 2 > H) return;
+    const col = mapPresetColors(b.preset), sel = mapSelected && mapSelected.b === b;
+    if (pw < 1.5 && pd < 1.5) { ctx.fillStyle = col.tiers[0]; ctx.fillRect(bx - 1, by - 1, 2, 2); return; }
+    if (S < 0.3) { ctx.fillStyle = col.tiers[0]; ctx.fillRect(bx - pw / 2, by - pd / 2, pw, pd); }
+    else {
+      ctx.fillStyle = '#e6e2d9'; ctx.fillRect(bx - pw / 2, by - pd / 2, pw, pd);                  // glazed podium
+      ctx.strokeStyle = col.edge; ctx.lineWidth = 1; ctx.strokeRect(bx - pw / 2, by - pd / 2, pw, pd);
+      b.tiers.forEach((t, i) => {
+        const tw = t.w * S, td = t.d * S, tx = X(t.x) - tw / 2, ty = Y(t.z) - td / 2;
+        ctx.fillStyle = col.tiers[Math.min(i, 3)]; ctx.fillRect(tx, ty, tw, td);
+        ctx.strokeRect(tx, ty, tw, td);
+      });
+      if (S >= 0.7) {                                                                             // entrance canopy on the street face
+        const d = b.door, hw = (b.w + 4) / 2, hd = (b.d + 4) / 2, f = d.face;
+        let ex, ez, ew, ed;
+        if (f === 0) { ex = b.x + d.off; ez = b.z + hd + 4; ew = 18; ed = 8; }
+        else if (f === 1) { ex = b.x - d.off; ez = b.z - hd - 4; ew = 18; ed = 8; }
+        else if (f === 2) { ex = b.x + hw + 4; ez = b.z - d.off; ew = 8; ed = 18; }
+        else { ex = b.x - hw - 4; ez = b.z + d.off; ew = 8; ed = 18; }
+        ctx.fillStyle = mapHexCss(d.canopy); ctx.globalAlpha = 0.85; ctx.fillRect(X(ex) - ew * S / 2, Y(ez) - ed * S / 2, ew * S, ed * S); ctx.globalAlpha = 1;
+      }
+    }
+    if (sel) { ctx.strokeStyle = '#ea4335'; ctx.lineWidth = 3; ctx.strokeRect(bx - pw / 2 - 1, by - pd / 2 - 1, pw + 2, pd + 2); }
+  };
+  {
+    const bi0 = Math.max(-BLOCK_N, Math.floor(wx0 / ROAD_SPACING)), bi1 = Math.min(BLOCK_N - 1, Math.floor(wx1 / ROAD_SPACING));
+    const bj0 = Math.max(-BLOCK_N, Math.floor(wz0 / ROAD_SPACING)), bj1 = Math.min(BLOCK_N - 1, Math.floor(wz1 / ROAD_SPACING));
+    for (let bi = bi0; bi <= bi1; bi++) for (let bj = bj0; bj <= bj1; bj++) { const r = infillAt(bi, bj); if (r) drawSpec(r); }
+    for (const b of cityMapSpecs) if (vis(b.x, b.z, b.w / 2 + 2, b.d / 2 + 2)) drawSpec(b);
+  }
+
+  // 6. bus stop symbols on top of the buildings' ground
+  for (const [x, z, sw, sd] of stopPts) {
+    const px = X(x), py = Y(z);
+    if (px < -20 || px > W + 20 || py < -20 || py > H + 20) continue;
+    if (S >= 1.2) {
+      ctx.fillStyle = 'rgba(138,180,248,.75)'; ctx.fillRect(px - sw * S / 2, py - sd * S / 2, sw * S, sd * S);
+      ctx.strokeStyle = '#4285f4'; ctx.lineWidth = 1.2; ctx.strokeRect(px - sw * S / 2, py - sd * S / 2, sw * S, sd * S);
+    }
+    const r = S >= 1.2 ? 8 : 5.5;
+    ctx.fillStyle = '#1a73e8'; ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.fillRect(px - r * 0.45, py - r * 0.5, r * 0.9, r * 0.7); ctx.fillStyle = '#1a73e8'; ctx.fillRect(px - r * 0.33, py - r * 0.38, r * 0.66, r * 0.26);
+    ctx.fillStyle = '#fff'; ctx.fillRect(px - r * 0.35, py + r * 0.28, r * 0.2, r * 0.2); ctx.fillRect(px + r * 0.15, py + r * 0.28, r * 0.2, r * 0.2);
+  }
+
+  // 7. labels (priority order: districts, places, water, street names)
+  const dAlpha = S < 0.35 ? 1 : Math.max(0, 1 - (S - 0.35) / 0.45);
+  if (dAlpha > 0.02) {
+    ctx.globalAlpha = dAlpha;
+    for (const d of districtDefs) {
+      const isBase = baseDistrictDefs.indexOf(d) >= 0;
+      if (!isBase && (S < 0.16 || S > 0.35)) continue;   // the repeated tile districts only appear at mid zoom, so the overview stays clean
+      if (d[1] < wx0 - 400 || d[1] > wx1 + 400 || d[2] < wz0 - 100 || d[2] > wz1 + 100) continue;
+      const px = X(d[1]), py = Y(d[2]), size = isBase ? 12 : 10;
+      ctx.font = `700 ${size}px "DM Sans", system-ui, sans-serif`;
+      const w = ctx.measureText(d[0]).width + 8;
+      if (label(d[0], px, py, w, size + 6)) halo(d[0], px, py, isBase ? '#5f6368' : '#80868b', size, 700, 1);
+    }
+    ctx.globalAlpha = 1;
+  }
+  if (S >= 0.15) {
+    for (const f of cityMapFacilities) {
+      if (!vis(f.x, f.z, 20, 20)) continue;
+      if (f.type === 'sportscomplex' && S < 0.5) continue;
+      const px = X(f.x), py = Y(f.z);
+      const ic = mapFacilityIcon[f.type] || '•';
+      ctx.fillStyle = f.type === 'parking' ? '#4285f4' : f.type === 'market' ? '#f29900' : '#34a853';
+      if (label(ic, px, py, 18, 18)) {
+        ctx.beginPath(); ctx.arc(px, py, 9, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+        ctx.fillStyle = '#fff'; ctx.font = '12px system-ui, "Apple Color Emoji", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(ic, px, py + 0.5);
+        if (S >= 0.5 && f.label) { ctx.font = '600 10.5px "DM Sans", system-ui, sans-serif'; const w = ctx.measureText(f.label).width + 6; if (label(f.label, px, py + 19, w, 13)) halo(f.label, px, py + 19, '#188038', 10.5); }
+      }
+    }
+  }
+  if (vis(610, 930, 345, 115) && S >= 0.06) { const px = X(610), py = Y(930); if (label('Lagos Lagoon', px, py, 110, 14)) halo('Lagos Lagoon', px, py, '#4a7ba7', 12, 600, 1); }
+  if (S >= 0.07) {
+    ctx.font = '600 11px "DM Sans", system-ui, sans-serif';
+    const drawName = (name, px, py, vertical) => {
+      const tw = ctx.measureText(name).width + 6;
+      if (!label(name, px, py, vertical ? 14 : tw, vertical ? tw : 14)) return;
+      ctx.save(); ctx.translate(px, py); if (vertical) ctx.rotate(-Math.PI / 2);
+      halo(name, 0, 0, '#5f6368', 11); ctx.restore();
+    };
+    for (let k = kx0; k <= kx1; k++) {
+      if (S < 0.25 && !isMajor(k)) continue;
+      const name = streetName('x', k), tw = ctx.measureText(name).width, step = Math.max(1, Math.ceil((tw + 50) / (ROAD_SPACING * S)));
+      for (let m = Math.floor(wz0 / ROAD_SPACING); m * ROAD_SPACING < wz1; m++) { if (m < -24 || m > 23 || ((m % step) + step) % step) continue; drawName(name, X(k * ROAD_SPACING), Y(m * ROAD_SPACING + 105), true); }
+    }
+    for (let k = kz0; k <= kz1; k++) {
+      if (S < 0.25 && !isMajor(k)) continue;
+      const name = streetName('z', k), tw = ctx.measureText(name).width, step = Math.max(1, Math.ceil((tw + 50) / (ROAD_SPACING * S)));
+      for (let m = Math.floor(wx0 / ROAD_SPACING); m * ROAD_SPACING < wx1; m++) { if (m < -24 || m > 23 || ((m % step) + step) % step) continue; drawName(name, X(m * ROAD_SPACING + 105), Y(k * ROAD_SPACING), false); }
+    }
+  }
+
+  // 8. live player: trail, direction beam, pulsing blue dot
+  const pl = player.position, pxp = X(pl.x), pyp = Y(pl.z);
+  if (mapTrail.length > 1) {
+    ctx.strokeStyle = 'rgba(26,115,232,.45)'; ctx.lineWidth = 4; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.beginPath(); mapTrail.forEach((p, i) => { const tx = X(p[0]), ty = Y(p[1]); if (i) ctx.lineTo(tx, ty); else ctx.moveTo(tx, ty); });
+    ctx.lineTo(pxp, pyp); ctx.stroke(); ctx.lineJoin = 'miter'; ctx.lineCap = 'butt';
+  }
+  if (pxp > -60 && pxp < W + 60 && pyp > -60 && pyp < H + 60) {
+    const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 450), ang = Math.PI - player.rotation.y - Math.PI / 2;   // facing (sin,cos) in (x,z) -> screen angle
+    const gr = ctx.createRadialGradient(pxp, pyp, 4, pxp, pyp, 44);
+    gr.addColorStop(0, 'rgba(26,115,232,.45)'); gr.addColorStop(1, 'rgba(26,115,232,0)');
+    ctx.fillStyle = gr; ctx.beginPath(); ctx.moveTo(pxp, pyp); ctx.arc(pxp, pyp, 44, ang - 0.62, ang + 0.62); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = `rgba(26,115,232,${0.14 + 0.1 * pulse})`; ctx.beginPath(); ctx.arc(pxp, pyp, 17 + 5 * pulse, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(pxp, pyp, 9.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#1a73e8'; ctx.beginPath(); ctx.arc(pxp, pyp, 6.8, 0, Math.PI * 2); ctx.fill();
+  } else {                                                                                       // player is off-screen: arrow on the edge
+    const dx = pxp - W / 2, dy = pyp - H / 2, k = Math.min((W / 2 - 24) / Math.abs(dx || 1e-6), (H / 2 - 24) / Math.abs(dy || 1e-6)), ex = W / 2 + dx * k, ey = H / 2 + dy * k, a = Math.atan2(dy, dx);
+    ctx.save(); ctx.translate(ex, ey); ctx.rotate(a);
+    ctx.fillStyle = '#1a73e8'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(12, 0); ctx.lineTo(-8, -9); ctx.lineTo(-4, 0); ctx.lineTo(-8, 9); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
+  }
+
+  // 9. HUD text: scale bar + live position
+  const nice = [5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
+  let L = nice[0]; for (const n of nice) if (n * S <= 130) L = n;
+  mapEl('mapScaleBar').style.width = Math.max(20, L * S) + 'px';
+  mapEl('mapScaleText').textContent = L >= 1000 ? (L / 1000) + ' km' : L + ' m';
+  mapEl('mapStatus').textContent = `📍 You: ${Math.round(pl.x)}, ${Math.round(pl.z)} · near ${mapNearestDistrict(pl.x, pl.z)}`;
 }
-cityMapToggle.addEventListener('click', () => { cityMapOpen = !cityMapOpen; cityMapPanel.classList.toggle('open', cityMapOpen); if (cityMapOpen) drawCityMap(); });
-document.querySelector('#cityMapClose').addEventListener('click', () => { cityMapOpen = false; cityMapPanel.classList.remove('open'); });
+
+// ---- picking + info card -----------------------------------------------------
+function mapPick(wx, wz) {
+  for (const f of cityMapFacilities) if (Math.abs(wx - f.x) <= f.w / 2 && Math.abs(wz - f.z) <= f.d / 2) return { f };
+  const inside = b => Math.abs(wx - b.x) <= (b.w + 4) / 2 && Math.abs(wz - b.z) <= (b.d + 4) / 2;
+  const r = infillAt(Math.floor(wx / ROAD_SPACING), Math.floor(wz / ROAD_SPACING));
+  if (r && inside(r)) return { b: r };
+  for (const b of cityMapSpecs) if (inside(b)) return { b };
+  return null;
+}
+function mapShowCard(hit) {
+  mapSelected = hit; mapDirty = true;
+  if (!hit) { mapCardEl.style.display = 'none'; return; }
+  const title = mapEl('mapCardTitle'), body = mapEl('mapCardBody');
+  if (hit.b) {
+    const b = hit.b, bi = Math.floor(b.x / ROAD_SPACING), bj = Math.floor(b.z / ROAD_SPACING), p = FACADE_PRESETS[b.preset];
+    title.textContent = MAP_KIND_LABEL[b.kind] || 'Building';
+    body.innerHTML = `<p><b>${b.floors}</b> floors · <b>${Math.round(b.h)}</b> m tall${b.tiers.length > 1 ? ' · ' + b.tiers.length + ' stepped tiers' : ''}</p>
+      <p>Footprint ${Math.round(b.w + 4)} × ${Math.round(b.d + 4)} m</p>
+      <p>${p.glassy ? 'Glass tower' : 'Solid facade'} · ${MAP_FACADE_LABEL[p.style]}</p>
+      <p>Entrance on the ${MAP_FACE_NAME[b.door.face]} side</p>
+      <p>Block of ${streetName('x', bi)}, ${streetName('x', bi + 1)}, ${streetName('z', bj)} and ${streetName('z', bj + 1)}</p>`;
+    mapCardEl._go = [b.x, b.z, Math.max(mapView.scale, 0.9)];
+  } else {
+    const f = hit.f;
+    title.textContent = f.label || MAP_FACILITY_LABEL[f.type];
+    body.innerHTML = `<p>${MAP_FACILITY_LABEL[f.type] || f.type} · ${Math.round(f.w)} × ${Math.round(f.d)} m</p><p>Near ${mapNearestDistrict(f.x, f.z)}</p>`;
+    mapCardEl._go = [f.x, f.z, Math.max(mapView.scale, 1.2)];
+  }
+  mapCardEl.style.display = 'block';
+}
+
+// ---- search -----------------------------------------------------------------
+let mapSearchIndex = null;
+function mapSearchItems(q) {
+  if (!mapSearchIndex) {
+    mapSearchIndex = [];
+    for (const d of baseDistrictDefs) mapSearchIndex.push({ name: d[0], sub: 'District', x: d[1], z: d[2], s: 0.3 });
+    for (const f of cityMapFacilities) if (f.type !== 'sportscomplex' && f.label) mapSearchIndex.push({ name: f.label, sub: MAP_FACILITY_LABEL[f.type], x: f.x, z: f.z, s: 1.4 });
+    for (let i = -15; i <= 15; i++) { mapSearchIndex.push({ name: streetName('x', i), sub: 'Street', x: i * ROAD_SPACING, z: null, s: 0.7 }); mapSearchIndex.push({ name: streetName('z', i), sub: 'Street', x: null, z: i * ROAD_SPACING, s: 0.7 }); }
+  }
+  q = q.trim().toLowerCase();
+  if (!q) return [];
+  const starts = [], has = [];
+  for (const it of mapSearchIndex) { const n = it.name.toLowerCase(); if (n.startsWith(q)) starts.push(it); else if (n.includes(q)) has.push(it); }
+  return starts.concat(has).slice(0, 7);
+}
+function mapGoSearch(it) {
+  mapFlyTo(it.x === null ? mapView.cx : it.x, it.z === null ? mapView.cz : it.z, it.s);
+  mapResultsEl.style.display = 'none'; mapSearchEl.value = it.name; mapSearchEl.blur();
+}
+mapSearchEl.addEventListener('input', () => {
+  const items = mapSearchItems(mapSearchEl.value);
+  mapResultsEl.innerHTML = '';
+  items.forEach(it => { const b = document.createElement('button'); b.type = 'button'; b.innerHTML = `${it.name}<small>${it.sub}</small>`; b.addEventListener('click', () => mapGoSearch(it)); mapResultsEl.appendChild(b); });
+  mapResultsEl.style.display = items.length ? 'block' : 'none';
+});
+mapSearchEl.addEventListener('keydown', e => {
+  e.stopPropagation();                                   // typing must not move the player
+  if (e.key === 'Enter') { const it = mapSearchItems(mapSearchEl.value)[0]; if (it) mapGoSearch(it); }
+  if (e.key === 'Escape') { mapSearchEl.value = ''; mapResultsEl.style.display = 'none'; mapSearchEl.blur(); }
+});
+mapSearchEl.addEventListener('keyup', e => e.stopPropagation());
+
+// ---- gestures: drag to pan, wheel / pinch to zoom, tap to inspect ------------
+const mapPtrs = new Map();
+let mapGesture = null;
+const mapLocal = e => { const r = cityMapCanvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+cityMapCanvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  try { cityMapCanvas.setPointerCapture(e.pointerId); } catch (_) { /* synthetic pointers */ }
+  mapPtrs.set(e.pointerId, mapLocal(e)); mapResultsEl.style.display = 'none';
+  const pts = [...mapPtrs.values()];
+  if (pts.length === 1) mapGesture = { type: 'pan', x0: pts[0].x, y0: pts[0].y, cx0: mapView.cx, cz0: mapView.cz, moved: 0, t0: performance.now() };
+  else if (pts.length === 2) {
+    const mx = (pts[0].x + pts[1].x) / 2, my = (pts[0].y + pts[1].y) / 2;
+    mapGesture = { type: 'pinch', d0: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1, s0: mapView.scale, wx: mapView.cx + (mx - mapW / 2) / mapView.scale, wz: mapView.cz + (my - mapH / 2) / mapView.scale, moved: 99 };
+    mapSetFollow(false);
+  }
+});
+cityMapCanvas.addEventListener('pointermove', e => {
+  if (!mapPtrs.has(e.pointerId)) return;
+  mapPtrs.set(e.pointerId, mapLocal(e));
+  const pts = [...mapPtrs.values()];
+  if (mapGesture && mapGesture.type === 'pan' && pts.length === 1) {
+    const dx = pts[0].x - mapGesture.x0, dy = pts[0].y - mapGesture.y0;
+    mapGesture.moved = Math.max(mapGesture.moved, Math.hypot(dx, dy));
+    if (mapGesture.moved > 4) { if (mapView.follow) mapSetFollow(false); cityMapCanvas.classList.add('grabbing'); mapView.cx = mapGesture.cx0 - dx / mapView.scale; mapView.cz = mapGesture.cz0 - dy / mapView.scale; mapDirty = true; }
+  } else if (mapGesture && mapGesture.type === 'pinch' && pts.length >= 2) {
+    const mx = (pts[0].x + pts[1].x) / 2, my = (pts[0].y + pts[1].y) / 2, d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    mapView.scale = mapClampScale(mapGesture.s0 * d / mapGesture.d0);
+    mapView.cx = mapGesture.wx - (mx - mapW / 2) / mapView.scale; mapView.cz = mapGesture.wz - (my - mapH / 2) / mapView.scale; mapDirty = true;
+  }
+});
+const mapPointerEnd = e => {
+  if (!mapPtrs.has(e.pointerId)) return;
+  const p = mapPtrs.get(e.pointerId);
+  mapPtrs.delete(e.pointerId); cityMapCanvas.classList.remove('grabbing');
+  if (mapGesture && mapGesture.type === 'pan' && e.type === 'pointerup' && mapGesture.moved < 6 && performance.now() - mapGesture.t0 < 600)
+    mapShowCard(mapPick(mapView.cx + (p.x - mapW / 2) / mapView.scale, mapView.cz + (p.y - mapH / 2) / mapView.scale));
+  const rest = [...mapPtrs.values()];
+  mapGesture = rest.length === 1 ? { type: 'pan', x0: rest[0].x, y0: rest[0].y, cx0: mapView.cx, cz0: mapView.cz, moved: 99, t0: 0 } : null;
+};
+cityMapCanvas.addEventListener('pointerup', mapPointerEnd);
+cityMapCanvas.addEventListener('pointercancel', mapPointerEnd);
+cityMapCanvas.addEventListener('wheel', e => { e.preventDefault(); const p = mapLocal(e); mapZoomAt(p.x, p.y, Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.0016))); }, { passive: false });
+cityMapCanvas.addEventListener('dblclick', e => { const p = mapLocal(e); mapZoomAt(p.x, p.y, 2); });
+mapEl('mapZoomIn').addEventListener('click', () => mapZoomAt(mapW / 2, mapH / 2, 1.6));
+mapEl('mapZoomOut').addEventListener('click', () => mapZoomAt(mapW / 2, mapH / 2, 1 / 1.6));
+mapLocateEl.addEventListener('click', () => { mapSetFollow(true); if (mapView.scale < 0.3) mapView.scale = MAP_DEFAULT_SCALE; });
+mapEl('mapCardX').addEventListener('click', () => mapShowCard(null));
+mapEl('mapCardGo').addEventListener('click', () => { const g = mapCardEl._go; if (g) mapFlyTo(g[0], g[1], g[2]); });
+
+// ---- open / close / per-frame update ----------------------------------------
+function setCityMapOpen(open) {
+  cityMapOpen = open; cityMapPanel.classList.toggle('open', open);
+  if (!open) { mapResultsEl.style.display = 'none'; return; }
+  mapResize();
+  mapView.cx = player.position.x; mapView.cz = player.position.z; mapSetFollow(true);
+  mapTrail.length = 0; mapLastX = mapLastZ = mapLastR = NaN;
+  mapShowCard(null); mapDirty = true; drawCityMap();
+}
+function updateCityMap(dt) {
+  const p = player.position;
+  if (mapView.follow) {                                  // glide to the player's live position
+    const k = Math.min(1, dt * 20), nx = mapView.cx + (p.x - mapView.cx) * k, nz = mapView.cz + (p.z - mapView.cz) * k;
+    if (Math.abs(nx - mapView.cx) > 0.001 || Math.abs(nz - mapView.cz) > 0.001) mapDirty = true;
+    mapView.cx = nx; mapView.cz = nz;
+  }
+  if (p.x !== mapLastX || p.z !== mapLastZ || player.rotation.y !== mapLastR) {
+    mapLastX = p.x; mapLastZ = p.z; mapLastR = player.rotation.y; mapDirty = true;
+    const last = mapTrail[mapTrail.length - 1];
+    if (!last || Math.hypot(last[0] - p.x, last[1] - p.z) > 4) { mapTrail.push([p.x, p.z]); if (mapTrail.length > 300) mapTrail.shift(); }
+  }
+  if ((mapPulse += dt) > 0.1) { mapPulse = 0; mapDirty = true; }   // keeps the blue dot pulsing
+  if (mapDirty) { mapDirty = false; drawCityMap(); }
+}
+mapOpenBtn.addEventListener('click', () => setCityMapOpen(!cityMapOpen));
+mapEl('cityMapClose').addEventListener('click', () => setCityMapOpen(false));
+window.addEventListener('resize', () => { if (cityMapOpen) mapResize(); });
+window.addEventListener('keydown', e => {
+  if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+  const k = (e.key || '').toLowerCase();
+  if (k === 'm') setCityMapOpen(!cityMapOpen);
+  else if (k === 'escape' && cityMapOpen) setCityMapOpen(false);
+});
 
 // Use the single original zoom panel already defined in index.html.
 const zoomInBtn = document.getElementById('zoomInBtn');
@@ -1716,7 +2189,7 @@ function animate() {
 
   worldMinutes = (worldMinutes + uiDt * daySpeed) % 1440;
   uiUpdateElapsed += uiDt;
-  if (cityMapOpen && (cityMapElapsed += uiDt) >= 0.2) { cityMapElapsed = 0; drawCityMap(); }
+  if (cityMapOpen) updateCityMap(uiDt);
   if (uiUpdateElapsed >= 0.3) {
     uiUpdateElapsed = 0;
     if (clockEl) clockEl.textContent = String(Math.floor(worldMinutes / 60)).padStart(2, '0') + ':' + String(Math.floor(worldMinutes % 60)).padStart(2, '0');
