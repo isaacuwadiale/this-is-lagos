@@ -283,11 +283,12 @@ const lampGlow = newMat({ color: 0xffe7ad, emissive: 0xffc66b, emissiveIntensity
 const shelterRoofMat = mat(0x1c5fd1, 0.4, 0.15), shelterBenchMat = mat(0x39434f, 0.6, 0.2), shelterFrameMat = mat(0x1a2a3c, 0.45, 0.35);
 const shelterGlassMat = newMat({ color: 0x9fd2ea, roughness: 0.08, metalness: 0.1, transparent: true, opacity: IS_MOBILE ? 0.42 : 0.3, depthWrite: false });   // see-through glass walls
 const shelterRoofHeight = BUS_SHELTER_HEIGHT;
+const SEAT_THICK = 0.22, SEAT_TOP = BUS_SHELTER_HEIGHT * 0.20, SEAT_Y = SEAT_TOP - SEAT_THICK / 2;   // seat surface sits at 0.20 of the shelter height
 const shelterWallHeight = BUS_SHELTER_HEIGHT - 0.8;   // (kept for reference)
 const GLASS_Y = 0.5 + (BUS_SHELTER_HEIGHT - 0.95) / 2, GLASS_H = BUS_SHELTER_HEIGHT - 0.95;   // glass runs from just above the ground up to the roof
 const POST_H = BUS_SHELTER_HEIGHT - 0.45;                                                      // steel posts end under the roof slab
 const BACK_POSTS = [-10.5, -3.5, 3.5, 10.5], FRONT_POSTS = [-10.5, -3.5, 3.5, 10.5];
-const BUS_MARK_W = 8, BUS_MARK_L = 9;   // legend: 8 across the lane, stretched 9 along it like real road lettering
+const BUS_MARK_W = 4, BUS_MARK_L = 9;   // legend: 4 across the lane (half of the original 8), stretched 9 along it like real road lettering
 const busLaneCanvas = document.createElement('canvas');
 busLaneCanvas.width = 256; busLaneCanvas.height = 128;   // 128 KB, no mipmaps
 const busLaneCtx = busLaneCanvas.getContext('2d');
@@ -896,7 +897,13 @@ function buildRoads(cx, cz, group, asphaltRecs) {
   const pvm = [], kerb = [], white = [], yellow = [], poles = [], arms = [], heads = [], pools = [];
   const shelterRoofs = [], shelterBacks = [], shelterSides = [], shelterBenches = [], shelterFrames = [], busLaneMarks = [];
   const spansZ = spansAlong(zMin, zMax), spansX = spansAlong(xMin, xMax);
+  const ZW = WALK_W, ZEBRA_T = 0.15 * 3;   // zebra: stripes run along the drive direction, ZW long (= red walkway width), 3x the lane-line thickness
   const PAVE_W = WALK_W - 0.24, PAVE_C = 0.24 + PAVE_W / 2;   // red walkway: from the kerb out to the building line
+  // Zebra crossings fill the first WALK_W (12) units of every road beside each junction, so centre / lane lines start after them.
+  const markSpan = (s0, e0) => {
+    const g = Math.floor((s0 - AVE_HALF + 0.01) / ROAD_SPACING) * ROAD_SPACING;
+    return [Math.max(s0, g + AVE_HALF + WALK_W), Math.min(e0, g + ROAD_SPACING - AVE_HALF - WALK_W)];
+  };
 
   for (let gx = Math.floor(xMin / ROAD_SPACING) * ROAD_SPACING; gx < xMax; gx += ROAD_SPACING) {   // avenues running along z
     if (gx < -5180 || gx > 5180 || gx < xMin) continue;
@@ -909,8 +916,9 @@ function buildRoads(cx, cz, group, asphaltRecs) {
         pvm.push({ x: gx + side * (half + PAVE_C), y: 0.02, z: mz, sx: PAVE_W, sy: 0.12, sz: len });
       }
       if (isAve) {
-        yellow.push({ x: gx - 0.42, y: 0.095, z: mz, sx: 0.22, sy: 0.03, sz: len }, { x: gx + 0.42, y: 0.095, z: mz, sx: 0.22, sy: 0.03, sz: len });
-        for (let q = Math.ceil((s0 + 2) / 14) * 14; q <= e0 - 2; q += 14)
+        const [m0, m1] = markSpan(s0, e0), mm = (m0 + m1) / 2, ml = m1 - m0;
+        if (ml > 0.5) yellow.push({ x: gx - 0.42, y: 0.095, z: mm, sx: 0.22, sy: 0.03, sz: ml }, { x: gx + 0.42, y: 0.095, z: mm, sx: 0.22, sy: 0.03, sz: ml });
+        for (let q = Math.ceil((m0 + 2) / 14) * 14; q <= m1 - 2; q += 14)
           white.push({ x: gx - 12, y: 0.095, z: q, sx: 0.15, sy: 0.03, sz: 4 }, { x: gx + 12, y: 0.095, z: q, sx: 0.15, sy: 0.03, sz: 4 });
       }
     }
@@ -934,7 +942,7 @@ function buildRoads(cx, cz, group, asphaltRecs) {
       for (const e of [-1, 1]) shelterSides.push({ x: sx + side * 1.7, y: GLASS_Y, z: q + e * (SHELTER_LEN / 2 - 0.07), sx: SHELTER_DEPTH / 2, sy: GLASS_H, sz: 0.14 });
       for (const dz of BACK_POSTS) shelterFrames.push({ x: bx, y: POST_H / 2, z: q + dz, sx: 0.3, sy: POST_H, sz: 0.3 });
       for (const dz of FRONT_POSTS) shelterFrames.push({ x: fx, y: POST_H / 2, z: q + dz, sx: 0.3, sy: POST_H, sz: 0.3 });
-      for (const dz of [-5.4, 5.4]) shelterBenches.push({ x: sx + side * 2.3, y: 0.62, z: q + dz, sx: 1.1, sy: 0.22, sz: 7.0 });
+      for (const dz of [-5.4, 5.4]) shelterBenches.push({ x: sx + side * 2.3, y: SEAT_Y, z: q + dz, sx: 1.1, sy: SEAT_THICK, sz: 7.0 });
       // BUS legend in the kerb lane in front of the shelter, upright for the driver (top of the letters = direction of travel; right-hand traffic).
       busLaneMarks.push({ x: gx + side * (half - 6), y: 0.115, z: q, sx: BUS_MARK_W, sy: 1, sz: BUS_MARK_L, ry: side > 0 ? 0 : Math.PI });
     }
@@ -950,8 +958,9 @@ function buildRoads(cx, cz, group, asphaltRecs) {
         pvm.push({ x: mx, y: 0.02, z: gz + side * (half + PAVE_C), sx: len, sy: 0.12, sz: PAVE_W });
       }
       if (isAve) {
-        yellow.push({ x: mx, y: 0.095, z: gz - 0.42, sx: len, sy: 0.03, sz: 0.22 }, { x: mx, y: 0.095, z: gz + 0.42, sx: len, sy: 0.03, sz: 0.22 });
-        for (let q = Math.ceil((s0 + 2) / 14) * 14; q <= e0 - 2; q += 14)
+        const [m0, m1] = markSpan(s0, e0), mm = (m0 + m1) / 2, ml = m1 - m0;
+        if (ml > 0.5) yellow.push({ x: mm, y: 0.095, z: gz - 0.42, sx: ml, sy: 0.03, sz: 0.22 }, { x: mm, y: 0.095, z: gz + 0.42, sx: ml, sy: 0.03, sz: 0.22 });
+        for (let q = Math.ceil((m0 + 2) / 14) * 14; q <= m1 - 2; q += 14)
           white.push({ x: q, y: 0.095, z: gz - 12, sx: 4, sy: 0.03, sz: 0.15 }, { x: q, y: 0.095, z: gz + 12, sx: 4, sy: 0.03, sz: 0.15 });
       }
     }
@@ -975,7 +984,7 @@ function buildRoads(cx, cz, group, asphaltRecs) {
       for (const e of [-1, 1]) shelterSides.push({ x: q + e * (SHELTER_LEN / 2 - 0.07), y: GLASS_Y, z: sz + side * 1.7, sx: 0.14, sy: GLASS_H, sz: SHELTER_DEPTH / 2 });
       for (const dx of BACK_POSTS) shelterFrames.push({ x: q + dx, y: POST_H / 2, z: bz, sx: 0.3, sy: POST_H, sz: 0.3 });
       for (const dx of FRONT_POSTS) shelterFrames.push({ x: q + dx, y: POST_H / 2, z: fz, sx: 0.3, sy: POST_H, sz: 0.3 });
-      for (const dx of [-5.4, 5.4]) shelterBenches.push({ x: q + dx, y: 0.62, z: sz + side * 2.3, sx: 7.0, sy: 0.22, sz: 1.1 });
+      for (const dx of [-5.4, 5.4]) shelterBenches.push({ x: q + dx, y: SEAT_Y, z: sz + side * 2.3, sx: 7.0, sy: SEAT_THICK, sz: 1.1 });
       busLaneMarks.push({ x: q, y: 0.115, z: gz + side * (half - 6), sx: BUS_MARK_W, sy: 1, sz: BUS_MARK_L, ry: side > 0 ? -Math.PI / 2 : Math.PI / 2 });
     }
   }
@@ -988,11 +997,23 @@ function buildRoads(cx, cz, group, asphaltRecs) {
       if (iz < -5180 || iz > 5180) continue;
       const hx = roadHalfAt(ix), hz = roadHalfAt(iz);
       const yZ = hx > 4 ? 0.095 : 0.03, yX = hz > 4 ? 0.095 : 0.03, yB = (hx > 4 || hz > 4) ? 0.095 : 0.03;   // paint height follows each road's own lane-line convention
-      const SL = 1.2, GAP = 0.6;   // stop line: 1.2 thick (lane lines are 0.12-0.15), 0.8 before the crossing edge
-      white.push({ x: ix - (hx + GAP) / 2, y: yZ, z: iz - hz - GAP - SL / 2 - 0.2, sx: hx - GAP, sy: 0.03, sz: SL },   // southbound traffic (west half), north of the crossing
-                 { x: ix + (hx + GAP) / 2, y: yZ, z: iz + hz + GAP + SL / 2 + 0.2, sx: hx - GAP, sy: 0.03, sz: SL },   // northbound traffic (east half), south of it
-                 { x: ix - hx - GAP - SL / 2 - 0.2, y: yX, z: iz + (hz + GAP) / 2, sx: SL, sy: 0.03, sz: hz - GAP },   // eastbound traffic (south half), west of it
-                 { x: ix + hx + GAP + SL / 2 + 0.2, y: yX, z: iz - (hz + GAP) / 2, sx: SL, sy: 0.03, sz: hz - GAP }); // westbound traffic (north half), east of it
+      const SL = 1.2, GAP = 0.6, OFF = ZW;   // stop line: 1.2 thick, pushed back OFF (=zebra length) so the zebra comes right after it
+      white.push({ x: ix - (hx + GAP) / 2, y: yZ, z: iz - hz - OFF - GAP - SL / 2 - 0.2, sx: hx - GAP, sy: 0.03, sz: SL },   // southbound traffic (west half), north of the crossing
+                 { x: ix + (hx + GAP) / 2, y: yZ, z: iz + hz + OFF + GAP + SL / 2 + 0.2, sx: hx - GAP, sy: 0.03, sz: SL },   // northbound traffic (east half), south of it
+                 { x: ix - hx - OFF - GAP - SL / 2 - 0.2, y: yX, z: iz + (hz + GAP) / 2, sx: SL, sy: 0.03, sz: hz - GAP },   // eastbound traffic (south half), west of it
+                 { x: ix + hx + OFF + GAP + SL / 2 + 0.2, y: yX, z: iz - (hz + GAP) / 2, sx: SL, sy: 0.03, sz: hz - GAP }); // westbound traffic (north half), east of it
+      // ZEBRA CROSSINGS: on each of the 4 arms, in the 12-unit strip beside the junction (exactly where the red walkway of the
+      // crossing road meets this road), after the stop line. Stripes run along the direction of drive and fill the road kerb to kerb.
+      {
+        const N = Math.floor((2 * hx - ZEBRA_T) / (2 * ZEBRA_T)) + 1, pitch = (2 * hx - ZEBRA_T) / (N - 1), yz = 0.1;
+        for (let k = 0; k < N; k++) {
+          const o = -hx + ZEBRA_T / 2 + k * pitch;
+          white.push({ x: ix + o, y: yz, z: iz - hz - ZW / 2, sx: ZEBRA_T, sy: 0.03, sz: ZW },   // arm to the north (-z)
+                     { x: ix + o, y: yz, z: iz + hz + ZW / 2, sx: ZEBRA_T, sy: 0.03, sz: ZW },   // arm to the south (+z)
+                     { x: ix - hx - ZW / 2, y: yz, z: iz + o, sx: ZW, sy: 0.03, sz: ZEBRA_T },   // arm to the west (-x)
+                     { x: ix + hx + ZW / 2, y: yz, z: iz + o, sx: ZW, sy: 0.03, sz: ZEBRA_T });  // arm to the east (+x)
+        }
+      }
       const ex = hx - 0.8, ez = hz - 0.8, t = 0.3;
       yellow.push({ x: ix, y: yB, z: iz - ez, sx: 2 * ex + t, sy: 0.03, sz: t }, { x: ix, y: yB, z: iz + ez, sx: 2 * ex + t, sy: 0.03, sz: t },
                   { x: ix - ex, y: yB, z: iz, sx: t, sy: 0.03, sz: 2 * ez }, { x: ix + ex, y: yB, z: iz, sx: t, sy: 0.03, sz: 2 * ez });
