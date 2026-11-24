@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.79-RED-WALKWAYS-BUS-STOPS: restored street features + streamed, instanced chunks
+// THIS IS LAGOS v0.80-MODERN-SHELTERS-JUNCTIONS: restored street features + streamed, instanced chunks
 // Target: < 400 MB on phones. Add ?debug to the URL to log draw calls / GPU memory.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -280,21 +280,29 @@ const lampGlow = newMat({ color: 0xffe7ad, emissive: 0xffc66b, emissiveIntensity
 // Lightweight bus shelter parts: shared assets, instanced per streamed chunk.
 // Keep the established 18.33-unit shelter height; do not compress it to the roof height
 // used by the earlier compact placeholder version.
-const shelterRoofMat = mat(0x263b43, 0.7), shelterGlassMat = mat(0x8bb8bb, 0.35), shelterBenchMat = mat(0x8a6947, 0.8), shelterFrameMat = mat(0x34434a, 0.65);
+const shelterRoofMat = mat(0x1c5fd1, 0.4, 0.15), shelterBenchMat = mat(0x39434f, 0.6, 0.2), shelterFrameMat = mat(0x1a2a3c, 0.45, 0.35);
+const shelterGlassMat = newMat({ color: 0x9fd2ea, roughness: 0.08, metalness: 0.1, transparent: true, opacity: IS_MOBILE ? 0.42 : 0.3, depthWrite: false });   // see-through glass walls
 const shelterRoofHeight = BUS_SHELTER_HEIGHT;
-const shelterWallHeight = BUS_SHELTER_HEIGHT - 0.8;
+const shelterWallHeight = BUS_SHELTER_HEIGHT - 0.8;   // (kept for reference)
+const GLASS_Y = 0.5 + (BUS_SHELTER_HEIGHT - 0.95) / 2, GLASS_H = BUS_SHELTER_HEIGHT - 0.95;   // glass runs from just above the ground up to the roof
+const POST_H = BUS_SHELTER_HEIGHT - 0.45;                                                      // steel posts end under the roof slab
+const BACK_POSTS = [-10.5, -3.5, 3.5, 10.5], FRONT_POSTS = [-10.5, -3.5, 3.5, 10.5];
+const BUS_MARK_W = 8, BUS_MARK_L = 9;   // legend: 8 across the lane, stretched 9 along it like real road lettering
 const busLaneCanvas = document.createElement('canvas');
-busLaneCanvas.width = 256; busLaneCanvas.height = 128;
+busLaneCanvas.width = 256; busLaneCanvas.height = 128;   // 128 KB, no mipmaps
 const busLaneCtx = busLaneCanvas.getContext('2d');
 busLaneCtx.clearRect(0, 0, 256, 128);
 busLaneCtx.textAlign = 'center'; busLaneCtx.textBaseline = 'middle';
-busLaneCtx.font = '900 94px Arial, sans-serif';
-busLaneCtx.lineWidth = 10; busLaneCtx.strokeStyle = 'rgba(20,25,24,0.72)';
-busLaneCtx.strokeText('BUS', 128, 66); busLaneCtx.fillStyle = '#f7f4e8'; busLaneCtx.fillText('BUS', 128, 66);
+busLaneCtx.font = '900 100px "Arial Black", Arial, sans-serif';
+{ const w = busLaneCtx.measureText('BUS').width; if (w > 0) busLaneCtx.font = '900 ' + Math.floor(100 * 226 / w) + 'px "Arial Black", Arial, sans-serif'; }   // letters fill the sign
+busLaneCtx.fillStyle = busLaneCtx.strokeStyle = '#f4f2df';                       // exactly the lane-line paint colour, nothing else
+busLaneCtx.lineJoin = 'round'; busLaneCtx.lineWidth = 7;                          // a little extra weight so the strokes read as thick as road paint
+busLaneCtx.strokeText('BUS', 128, 66); busLaneCtx.fillText('BUS', 128, 66);
 const busLaneTexture = new THREE.CanvasTexture(busLaneCanvas);
 busLaneTexture.generateMipmaps = false; busLaneTexture.minFilter = THREE.LinearFilter;
 if ('colorSpace' in busLaneTexture) busLaneTexture.colorSpace = THREE.SRGBColorSpace;
-const busLaneMarkMat = new THREE.MeshBasicMaterial({ map: busLaneTexture, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
+// Same kind of material as the lane lines (flat white, same polygon offset); alphaTest instead of blending = it behaves like painted road.
+const busLaneMarkMat = new THREE.MeshBasicMaterial({ map: busLaneTexture, alphaTest: 0.5, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
 const poleGeo = new THREE.CylinderGeometry(0.3, 0.52, STREETLIGHT_HEIGHT, 7); poleGeo.translate(0, STREETLIGHT_HEIGHT / 2, 0);
 const armGeo = new THREE.CylinderGeometry(0.16, 0.22, 1, 6); armGeo.rotateZ(-Math.PI / 2); armGeo.translate(0.5, STREETLIGHT_HEIGHT - 0.7, 0);
 const headGeo = new THREE.BoxGeometry(2.6, 0.42, 1.0); headGeo.translate(0, STREETLIGHT_HEIGHT - 0.5, 0);
@@ -599,7 +607,7 @@ function chunkTrees(cx, cz) {
           if (Math.floor(x / CHUNK_SIZE) !== cx || Math.floor(z / CHUNK_SIZE) !== cz) continue;
           const gc = Math.round(jq / 70) * 70;                                    // nearest crossing road
           if (Math.abs(jq - gc) < roadHalfAt(gc) + CORNER_PAD) continue;           // keep the corner walkways clear
-          if (fa.poles.some(p => Math.abs(p - jq) < 4) || fa.stops.some(p => Math.abs(p - jq) < 8.5)) continue;
+          if (fa.poles.some(p => Math.abs(p - jq) < 4) || fa.stops.some(p => Math.abs(p - jq) < SHELTER_LEN / 2 + 5.5)) continue;
           if (IS_MOBILE && treeHash(x, z, 21) < 0.5) continue;   // half density on phones
           out.push({
             x, z, type: Math.floor(treeHash(x, z) * 2) % 2,
@@ -633,7 +641,9 @@ const poleInRoad = q => { const g = Math.round(q / 70) * 70; return Math.abs(q -
 // Every road has a RED WALKWAY filling the whole gap between its kerb and the building line (WALK_W = the 12-unit setback).
 // Lamp poles and trees stand on the house side of that walkway; bus shelters stand near the kerb, open to the road.
 const WALK_W = ROAD_EDGE_CLEARANCE;
-const SHELTER_OFFSET = 4.6;                    // shelter centre, from the road edge
+const SHELTER_LEN = 21.6, SHELTER_DEPTH = 6.8;   // 3x as long (along the road) and 2x as wide as before; height unchanged (18.33)
+const SHELTER_OFFSET = 5.2;                    // shelter centre, from the road edge
+const BUS_STOP_EVERY = 3;                      // a stop pair in every 3rd local-to-local block of an avenue = 630 units apart (was ~150)
 const TREE_LINE = 8.9, POLE_LINE = 10.7;       // tree trunks / lamp poles, from the road edge (house side of the walkway)
 const AVE_ARM = 9.5, LOCAL_ARM = 8.5;          // lamp arm lengths: they reach out over the kerb
 const CORNER_PAD = WALK_W + 1.5;               // keep furniture out of the crossing road's own walkway
@@ -645,9 +655,12 @@ function furnitureAlong(g, lo, hi) {
     if (a < -5180 || a + 70 > 5180) continue;
     const l0 = a + roadHalfAt(a) + CORNER_PAD, l1 = a + 70 - roadHalfAt(a + 70) - CORNER_PAD;
     if (l1 - l0 < 8) continue;
-    const mid = (l0 + l1) / 2, even = Math.round(a / 70) % 2 === 0, stop = avenue && even;
+    const mid = (l0 + l1) / 2, even = Math.round(a / 70) % 2 === 0;
+    // Shelters are 21.6 long, so they only fit the wide local-to-local blocks (a = 70 + 210c); every BUS_STOP_EVERY-th of those gets one.
+    const c = (a - 70) / 210;
+    const stop = avenue && Number.isInteger(c) && (((c % BUS_STOP_EVERY) + BUS_STOP_EVERY) % BUS_STOP_EVERY === 0) && (l1 - l0) >= SHELTER_LEN + 8;
     if (stop && mid >= lo && mid < hi) out.stops.push(mid);
-    if (avenue || even) { const q = mid + (stop ? 6 : 0); if (q >= lo && q < hi) out.poles.push(q); }   // pole sits beside the shelter, not behind it
+    if (avenue || even) { const q = mid + (stop ? SHELTER_LEN / 2 + 3.5 : 0); if (q >= lo && q < hi) out.poles.push(q); }   // pole stands beside the shelter, not behind it
   }
   return out;
 }
@@ -688,17 +701,17 @@ function buildRoads(cx, cz, group, asphaltRecs) {
       heads.push({ x: hx, y: 0, z: q, ry: rot, sx: 1, sy: 1, sz: 1 });
       if (isAve) pools.push({ x: hx, y: 0.1, z: q, sx: 120, sy: 1, sz: 120 });
     }
-    // Bus shelters on both pavements of every avenue, directly opposite each other, open side toward the road,
-    // with a BUS legend painted in the kerb lane right in front of each one.
+    // Modern glass shelters, one on each pavement of the avenue, directly opposite each other and open to the road.
     if (isAve) for (const q of fa.stops) for (const side of [-1, 1]) {
-      const sx = gx + side * (half + SHELTER_OFFSET);
-      shelterRoofs.push({ x: sx, y: shelterRoofHeight - 0.16, z: q, sx: 3.4, sy: 0.32, sz: 7.2 });
-      shelterBacks.push({ x: sx + side * 1.55, y: shelterWallHeight / 2, z: q, sx: 0.16, sy: shelterWallHeight, sz: 6.8 });   // back wall on the house side
-      shelterSides.push({ x: sx, y: shelterWallHeight / 2, z: q - 3.3, sx: 3.1, sy: shelterWallHeight, sz: 0.14 }, { x: sx, y: shelterWallHeight / 2, z: q + 3.3, sx: 3.1, sy: shelterWallHeight, sz: 0.14 });
-      for (const dx of [-1.48, 1.48]) for (const dz of [-3.18, 3.18])
-        shelterFrames.push({ x: sx + dx, y: shelterRoofHeight / 2, z: q + dz, sx: 0.16, sy: shelterRoofHeight, sz: 0.16 });
-      shelterBenches.push({ x: sx + side * 1.0, y: 0.62, z: q, sx: 0.55, sy: 0.18, sz: 5.4 });
-      busLaneMarks.push({ x: gx + side * (half - 6), y: 0.115, z: q, sx: 9, sy: 1, sz: 3.2, ry: side > 0 ? Math.PI / 2 : -Math.PI / 2 });
+      const sx = gx + side * (half + SHELTER_OFFSET), bx = sx + side * (SHELTER_DEPTH / 2 - 0.1), fx = sx - side * (SHELTER_DEPTH / 2 - 0.15);
+      shelterRoofs.push({ x: sx, y: shelterRoofHeight - 0.225, z: q, sx: SHELTER_DEPTH + 0.8, sy: 0.45, sz: SHELTER_LEN + 1.0 });
+      shelterBacks.push({ x: bx, y: GLASS_Y, z: q, sx: 0.14, sy: GLASS_H, sz: SHELTER_LEN });
+      for (const e of [-1, 1]) shelterSides.push({ x: sx + side * 1.7, y: GLASS_Y, z: q + e * (SHELTER_LEN / 2 - 0.07), sx: SHELTER_DEPTH / 2, sy: GLASS_H, sz: 0.14 });
+      for (const dz of BACK_POSTS) shelterFrames.push({ x: bx, y: POST_H / 2, z: q + dz, sx: 0.3, sy: POST_H, sz: 0.3 });
+      for (const dz of FRONT_POSTS) shelterFrames.push({ x: fx, y: POST_H / 2, z: q + dz, sx: 0.3, sy: POST_H, sz: 0.3 });
+      for (const dz of [-5.4, 5.4]) shelterBenches.push({ x: sx + side * 2.3, y: 0.62, z: q + dz, sx: 1.1, sy: 0.22, sz: 7.0 });
+      // BUS legend in the kerb lane in front of the shelter, upright for the driver (top of the letters = direction of travel; right-hand traffic).
+      busLaneMarks.push({ x: gx + side * (half - 6), y: 0.115, z: q, sx: BUS_MARK_W, sy: 1, sz: BUS_MARK_L, ry: side > 0 ? 0 : Math.PI });
     }
   }
   for (let gz = Math.floor(zMin / 70) * 70; gz < zMax; gz += 70) {   // roads running along x
@@ -731,14 +744,35 @@ function buildRoads(cx, cz, group, asphaltRecs) {
       if (isAve) pools.push({ x: q, y: 0.1, z: hz, sx: 120, sy: 1, sz: 120 });
     }
     if (isAve) for (const q of fa.stops) for (const side of [-1, 1]) {
-      const sz = gz + side * (half + SHELTER_OFFSET);
-      shelterRoofs.push({ x: q, y: shelterRoofHeight - 0.16, z: sz, sx: 7.2, sy: 0.32, sz: 3.4 });
-      shelterBacks.push({ x: q, y: shelterWallHeight / 2, z: sz + side * 1.55, sx: 6.8, sy: shelterWallHeight, sz: 0.16 });
-      shelterSides.push({ x: q - 3.3, y: shelterWallHeight / 2, z: sz, sx: 0.14, sy: shelterWallHeight, sz: 3.1 }, { x: q + 3.3, y: shelterWallHeight / 2, z: sz, sx: 0.14, sy: shelterWallHeight, sz: 3.1 });
-      for (const dx of [-3.18, 3.18]) for (const dz of [-1.48, 1.48])
-        shelterFrames.push({ x: q + dx, y: shelterRoofHeight / 2, z: sz + dz, sx: 0.16, sy: shelterRoofHeight, sz: 0.16 });
-      shelterBenches.push({ x: q, y: 0.62, z: sz + side * 1.0, sx: 5.4, sy: 0.18, sz: 0.55 });
-      busLaneMarks.push({ x: q, y: 0.115, z: gz + side * (half - 6), sx: 9, sy: 1, sz: 3.2, ry: side > 0 ? 0 : Math.PI });
+      const sz = gz + side * (half + SHELTER_OFFSET), bz = sz + side * (SHELTER_DEPTH / 2 - 0.1), fz = sz - side * (SHELTER_DEPTH / 2 - 0.15);
+      shelterRoofs.push({ x: q, y: shelterRoofHeight - 0.225, z: sz, sx: SHELTER_LEN + 1.0, sy: 0.45, sz: SHELTER_DEPTH + 0.8 });
+      shelterBacks.push({ x: q, y: GLASS_Y, z: bz, sx: SHELTER_LEN, sy: GLASS_H, sz: 0.14 });
+      for (const e of [-1, 1]) shelterSides.push({ x: q + e * (SHELTER_LEN / 2 - 0.07), y: GLASS_Y, z: sz + side * 1.7, sx: 0.14, sy: GLASS_H, sz: SHELTER_DEPTH / 2 });
+      for (const dx of BACK_POSTS) shelterFrames.push({ x: q + dx, y: POST_H / 2, z: bz, sx: 0.3, sy: POST_H, sz: 0.3 });
+      for (const dx of FRONT_POSTS) shelterFrames.push({ x: q + dx, y: POST_H / 2, z: fz, sx: 0.3, sy: POST_H, sz: 0.3 });
+      for (const dx of [-5.4, 5.4]) shelterBenches.push({ x: q + dx, y: 0.62, z: sz + side * 2.3, sx: 7.0, sy: 0.22, sz: 1.1 });
+      busLaneMarks.push({ x: q, y: 0.115, z: gz + side * (half - 6), sx: BUS_MARK_W, sy: 1, sz: BUS_MARK_L, ry: side > 0 ? -Math.PI / 2 : Math.PI / 2 });
+    }
+  }
+  // Junction markings. Every road approach gets a thick white STOP LINE across its approaching (right-hand) lanes, just before the
+  // crossing road; every crossing gets a yellow BOX JUNCTION (square outline + diagonals) painted inside it. Each junction belongs to the chunk
+  // that holds its centre, so nothing is drawn twice.
+  for (let ix = Math.ceil(xMin / 70) * 70; ix < xMax; ix += 70) {
+    if (ix < -5180 || ix > 5180) continue;
+    for (let iz = Math.ceil(zMin / 70) * 70; iz < zMax; iz += 70) {
+      if (iz < -5180 || iz > 5180) continue;
+      const hx = roadHalfAt(ix), hz = roadHalfAt(iz);
+      const yZ = hx > 4 ? 0.095 : 0.03, yX = hz > 4 ? 0.095 : 0.03, yB = (hx > 4 || hz > 4) ? 0.095 : 0.03;   // paint height follows each road's own lane-line convention
+      const SL = 1.2, GAP = 0.6;   // stop line: 1.2 thick (lane lines are 0.12-0.15), 0.8 before the crossing edge
+      white.push({ x: ix - (hx + GAP) / 2, y: yZ, z: iz - hz - GAP - SL / 2 - 0.2, sx: hx - GAP, sy: 0.03, sz: SL },   // southbound traffic (west half), north of the crossing
+                 { x: ix + (hx + GAP) / 2, y: yZ, z: iz + hz + GAP + SL / 2 + 0.2, sx: hx - GAP, sy: 0.03, sz: SL },   // northbound traffic (east half), south of it
+                 { x: ix - hx - GAP - SL / 2 - 0.2, y: yX, z: iz + (hz + GAP) / 2, sx: SL, sy: 0.03, sz: hz - GAP },   // eastbound traffic (south half), west of it
+                 { x: ix + hx + GAP + SL / 2 + 0.2, y: yX, z: iz - (hz + GAP) / 2, sx: SL, sy: 0.03, sz: hz - GAP }); // westbound traffic (north half), east of it
+      const ex = hx - 0.8, ez = hz - 0.8, t = 0.3;
+      yellow.push({ x: ix, y: yB, z: iz - ez, sx: 2 * ex + t, sy: 0.03, sz: t }, { x: ix, y: yB, z: iz + ez, sx: 2 * ex + t, sy: 0.03, sz: t },
+                  { x: ix - ex, y: yB, z: iz, sx: t, sy: 0.03, sz: 2 * ez }, { x: ix + ex, y: yB, z: iz, sx: t, sy: 0.03, sz: 2 * ez });
+      const dl = Math.hypot(2 * ex, 2 * ez), da = Math.atan2(ez, ex);
+      yellow.push({ x: ix, y: yB, z: iz, sx: dl, sy: 0.03, sz: t, ry: -da }, { x: ix, y: yB, z: iz, sx: dl, sy: 0.03, sz: t, ry: da });
     }
   }
   batch(asphaltRecs, UNIT_BOX, asphaltMat, group);
