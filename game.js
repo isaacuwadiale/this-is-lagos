@@ -324,7 +324,7 @@ const slRealLights = [];
 }
 
 // ---- Round blue BUS STOP sign: a thin blue disc on a metal bar, one beside every shelter, lettering on BOTH faces ----
-const BUS_SIGN_R = 2.8, BUS_SIGN_THICK = 0.4, BUS_SIGN_POLE_R = 0.14;
+const BUS_SIGN_R = 2.8 * 0.7, BUS_SIGN_THICK = 0.4, BUS_SIGN_POLE_R = 0.14; // blue sign diameter reduced to 70%
 const busSignPoleGeo = new THREE.CylinderGeometry(BUS_SIGN_POLE_R, BUS_SIGN_POLE_R, 1, 8); busSignPoleGeo.translate(0, 0.5, 0);   // unit-height bar, scaled per sign
 const busSignDiscGeo = new THREE.CylinderGeometry(BUS_SIGN_R, BUS_SIGN_R, BUS_SIGN_THICK, 28); busSignDiscGeo.rotateX(Math.PI / 2);   // axis along +z
 const busSignDiscMat = mat(0x0b4fc4, 0.45, 0.1);
@@ -1737,6 +1737,13 @@ function animate() {
     const next = avatarActions[desired] || avatarActions[names[0]];
     if (next && next !== activeAvatarAction) { next.reset().fadeIn(0.2).play(); activeAvatarAction?.fadeOut(0.2); activeAvatarAction = next; }
     avatarMixer.update(frameDt);
+    // Keep the animated character's lowest point on the player's ground level.
+    // Some idle/walk clips lift the rig slightly, so re-align after each animation step.
+    if (avatarModel) {
+      const feetY = new THREE.Box3().setFromObject(avatarModel).min.y;
+      const groundY = player.position.y;
+      if (Number.isFinite(feetY) && Math.abs(feetY - groundY) > 0.001) avatarModel.position.y += groundY - feetY;
+    }
   }
 
   if (moving) {
