@@ -939,9 +939,9 @@ function buildRoads(cx, cz, group, asphaltRecs) {
       }
       if (isAve) {
         const [m0, m1] = markSpan(s0, e0), mm = (m0 + m1) / 2, ml = m1 - m0;
-        if (ml > 0.5) yellow.push({ x: gx - 0.42, y: 0.095, z: mm, sx: 0.22, sy: 0.03, sz: ml }, { x: gx + 0.42, y: 0.095, z: mm, sx: 0.22, sy: 0.03, sz: ml });
+        if (ml > 0.5) yellow.push({ x: gx - 0.42, y: -0.015, z: mm, sx: 0.22, sy: 0.03, sz: ml }, { x: gx + 0.42, y: -0.015, z: mm, sx: 0.22, sy: 0.03, sz: ml });
         for (let q = Math.ceil((m0 + 2) / 14) * 14; q <= m1 - 2; q += 14)
-          white.push({ x: gx - 12, y: 0.095, z: q, sx: 0.15, sy: 0.03, sz: 4 }, { x: gx + 12, y: 0.095, z: q, sx: 0.15, sy: 0.03, sz: 4 });
+          white.push({ x: gx - 12, y: -0.015, z: q, sx: 0.15, sy: 0.03, sz: 4 }, { x: gx + 12, y: -0.015, z: q, sx: 0.15, sy: 0.03, sz: 4 });
       }
     }
     const fa = furnitureAlong(gx, zMin, zMax);
@@ -978,7 +978,7 @@ function buildRoads(cx, cz, group, asphaltRecs) {
                           { x: px, y: BUS_SIGN_Y, z: pz - fo, ry: Math.PI, sx: BUS_SIGN_R * 2, sy: BUS_SIGN_R * 2, sz: 1 });
       }
       // BUS legend in the kerb lane in front of the shelter, upright for the driver (top of the letters = direction of travel; right-hand traffic).
-      busLaneMarks.push({ x: gx + side * (half - 6), y: 0.115, z: q, sx: BUS_MARK_W, sy: 1, sz: BUS_MARK_L, ry: side > 0 ? 0 : Math.PI });
+      busLaneMarks.push({ x: gx + side * (half - 6), y: -0.028, z: q, sx: BUS_MARK_W, sy: 1, sz: BUS_MARK_L, ry: side > 0 ? 0 : Math.PI });
     }
   }
   for (let gz = Math.floor(zMin / ROAD_SPACING) * ROAD_SPACING; gz < zMax; gz += ROAD_SPACING) {   // avenues running along x
@@ -993,9 +993,9 @@ function buildRoads(cx, cz, group, asphaltRecs) {
       }
       if (isAve) {
         const [m0, m1] = markSpan(s0, e0), mm = (m0 + m1) / 2, ml = m1 - m0;
-        if (ml > 0.5) yellow.push({ x: mm, y: 0.095, z: gz - 0.42, sx: ml, sy: 0.03, sz: 0.22 }, { x: mm, y: 0.095, z: gz + 0.42, sx: ml, sy: 0.03, sz: 0.22 });
+        if (ml > 0.5) yellow.push({ x: mm, y: -0.015, z: gz - 0.42, sx: ml, sy: 0.03, sz: 0.22 }, { x: mm, y: -0.015, z: gz + 0.42, sx: ml, sy: 0.03, sz: 0.22 });
         for (let q = Math.ceil((m0 + 2) / 14) * 14; q <= m1 - 2; q += 14)
-          white.push({ x: q, y: 0.095, z: gz - 12, sx: 4, sy: 0.03, sz: 0.15 }, { x: q, y: 0.095, z: gz + 12, sx: 4, sy: 0.03, sz: 0.15 });
+          white.push({ x: q, y: -0.015, z: gz - 12, sx: 4, sy: 0.03, sz: 0.15 }, { x: q, y: -0.015, z: gz + 12, sx: 4, sy: 0.03, sz: 0.15 });
       }
     }
     const fa = furnitureAlong(gz, xMin, xMax);
@@ -1029,7 +1029,7 @@ function buildRoads(cx, cz, group, asphaltRecs) {
         busSignFaces.push({ x: px + fo, y: BUS_SIGN_Y, z: pz, ry: Math.PI / 2, sx: BUS_SIGN_R * 2, sy: BUS_SIGN_R * 2, sz: 1 },
                           { x: px - fo, y: BUS_SIGN_Y, z: pz, ry: -Math.PI / 2, sx: BUS_SIGN_R * 2, sy: BUS_SIGN_R * 2, sz: 1 });
       }
-      busLaneMarks.push({ x: q, y: 0.115, z: gz + side * (half - 6), sx: BUS_MARK_W, sy: 1, sz: BUS_MARK_L, ry: side > 0 ? -Math.PI / 2 : Math.PI / 2 });
+      busLaneMarks.push({ x: q, y: -0.028, z: gz + side * (half - 6), sx: BUS_MARK_W, sy: 1, sz: BUS_MARK_L, ry: side > 0 ? -Math.PI / 2 : Math.PI / 2 });
     }
   }
   // Junction markings. Every road approach gets a thick white STOP LINE across its approaching (right-hand) lanes, just before the
@@ -1040,7 +1040,7 @@ function buildRoads(cx, cz, group, asphaltRecs) {
     for (let iz = Math.ceil(zMin / ROAD_SPACING) * ROAD_SPACING; iz < zMax; iz += ROAD_SPACING) {
       if (iz < -5180 || iz > 5180) continue;
       const hx = roadHalfAt(ix), hz = roadHalfAt(iz);
-      const yZ = hx > 4 ? 0.095 : 0.03, yX = hz > 4 ? 0.095 : 0.03, yB = (hx > 4 || hz > 4) ? 0.095 : 0.03;   // paint height follows each road's own lane-line convention
+      const yZ = -0.015, yX = -0.015, yB = -0.015;   // paint height follows each road's own lane-line convention
       const SL = 1.2, GAP = 0.6, OFF = ZW;   // stop line: 1.2 thick, pushed back OFF (=zebra length) so the zebra comes right after it
       white.push({ x: ix - (hx + GAP) / 2, y: yZ, z: iz - hz - OFF - GAP - SL / 2 - 0.2, sx: hx - GAP, sy: 0.03, sz: SL },   // southbound traffic (west half), north of the crossing
                  { x: ix + (hx + GAP) / 2, y: yZ, z: iz + hz + OFF + GAP + SL / 2 + 0.2, sx: hx - GAP, sy: 0.03, sz: SL },   // northbound traffic (east half), south of it
@@ -1049,7 +1049,7 @@ function buildRoads(cx, cz, group, asphaltRecs) {
       // ZEBRA CROSSINGS: on each of the 4 arms, in the 12-unit strip beside the junction (exactly where the red walkway of the
       // crossing road meets this road), after the stop line. Stripes run along the direction of drive and fill the road kerb to kerb.
       {
-        const N = Math.floor((2 * hx - ZEBRA_T) / (2 * ZEBRA_T)) + 1, pitch = (2 * hx - ZEBRA_T) / (N - 1), yz = 0.1;
+        const N = Math.floor((2 * hx - ZEBRA_T) / (2 * ZEBRA_T)) + 1, pitch = (2 * hx - ZEBRA_T) / (N - 1), yz = -0.015;
         for (let k = 0; k < N; k++) {
           const o = -hx + ZEBRA_T / 2 + k * pitch;
           white.push({ x: ix + o, y: yz, z: iz - hz - ZW / 2, sx: ZEBRA_T, sy: 0.03, sz: ZW },   // arm to the north (-z)
@@ -1113,7 +1113,7 @@ function buildChunkContent(cx, cz) {
     for (const f of bp.facilities) {
       if (f.type === 'parking') {
         asphalt.push({ x: f.x, y: -0.04, z: f.z, sx: 42, sy: 0.16, sz: 42 });
-        for (let i = 0; i <= 6; i++) box(0.22, 0.035, 28, C.line, f.x - 18 + i * 6, 0.05, f.z + 1);
+        for (let i = 0; i <= 6; i++) box(0.22, 0.035, 28, C.line, f.x - 18 + i * 6, 0.04, f.z + 1);
       } else if (f.type === 'canopy') box(10, 0.35, 10, C.market, f.x, 4.4, f.z);
       else if (f.type === 'pitch') box(82 * f.s, 0.22, 48 * f.s, C.sportGreen, f.cx, 0.04, f.cz);
       else if (f.type === 'tennis') box(22 * f.s, 0.2, 36 * f.s, C.sportBlue, f.cx, 0.06, f.cz);
