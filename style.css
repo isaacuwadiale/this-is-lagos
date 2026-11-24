@@ -39,7 +39,7 @@
  -webkit-backdrop-filter:blur(7px);
 }
 .topbar{background:rgba(8,25,17,.10)!important}
-.zoom-panel{position:fixed;right:24px;bottom:78px;z-index:20;display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid rgba(255,255,255,.25);border-radius:13px;color:#fff}
-.zoom-panel button{width:30px;height:30px;border:1px solid rgba(255,255,255,.28);border-radius:8px;background:rgba(8,25,17,.12);color:inherit;font-size:19px;cursor:pointer}
+.zoom-panel{position:fixed;right:24px;bottom:78px;z-index:100;display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid rgba(255,255,255,.25);border-radius:13px;color:#fff;pointer-events:auto}
+.zoom-panel button{width:30px;height:30px;border:1px solid rgba(255,255,255,.28);border-radius:8px;background:rgba(8,25,17,.12);color:inherit;font-size:19px;cursor:pointer;pointer-events:auto;touch-action:manipulation;position:relative;z-index:101}
 .zoom-panel input{width:105px;accent-color:#20b765}
 @media(max-width:650px){.zoom-panel{right:12px;bottom:70px}.zoom-panel input{width:75px}}

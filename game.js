@@ -1395,17 +1395,36 @@ rainGroup.visible = false;
 
 let cameraMode = 0, weather = 'Clear', worldMinutes = 12 * 60, daySpeed = 3, lookAngle = 0, lookPitch = 0.12, cameraDistance = 120;
 const CAMERA_DISTANCE_DEFAULT = 120, CAMERA_DISTANCE_MIN = 12, CAMERA_DISTANCE_MAX = CAMERA_DISTANCE_DEFAULT * 20;
-function changeZoom(factor) {
-  if (cameraMode === 1) { cameraMode = 0; camera.near = 1.0; camera.updateProjectionMatrix(); }
-  cameraDistance = Math.max(CAMERA_DISTANCE_MIN, Math.min(CAMERA_DISTANCE_MAX, cameraDistance * factor));
+function syncZoomControl() {
+  const slider = document.getElementById('zoomSlider');
+  if (!slider) return;
+  const t = Math.log(cameraDistance / CAMERA_DISTANCE_MIN) /
+    Math.log(CAMERA_DISTANCE_MAX / CAMERA_DISTANCE_MIN);
+  slider.value = String(Math.round((1 - t) * 100));
+}
+function setCameraZoom(distance) {
+  if (cameraMode === 1) {
+    cameraMode = 0;
+    camera.near = 1.0;
+  }
+  cameraDistance = Math.max(CAMERA_DISTANCE_MIN, Math.min(CAMERA_DISTANCE_MAX, distance));
   updateCamera();
-  const readout = document.querySelector('#zoomReadout');
-  if (readout) readout.textContent = `${Math.round(cameraDistance / CAMERA_DISTANCE_DEFAULT * 10) / 10}×`;
+  syncZoomControl();
+}
+function changeZoom(factor) {
+  setCameraZoom(cameraDistance * factor);
 }
 const modes = ['THIRD PERSON', 'FIRST PERSON', 'ISOMETRIC'];
 const keys = {};
 camera.rotation.order = 'YXZ';
 function updateCamera() {
+  // Extend camera clipping/fog for zoom-out without expanding streamed chunk memory.
+  const requiredFar = Math.max(LOAD_RADIUS * 1.05, cameraDistance + LOAD_RADIUS * 1.15);
+  if (Math.abs(camera.far - requiredFar) > 1) {
+    camera.far = requiredFar;
+    camera.updateProjectionMatrix();
+  }
+  if (scene.fog) scene.fog.far = Math.max(FOG_FAR, cameraDistance + LOAD_RADIUS * 1.15);
   const px = player.position.x, py = player.position.y, pz = player.position.z;
   if (cameraMode === 0) {
     const horizontal = Math.cos(lookPitch) * cameraDistance;
@@ -1552,15 +1571,23 @@ function drawCityMap() {
 cityMapToggle.addEventListener('click', () => { cityMapOpen = !cityMapOpen; cityMapPanel.classList.toggle('open', cityMapOpen); if (cityMapOpen) drawCityMap(); });
 document.querySelector('#cityMapClose').addEventListener('click', () => { cityMapOpen = false; cityMapPanel.classList.remove('open'); });
 
-// Working camera zoom controls (up to 20x farther than the default view).
-const zoomUI = document.createElement('div');
-zoomUI.id = 'cameraZoomControls';
-zoomUI.style.cssText = 'position:fixed;right:14px;top:50%;transform:translateY(-50%);z-index:12000;display:flex;flex-direction:column;align-items:center;gap:7px;padding:7px;border-radius:14px;background:rgba(8,15,28,.78);border:1px solid rgba(255,255,255,.22);backdrop-filter:blur(6px);';
-zoomUI.innerHTML = '<button id="zoomInBtn" aria-label="Zoom in" style="width:42px;height:42px;border:0;border-radius:10px;font-size:26px;font-weight:700;color:#fff;background:#1769aa;">+</button><span id="zoomReadout" style="min-width:42px;text-align:center;color:#fff;font:12px Arial;">1×</span><button id="zoomOutBtn" aria-label="Zoom out" style="width:42px;height:42px;border:0;border-radius:10px;font-size:26px;font-weight:700;color:#fff;background:#1769aa;">−</button>';
-document.body.appendChild(zoomUI);
-document.querySelector('#zoomInBtn').addEventListener('click', () => changeZoom(1 / 1.35));
-document.querySelector('#zoomOutBtn').addEventListener('click', () => changeZoom(1.35));
-renderer.domElement.addEventListener('wheel', e => { e.preventDefault(); changeZoom(e.deltaY > 0 ? 1.18 : 1 / 1.18); }, { passive: false });
+// Use the single original zoom panel already defined in index.html.
+const zoomInBtn = document.getElementById('zoomInBtn');
+const zoomOutBtn = document.getElementById('zoomOutBtn');
+const zoomResetBtn = document.getElementById('zoomResetBtn');
+const zoomSlider = document.getElementById('zoomSlider');
+zoomInBtn?.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); changeZoom(1 / 1.25); });
+zoomOutBtn?.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); changeZoom(1.25); });
+zoomResetBtn?.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); setCameraZoom(CAMERA_DISTANCE_DEFAULT); });
+zoomSlider?.addEventListener('input', e => {
+  const t = 1 - (Number(e.target.value) / 100);
+  setCameraZoom(CAMERA_DISTANCE_MIN * Math.pow(CAMERA_DISTANCE_MAX / CAMERA_DISTANCE_MIN, t));
+});
+syncZoomControl();
+renderer.domElement.addEventListener('wheel', e => {
+  e.preventDefault();
+  changeZoom(e.deltaY > 0 ? 1.12 : 1 / 1.12);
+}, { passive: false });
 
 // ============================================================================
 // INPUT
