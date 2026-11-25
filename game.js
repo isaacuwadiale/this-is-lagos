@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.84-MAP-NAVIGATION (v0.83-LIVE-MAP base): avenues only, big modern high-rise towers, streamed + instanced chunks
+// THIS IS LAGOS v0.85-ROTATING-MINIMAP (v0.84-MAP-NAVIGATION base): avenues only, big modern high-rise towers, streamed + instanced chunks
 // Target: < 400 MB on phones. Add ?debug to the URL to log draw calls / GPU memory.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -1718,6 +1718,23 @@ const NAV_MINI_SCALE = { walk: 0.8, bus: 0.45, car: 0.32 };          // zoom of 
 const NAV_ROAD_MAX = 24, NAV_ARRIVE_R = 22, NAV_OFF_ROUTE = 80, NAV_BUS_SPACING = ROAD_SPACING * BUS_STOP_EVERY;
 const nav = { active: false, plan: null, mode: 'car', lastMode: 'car', dest: null, route: null, line: null, remain: 0, arrived: false, arriveT: 0, offT: 0, uiT: 1, mini: false };
 let mapSelDest = null, mapMiniAcc = 0;
+// Mini-map orientation while navigating. navMapTurn: 0 = AUTO (the top of the map is whatever the game screen faces, and it
+// turns with the camera), 1..4 = fixed compass side on top (North, East, South, West). The turn button cycles through them.
+let mapRot = 0, mapRotCur = 0, mapRotSnap = true, navMapTurn = 0;
+const NAV_TURN_LABELS = ['AUTO', 'N', 'E', 'S', 'W'];
+const NAV_TURN_TOAST = ['Map follows your screen', 'Map: North on top', 'Map: East on top', 'Map: South on top', 'Map: West on top'];
+const _mapDirV = new THREE.Vector3();
+function navMapTargetRot() {          // canvas rotation that puts the wanted direction at the top of the mini-map
+  if (navMapTurn === 0) {
+    camera.getWorldDirection(_mapDirV);                       // where the game screen is looking (horizontal part)
+    if (_mapDirV.x * _mapDirV.x + _mapDirV.z * _mapDirV.z < 1e-6) return mapRotCur;
+    return -Math.PI / 2 - Math.atan2(_mapDirV.z, _mapDirV.x); // map x = world x, map y = world z (north = -z)
+  }
+  return -(navMapTurn - 1) * Math.PI / 2;
+}
+function mapUpright(ctx, x, y, fn) {  // draw something at (x,y) that must stay upright while the map is turned
+  ctx.save(); ctx.translate(x, y); if (mapRot) ctx.rotate(-mapRot); fn(); ctx.restore();
+}
 
 // <nav-pure>
 const navClampIdx = i => Math.max(-NAV_ROAD_MAX, Math.min(NAV_ROAD_MAX, i));
@@ -1824,6 +1841,9 @@ navStyleEl.textContent = `
 #cityMapPanel.mini{left:auto;right:10px;top:78px;bottom:auto;width:220px;height:220px;transform:none;border-radius:16px;border:3px solid #fff;box-shadow:0 6px 22px rgba(0,0,0,.5);pointer-events:none}
 #cityMapPanel.mini #mapSearchBox,#cityMapPanel.mini #mapResults,#cityMapPanel.mini #cityMapClose,#cityMapPanel.mini #mapCompass,#cityMapPanel.mini #mapCtl,#cityMapPanel.mini #mapLocate,#cityMapPanel.mini #mapCard,#cityMapPanel.mini #mapDir,#cityMapPanel.mini #mapFoot{display:none!important}
 #cityMapPanel.mini #mapMiniExpand{display:block}
+#mapMiniTurn{display:none;position:absolute;right:6px;bottom:6px;width:40px;height:40px;border-radius:50%;border:0;background:#fff;box-shadow:0 2px 8px rgba(60,64,67,.45);color:#1a73e8;cursor:pointer;z-index:5;pointer-events:auto;flex-direction:column;align-items:center;justify-content:center;gap:0;padding:0;font-family:\"DM Sans\",system-ui,sans-serif}
+#mapMiniTurn span{font-size:16px;line-height:1}#mapMiniTurn small{font-size:9px;font-weight:800;line-height:1;letter-spacing:.3px}
+#cityMapPanel.mini #mapMiniTurn{display:flex}
 @media(max-width:700px){#cityMapPanel.mini{left:auto;right:8px;top:74px;bottom:auto;width:150px;height:150px}#mapDir{bottom:84px}}
 #navBanner{position:fixed;left:50%;top:10px;transform:translateX(-50%);width:min(560px,calc(100vw - 16px));box-sizing:border-box;min-height:56px;display:none;align-items:center;gap:10px;padding:8px 10px 8px 10px;border-radius:16px;background:#0b6b46;color:#fff;box-shadow:0 6px 22px rgba(0,0,0,.45);z-index:12001;font:13px/1.3 "DM Sans",system-ui,sans-serif}
 #navBanner.on{display:flex}
@@ -1836,7 +1856,8 @@ document.head.appendChild(navStyleEl);
 cityMapPanel.insertAdjacentHTML('beforeend', `<div class="mapChip" id="mapDir"><button id="mapDirX" type="button" aria-label="Close directions">×</button><h4 id="mapDirTitle"></h4>
 <div id="mapDirTabs"><button type="button" data-mode="walk"></button><button type="button" data-mode="bus"></button><button type="button" data-mode="car"></button></div>
 <p id="mapDirInfo"></p><button id="mapDirStart" type="button">▶ Start</button></div>
-<button id="mapMiniExpand" type="button" aria-label="Expand map" title="Expand map">⤢</button>`);
+<button id="mapMiniExpand" type="button" aria-label="Expand map" title="Expand map">⤢</button>
+<button id="mapMiniTurn" type="button" aria-label="Turn map" title="Turn map: Auto, North, East, South, West"><span>⟳</span><small>AUTO</small></button>`);
 const mapDirEl = mapEl('mapDir');
 const navBannerEl = document.createElement('div');
 navBannerEl.id = 'navBanner';
@@ -1877,7 +1898,7 @@ function navCancelPlan() {
 
 // ---- driving the navigation ---------------------------------------------------------
 function setMapMini(on) {
-  nav.mini = on; cityMapPanel.classList.toggle('mini', on);
+  nav.mini = on; cityMapPanel.classList.toggle('mini', on); mapRotSnap = true;
   mapResultsEl.style.display = 'none';
   mapSetFollow(true);
   mapView.scale = on ? NAV_MINI_SCALE[nav.mode] : MAP_DEFAULT_SCALE;
@@ -1889,12 +1910,13 @@ function navStart() {
   nav.route = navMakePath([player.position.x, player.position.z], p.dest);
   nav.plan = null; nav.arrived = false; nav.offT = 0; nav.uiT = 1; nav.line = null;
   mapDirEl.style.display = 'none'; mapCardEl.style.display = 'none'; mapSelDest = null;
-  mapTrail.length = 0;
+  mapTrail.length = 0; navMapTurn = 0; navMapTurnRefresh();
   cityMapPanel.classList.add('navigating'); navBannerEl.classList.add('on');
   updateNav(0);
   setMapMini(true);
 }
 function navEnd() {
+  navMapTurn = 0; navMapTurnRefresh();
   nav.active = false; nav.route = nav.line = nav.dest = null; nav.arrived = false;
   navBannerEl.classList.remove('on'); cityMapPanel.classList.remove('navigating');
   if (nav.mini) { nav.mini = false; cityMapPanel.classList.remove('mini'); setCityMapOpen(false); }
@@ -1938,6 +1960,7 @@ function drawNavRoute(ctx, X, Y, S) {
   const mode = nav.active ? nav.mode : nav.plan ? nav.plan.mode : null;
   const route = nav.active ? nav.route : nav.plan ? nav.plan.route : null;
   const line = nav.active ? nav.line : route ? route.pts : null;
+  const ex = mapRot ? (Math.hypot(mapW, mapH) - mapW) / 2 : 0, ey = mapRot ? (Math.hypot(mapW, mapH) - mapH) / 2 : 0;
   if (line && line.length > 1) {
     const w = Math.max(5, Math.min(10, 12 * S + 2));
     ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
@@ -1949,19 +1972,21 @@ function drawNavRoute(ctx, X, Y, S) {
     if (mode === 'bus' && route && S >= 0.2) {
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = '11px system-ui, sans-serif';
       for (const st of route.stops) {
-        const sx = X(st[0]), sy = Y(st[1]); if (sx < -20 || sx > mapW + 20 || sy < -20 || sy > mapH + 20) continue;
+        const sx = X(st[0]), sy = Y(st[1]); if (sx < -20 - ex || sx > mapW + 20 + ex || sy < -20 - ey || sy > mapH + 20 + ey) continue;
         ctx.fillStyle = '#fff'; ctx.strokeStyle = '#1a73e8'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(sx, sy, 9, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-        ctx.fillStyle = '#1a73e8'; ctx.fillText('🚌', sx, sy + 0.5);
+        mapUpright(ctx, sx, sy, () => { ctx.fillStyle = '#1a73e8'; ctx.fillText('🚌', 0, 0.5); });
       }
     }
   }
   const d = nav.active ? nav.dest : nav.plan ? nav.plan.dest : mapSelDest;
   if (d) {
     const px = X(d.x), py = Y(d.z);
-    if (px > -30 && px < mapW + 30 && py > -40 && py < mapH + 30) {
-      ctx.fillStyle = '#ea4335'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(px, py); ctx.bezierCurveTo(px - 4, py - 8, px - 12, py - 14, px - 12, py - 22); ctx.arc(px, py - 22, 12, Math.PI, 0); ctx.bezierCurveTo(px + 12, py - 14, px + 4, py - 8, px, py); ctx.closePath(); ctx.fill(); ctx.stroke();
-      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(px, py - 22, 4.5, 0, Math.PI * 2); ctx.fill();
+    if (px > -30 - ex && px < mapW + 30 + ex && py > -40 - ey && py < mapH + 30 + ey) {
+      mapUpright(ctx, px, py, () => {   // the pin always stands upright, tip on the destination
+        ctx.fillStyle = '#ea4335'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.bezierCurveTo(-4, -8, -12, -14, -12, -22); ctx.arc(0, -22, 12, Math.PI, 0); ctx.bezierCurveTo(12, -14, 4, -8, 0, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(0, -22, 4.5, 0, Math.PI * 2); ctx.fill();
+      });
     }
   }
 }
@@ -1971,6 +1996,12 @@ mapEl('mapDirTabs').addEventListener('click', e => { const b = e.target.closest(
 mapEl('mapDirX').addEventListener('click', navCancelPlan);
 mapEl('mapDirStart').addEventListener('click', navStart);
 mapEl('mapMiniExpand').addEventListener('click', () => setMapMini(false));
+function navMapTurnRefresh() { const b = mapEl('mapMiniTurn'); if (b) b.querySelector('small').textContent = NAV_TURN_LABELS[navMapTurn]; }
+mapEl('mapMiniTurn').addEventListener('click', e => {
+  e.stopPropagation();
+  navMapTurn = (navMapTurn + 1) % NAV_TURN_LABELS.length;     // AUTO -> N -> E -> S -> W -> AUTO
+  navMapTurnRefresh(); mapDirty = true; toast(NAV_TURN_TOAST[navMapTurn]);
+});
 navQ('navExit').addEventListener('click', navEnd);
 
 
@@ -1979,16 +2010,21 @@ function drawCityMap() {
   const ctx = mapCtx, W = mapW, H = mapH, S = mapView.scale, cx = mapView.cx, cz = mapView.cz;
   ctx.setTransform(mapDpr, 0, 0, mapDpr, 0, 0);
   ctx.setLineDash([]); ctx.globalAlpha = 1; ctx.lineCap = 'butt'; ctx.lineJoin = 'miter';
+  mapRot = nav.mini ? mapRotCur : 0;                  // only the navigation mini-map turns; the full map stays north-up
+  const D = Math.hypot(W, H), eX = mapRot ? (D - W) / 2 : 0, eY = mapRot ? (D - H) / 2 : 0;   // extra area that turns into view
+  ctx.save();
+  if (mapRot) { ctx.translate(W / 2, H / 2); ctx.rotate(mapRot); ctx.translate(-W / 2, -H / 2); }
   const X = x => (x - cx) * S + W / 2, Y = z => (z - cz) * S + H / 2;
-  const wx0 = cx - W / 2 / S, wx1 = cx + W / 2 / S, wz0 = cz - H / 2 / S, wz1 = cz + H / 2 / S;
+  const wx0 = cx - (W / 2 + eX) / S, wx1 = cx + (W / 2 + eX) / S, wz0 = cz - (H / 2 + eY) / S, wz1 = cz + (H / 2 + eY) / S;
   const vis = (x, z, hw, hd) => x + hw >= wx0 && x - hw <= wx1 && z + hd >= wz0 && z - hd <= wz1;
   const placed = [];                                   // label collision boxes
   const label = (text, x, y, w, h) => {
-    if (x + w / 2 < 0 || x - w / 2 > W || y + h / 2 < 0 || y - h / 2 > H) return false;
+    if (x + w / 2 < -eX || x - w / 2 > W + eX || y + h / 2 < -eY || y - h / 2 > H + eY) return false;
     for (const b of placed) if (Math.abs(b[0] - x) < (b[2] + w) / 2 && Math.abs(b[1] - y) < (b[3] + h) / 2) return false;
     placed.push([x, y, w, h]); return true;
   };
-  const halo = (text, x, y, color, size, weight = 600, letter = 0) => {
+  const halo = (text, x, y, color, size, weight = 600, letter = 0, up = true) => {
+    if (up && mapRot) { mapUpright(ctx, x, y, () => halo(text, 0, 0, color, size, weight, letter, false)); return; }
     ctx.font = `${weight} ${size}px "DM Sans", system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     if ('letterSpacing' in ctx) ctx.letterSpacing = letter + 'px';
     ctx.lineWidth = 3.5; ctx.strokeStyle = 'rgba(255,255,255,.92)'; ctx.lineJoin = 'round'; ctx.strokeText(text, x, y);
@@ -1998,7 +2034,7 @@ function drawCityMap() {
   };
 
   // 1. ground, beach, lagoon
-  ctx.fillStyle = '#dfe3e8'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#dfe3e8'; ctx.fillRect(-eX, -eY, W + 2 * eX, H + 2 * eY);
   ctx.fillStyle = '#f2efe9'; ctx.fillRect(X(-CITY_HALF), Y(-CITY_HALF), CITY_HALF * 2 * S, CITY_HALF * 2 * S);
   ctx.fillStyle = '#f3e6c0'; ctx.fillRect(X(590 - 360), Y(805 - 17), 720 * S, 34 * S);
   ctx.fillStyle = '#aadaff'; ctx.fillRect(X(610 - 345), Y(930 - 115), 690 * S, 230 * S);
@@ -2111,7 +2147,7 @@ function drawCityMap() {
   // 5. buildings: real footprints, set-back tiers, entrance canopy
   const drawSpec = b => {
     const pw = (b.w + 4) * S, pd = (b.d + 4) * S, bx = X(b.x), by = Y(b.z);
-    if (bx + pw / 2 < 0 || bx - pw / 2 > W || by + pd / 2 < 0 || by - pd / 2 > H) return;
+    if (bx + pw / 2 < -eX || bx - pw / 2 > W + eX || by + pd / 2 < -eY || by - pd / 2 > H + eY) return;
     const col = mapPresetColors(b.preset), sel = mapSelected && mapSelected.b === b;
     if (pw < 1.5 && pd < 1.5) { ctx.fillStyle = col.tiers[0]; ctx.fillRect(bx - 1, by - 1, 2, 2); return; }
     if (S < 0.3) { ctx.fillStyle = col.tiers[0]; ctx.fillRect(bx - pw / 2, by - pd / 2, pw, pd); }
@@ -2145,7 +2181,7 @@ function drawCityMap() {
   // 6. bus stop symbols on top of the buildings' ground
   for (const [x, z, sw, sd] of stopPts) {
     const px = X(x), py = Y(z);
-    if (px < -20 || px > W + 20 || py < -20 || py > H + 20) continue;
+    if (px < -20 - eX || px > W + 20 + eX || py < -20 - eY || py > H + 20 + eY) continue;
     if (S >= 1.2) {
       ctx.fillStyle = 'rgba(138,180,248,.75)'; ctx.fillRect(px - sw * S / 2, py - sd * S / 2, sw * S, sd * S);
       ctx.strokeStyle = '#4285f4'; ctx.lineWidth = 1.2; ctx.strokeRect(px - sw * S / 2, py - sd * S / 2, sw * S, sd * S);
@@ -2182,8 +2218,10 @@ function drawCityMap() {
       if (label(ic, px, py, 18, 18)) {
         ctx.beginPath(); ctx.arc(px, py, 9, 0, Math.PI * 2); ctx.fill();
         ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
-        ctx.fillStyle = '#fff'; ctx.font = '12px system-ui, "Apple Color Emoji", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(ic, px, py + 0.5);
-        if (S >= 0.5 && f.label) { ctx.font = '600 10.5px "DM Sans", system-ui, sans-serif'; const w = ctx.measureText(f.label).width + 6; if (label(f.label, px, py + 19, w, 13)) halo(f.label, px, py + 19, '#188038', 10.5); }
+        mapUpright(ctx, px, py, () => {
+          ctx.fillStyle = '#fff'; ctx.font = '12px system-ui, "Apple Color Emoji", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(ic, 0, 0.5);
+          if (S >= 0.5 && f.label) { ctx.font = '600 10.5px "DM Sans", system-ui, sans-serif'; const w = ctx.measureText(f.label).width + 6; if (label(f.label, px, py + 19, w, 13)) halo(f.label, 0, 19, '#188038', 10.5, 600, 0, false); }
+        });
       }
     }
   }
@@ -2193,8 +2231,10 @@ function drawCityMap() {
     const drawName = (name, px, py, vertical) => {
       const tw = ctx.measureText(name).width + 6;
       if (!label(name, px, py, vertical ? 14 : tw, vertical ? tw : 14)) return;
-      ctx.save(); ctx.translate(px, py); if (vertical) ctx.rotate(-Math.PI / 2);
-      halo(name, 0, 0, '#5f6368', 11); ctx.restore();
+      let ra = vertical ? -Math.PI / 2 : 0;
+      if (Math.cos(ra + mapRot) < -1e-4) ra += Math.PI;   // keep street names readable when the map is turned
+      ctx.save(); ctx.translate(px, py); if (ra) ctx.rotate(ra);
+      halo(name, 0, 0, '#5f6368', 11, 600, 0, false); ctx.restore();
     };
     for (let k = kx0; k <= kx1; k++) {
       if (S < 0.25 && !isMajor(k)) continue;
@@ -2230,6 +2270,23 @@ function drawCityMap() {
     ctx.save(); ctx.translate(ex, ey); ctx.rotate(a);
     ctx.fillStyle = '#1a73e8'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(12, 0); ctx.lineTo(-8, -9); ctx.lineTo(-4, 0); ctx.lineTo(-8, 9); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore();
+  }
+
+  ctx.restore();   // end of the (possibly turned) map layer
+
+  // 8b. compass for the turned mini-map: red end of the needle (and the N) points to real north
+  if (nav.mini) {
+    const kx = 26, ky = 26, kr = 15, na = -Math.PI / 2 + mapRot;
+    ctx.save(); ctx.translate(kx, ky);
+    ctx.fillStyle = 'rgba(255,255,255,.93)'; ctx.strokeStyle = 'rgba(60,64,67,.35)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(0, 0, kr, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.rotate(na + Math.PI / 2);
+    ctx.fillStyle = '#d93025'; ctx.beginPath(); ctx.moveTo(0, -kr + 3); ctx.lineTo(4.5, 1); ctx.lineTo(-4.5, 1); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#9aa0a6'; ctx.beginPath(); ctx.moveTo(0, kr - 3); ctx.lineTo(4.5, -1); ctx.lineTo(-4.5, -1); ctx.closePath(); ctx.fill();
+    ctx.restore();
+    ctx.font = '800 10px "DM Sans", system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const nx = kx + Math.cos(na) * (kr + 8), ny = ky + Math.sin(na) * (kr + 8);
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.strokeText('N', nx, ny); ctx.fillStyle = '#d93025'; ctx.fillText('N', nx, ny);
   }
 
   // 9. HUD text: scale bar + live position
@@ -2383,6 +2440,11 @@ function setCityMapOpen(open) {
 }
 function updateCityMap(dt) {
   const p = player.position;
+  if (nav.mini) {                                        // turn the mini-map smoothly towards the wanted side
+    const tgt = navMapTargetRot(), d = Math.atan2(Math.sin(tgt - mapRotCur), Math.cos(tgt - mapRotCur));
+    if (mapRotSnap) { mapRotCur = tgt; mapRotSnap = false; mapDirty = true; }
+    else if (Math.abs(d) > 0.0008) { mapRotCur += d * Math.min(1, dt * 12); mapDirty = true; }
+  }
   if (mapView.follow) {                                  // glide to the player's live position
     const k = Math.min(1, dt * 20), nx = mapView.cx + (p.x - mapView.cx) * k, nz = mapView.cz + (p.z - mapView.cz) * k;
     if (Math.abs(nx - mapView.cx) > 0.001 || Math.abs(nz - mapView.cz) > 0.001) mapDirty = true;
