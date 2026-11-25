@@ -869,56 +869,151 @@ function netGenerate(protectedSegs) {
 }
 
 // ---- green fields: ground patchwork, bushes, grass, rocks, trees (deterministic per field) ----
-const BUSH_GEO = new THREE.IcosahedronGeometry(1, 1);
-const ROCK_GEO = new THREE.DodecahedronGeometry(1, 0);
-const TUFT_GEO = new THREE.ConeGeometry(0.55, 1.7, 5); TUFT_GEO.translate(0, 0.85, 0);
 const CONE_GEO = new THREE.ConeGeometry(0.36, 0.95, 8); CONE_GEO.translate(0, 0.475, 0);
 const DRUM_GEO = new THREE.CylinderGeometry(0.46, 0.46, 1.15, 10); DRUM_GEO.translate(0, 0.575, 0);
 const BIN_GEO = new THREE.CylinderGeometry(0.42, 0.34, 1.05, 10); BIN_GEO.translate(0, 0.525, 0);
 const barRedMat = mat(0xc9362b, 0.7), barWhiteMat = mat(0xf0efe8, 0.7);
-const FIELD_GREENS = [0x5f8a4c, 0x6b9657, 0x77a05c, 0x4f7c40, 0x86a361, 0x6a8c45, 0x5a8450];
-const BUSH_GREENS = [0x2f6b34, 0x3a7a3c, 0x4a8a45, 0x2a5e2e, 0x55904a, 0x6a9a3f, 0x3f7a4f];
-const TUFT_GREENS = [0x8fb25a, 0x7aa24a, 0xa3b865, 0x6f9a45, 0xb0b86a];
-const ROCK_GREYS = [0x8c8c84, 0x77776f, 0x9a968a, 0x6d6f6a];
-function fieldItems(r) {
-  if (r.items) return r.items;
+// ---- Vegetation: three small procedural textures shared by everything (grass ground, leafy bush card, grass-blade card) ----
+// Memory plan: ground = ONE merged mesh per chunk (no per-patch boxes), bushes = 4 alpha-tested quads (16 vertices), tufts = 2 quads,
+// textures 256/128/64 px, item lists are built on demand and only a few are cached.
+const vegCanvas = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+function vegTexture(cv, repeat) {
+  const t = new THREE.CanvasTexture(cv), maxA = renderer.capabilities && renderer.capabilities.getMaxAnisotropy ? renderer.capabilities.getMaxAnisotropy() : 1;
+  if (repeat) t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = Math.min(IS_MOBILE ? 2 : 4, maxA);
+  if ('colorSpace' in t) t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+function makeGroundTexture() {   // tileable lawn: soft tonal blotches + thousands of tiny blades + clover / dry specks
+  const N = IS_MOBILE ? 128 : 256, cv = vegCanvas(N, N), g = cv.getContext('2d'), R = rngFrom(4242);
+  g.fillStyle = '#587a3a'; g.fillRect(0, 0, N, N);
+  const wrap = (x, y, r, fn) => { for (const dx of [-N, 0, N]) for (const dy of [-N, 0, N]) { const px = x + dx, py = y + dy; if (px + r < 0 || px - r > N || py + r < 0 || py - r > N) continue; fn(px, py); } };
+  for (let i = 0; i < 40; i++) {
+    const x = R() * N, y = R() * N, r = N * (0.07 + R() * 0.16), dark = R() < 0.5, col = dark ? '38,66,28' : '122,150,66';
+    wrap(x, y, r, (px, py) => { const gr = g.createRadialGradient(px, py, 0, px, py, r); gr.addColorStop(0, `rgba(${col},0.32)`); gr.addColorStop(1, `rgba(${col},0)`); g.fillStyle = gr; g.fillRect(px - r, py - r, 2 * r, 2 * r); });
+  }
+  g.lineCap = 'round';
+  for (let i = 0, n = N * N / (IS_MOBILE ? 18 : 12); i < n; i++) {
+    const x = R() * N, y = R() * N, len = (N / 128) * (2 + R() * 5), ang = -Math.PI / 2 + (R() - 0.5) * 1.5, wd = (N / 256) * (0.6 + R() * 0.9);
+    const col = `hsl(${68 + R() * 48},${28 + R() * 32}%,${16 + R() * 36}%)`, ex = Math.cos(ang) * len, ey = Math.sin(ang) * len;
+    wrap(x, y, len + 2, (px, py) => { g.strokeStyle = col; g.lineWidth = wd; g.beginPath(); g.moveTo(px, py); g.lineTo(px + ex, py + ey); g.stroke(); });
+  }
+  for (let i = 0; i < N / 5; i++) {   // clover, dry stalks and bits of soil
+    const x = R() * N, y = R() * N, k = R(), col = k < 0.4 ? 'rgba(205,200,140,0.55)' : k < 0.7 ? 'rgba(120,98,64,0.5)' : 'rgba(40,58,30,0.6)', r = (N / 256) * (0.8 + R() * 1.6);
+    wrap(x, y, r, (px, py) => { g.fillStyle = col; g.beginPath(); g.ellipse(px, py, r * 1.4, r, R() * 3, 0, 6.283); g.fill(); });
+  }
+  return vegTexture(cv, true);
+}
+function makeBushTexture() {     // a leafy dome: dark core, layered leaves lit from above, ragged transparent edge, shaded underside
+  const N = IS_MOBILE ? 96 : 128, cv = vegCanvas(N, N), g = cv.getContext('2d'), R = rngFrom(777), cx = N / 2, cy = N * 0.55, rx = N * 0.46, ry = N * 0.42;
+  const edge = th => 1 + 0.1 * Math.sin(5 * th + 1) + 0.07 * Math.sin(9 * th + 2) + 0.05 * Math.sin(14 * th);
+  g.fillStyle = '#1d3719'; g.beginPath();
+  for (let a = 0; a <= 64; a++) { const th = a / 64 * 6.283, e = 0.8 * edge(th); g[a ? 'lineTo' : 'moveTo'](cx + Math.cos(th) * rx * e, cy + Math.sin(th) * ry * e); }
+  g.fill();
+  const passes = [[2.4, 15, 24, 0.9], [2.0, 22, 34, 0.9], [1.6, 30, 46, 0.75]];   // [leaf size, min lightness, max lightness, coverage]
+  passes.forEach(([size, l0, l1, cover], pi) => {
+    for (let i = 0, n = N * N / (pi === 0 ? 9 : 8); i < n; i++) {
+      const th = R() * 6.283, rho = Math.sqrt(R()), e = edge(th);
+      if (rho > e * 1.0 || (rho > 0.78 && R() > (1 - rho) / 0.22 * cover + 0.1)) continue;     // thin, ragged edge
+      const x = cx + Math.cos(th) * rx * rho * e, y = cy + Math.sin(th) * ry * rho * e, up = 1 - (y - (cy - ry)) / (2 * ry);       // up: 1 at the crown
+      const L = l0 + (l1 - l0) * (0.35 * R() + 0.65 * Math.max(0, Math.min(1, up * 0.85 + rho * 0.25))) , hue = 82 + R() * 34, sat = 32 + R() * 26;
+      g.save(); g.translate(x, y); g.rotate(th + (R() - 0.5) * 1.6);
+      g.fillStyle = `hsl(${hue},${sat}%,${L}%)`; g.beginPath(); g.ellipse(0, 0, (N / 128) * size * (1.1 + R() * 1.4), (N / 128) * size * (0.5 + R() * 0.5), 0, 0, 6.283); g.fill();
+      if (pi === 2 && R() < 0.25) { g.strokeStyle = `hsla(${hue + 8},${sat}%,${Math.min(68, L + 14)}%,0.6)`; g.lineWidth = 0.5; g.beginPath(); g.moveTo(-size, 0); g.lineTo(size * 1.4, 0); g.stroke(); }   // midrib catching light
+      g.restore();
+    }
+  });
+  g.globalCompositeOperation = 'source-atop';           // ambient occlusion: the underside is dark, the crown stays bright
+  const sh = g.createLinearGradient(0, cy - ry, 0, cy + ry); sh.addColorStop(0, 'rgba(0,0,0,0)'); sh.addColorStop(0.55, 'rgba(8,16,6,0.12)'); sh.addColorStop(1, 'rgba(6,12,4,0.62)');
+  g.fillStyle = sh; g.fillRect(0, 0, N, N);
+  return vegTexture(cv, false);
+}
+function makeTuftTexture() {     // a clump of tapered, curved grass blades
+  const W = 64, H = 96, cv = vegCanvas(W, H), g = cv.getContext('2d'), R = rngFrom(31337);
+  for (let i = 0; i < 34; i++) {
+    const bx = W / 2 + (R() - 0.5) * W * 0.5, h = H * (0.45 + R() * 0.5), lean = (R() - 0.5) * W * 0.55, wd = 1.3 + R() * 1.6, tx = bx + lean, ty = H - h;
+    const gr = g.createLinearGradient(0, H, 0, ty), hue = 70 + R() * 38;
+    gr.addColorStop(0, `hsl(${hue},40%,17%)`); gr.addColorStop(0.55, `hsl(${hue},45%,31%)`); gr.addColorStop(1, `hsl(${hue - 6},50%,${48 + R() * 14}%)`);
+    g.fillStyle = gr; g.beginPath(); g.moveTo(bx - wd, H); g.quadraticCurveTo(bx + lean * 0.15 - wd * 0.6, H - h * 0.55, tx, ty); g.quadraticCurveTo(bx + lean * 0.15 + wd * 0.6, H - h * 0.55, bx + wd, H); g.closePath(); g.fill();
+  }
+  return vegTexture(cv, false);
+}
+function quadGeo(quads) {         // quads of [bl, br, tr, tl] corners; every normal points up so foliage is lit softly from all sides
+  const pos = [], uv = [], nor = [], idx = [];
+  quads.forEach((q, k) => { for (const [x, y, z] of q) { pos.push(x, y, z); nor.push(0, 1, 0); } uv.push(0, 0, 1, 0, 1, 1, 0, 1); idx.push(k * 4, k * 4 + 1, k * 4 + 2, k * 4, k * 4 + 2, k * 4 + 3); });
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx);
+  return g;
+}
+const vertCards = (w, h, angles) => angles.map(a => { const c = Math.cos(a) * w / 2, s = Math.sin(a) * w / 2; return [[-c, 0, -s], [c, 0, s], [c, h, s], [-c, h, -s]]; });
+const BUSH_GEO = quadGeo([...vertCards(2, 1.25, [0, Math.PI / 3, 2 * Math.PI / 3]), [[-0.95, 0.62, 0.95], [0.95, 0.62, 0.95], [0.95, 0.62, -0.95], [-0.95, 0.62, -0.95]]]);   // 3 crossed cards + a canopy top
+const TUFT_GEO = quadGeo(vertCards(1.4, 2.1, [0, Math.PI / 2, Math.PI / 4]));
+const ROCK_GEO = (() => {        // faceted boulder: an icosphere with noisy radius and flat shading
+  const g = new THREE.IcosahedronGeometry(1, 1), p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) { const x = p.getX(i), y = p.getY(i), z = p.getZ(i), k = 0.78 + 0.4 * netRand(Math.round(x * 400), Math.round(y * 400), Math.round(z * 400)); p.setXYZ(i, x * k, y * k, z * k); }
+  g.computeVertexNormals(); return g;
+})();
+let bushMat = null, tuftMat = null, groundMat = null, rockMat = null;       // created on first use
+const vegMats = () => {
+  if (!bushMat) {
+    bushMat = new THREE.MeshLambertMaterial({ map: makeBushTexture(), alphaTest: 0.5, side: THREE.DoubleSide });
+    tuftMat = new THREE.MeshLambertMaterial({ map: makeTuftTexture(), alphaTest: 0.45, side: THREE.DoubleSide });
+    groundMat = new THREE.MeshLambertMaterial({ map: makeGroundTexture(), vertexColors: true });
+    rockMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
+  }
+};
+const BUSH_TINTS = [0xffffff, 0xeaf3dc, 0xd9ecc4, 0xf4f1cc, 0xcfe2b8, 0xe4f0d0, 0xc2d9a8, 0xf0f6e0];   // multiply the leaf texture: no two bushes look the same
+const TUFT_TINTS = [0xffffff, 0xeef3d4, 0xdfe9b8, 0xf6efc0, 0xd0e0a8];
+const ROCK_GREYS = [0x8c8c84, 0x77776f, 0x9a968a, 0x6d6f6a, 0x857d70];
+const FIELD_TILE = 26;           // metres of ground per texture repeat
+function fieldGroundGeo(rects, x0, x1, z0, z1) {   // ONE merged mesh for every field in a chunk, with soft per-vertex tone (greens / dry straw) so fields never look tiled
+  const pos = [], uv = [], col = [], idx = [];
+  for (const r of rects) {
+    const a0 = Math.max(r.x0, x0), a1 = Math.min(r.x1, x1), b0 = Math.max(r.z0, z0), b1 = Math.min(r.z1, z1);
+    if (a1 - a0 < 0.5 || b1 - b0 < 0.5) continue;
+    const nx = Math.max(1, Math.ceil((a1 - a0) / 22)), nz = Math.max(1, Math.ceil((b1 - b0) / 22)), base = pos.length / 3;
+    for (let j = 0; j <= nz; j++) for (let i = 0; i <= nx; i++) {
+      const x = a0 + (a1 - a0) * i / nx, z = b0 + (b1 - b0) * j / nz;
+      const n = netNoise(x / 45 + 11, z / 45 - 5), m = netNoise(x / 13, z / 13 + 8), dry = smooth01((n - 0.52) / 0.2), b = 0.74 + 0.5 * m;
+      pos.push(x, -0.1, z); uv.push(x / FIELD_TILE, z / FIELD_TILE);
+      col.push(b * (1 + 0.28 * dry), b * (1 - 0.02 * dry), b * (1 - 0.32 * dry));
+    }
+    for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) { const p = base + j * (nx + 1) + i, q = p + nx + 1; idx.push(p, q, p + 1, p + 1, q, q + 1); }
+  }
+  if (!idx.length) return null;
+  const g = new THREE.BufferGeometry(), nor = new Float32Array(pos.length); for (let i = 1; i < nor.length; i += 3) nor[i] = 1;
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3)); g.setIndex(idx);
+  return g;
+}
+const fieldCache = new Map();
+function fieldItems(r) {         // bushes in clusters, grass clumps, boulders, palms: built on demand, only the 48 most recent fields are kept
+  const key = r.x0 + ',' + r.z0;
+  let it = fieldCache.get(key);
+  if (it) return it;
   const R = rngFrom(r.seed * 7 + 3), w = r.x1 - r.x0, d = r.z1 - r.z0, area = w * d, mob = IS_MOBILE ? 0.5 : 1;
-  const it = r.items = { cells: [], bushes: [], tufts: [], rocks: [], trees: [] };
+  it = { bushes: [], tufts: [], rocks: [], trees: [] };
   const pick = a => a[Math.floor(R() * a.length)];
-  for (let z = r.z0; z < r.z1 - 0.01;) {            // irregular patchwork of grass colours (cells never overlap: no z-fighting)
-    let dz = Math.min(r.z1 - z, 14 + R() * 22); if (r.z1 - (z + dz) < 8) dz = r.z1 - z;
-    for (let x = r.x0; x < r.x1 - 0.01;) {
-      let dx = Math.min(r.x1 - x, 14 + R() * 24); if (r.x1 - (x + dx) < 8) dx = r.x1 - x;
-      const n = netNoise(x / 60 + r.seed % 89, z / 60), idx = Math.min(FIELD_GREENS.length - 1, Math.floor(Math.max(0, Math.min(0.999, n * 0.75 + R() * 0.4)) * FIELD_GREENS.length));
-      it.cells.push({ x: x + dx / 2, z: z + dz / 2, w: dx, d: dz, color: R() < 0.07 ? 0x9d9264 : FIELD_GREENS[idx] });
-      x += dx;
-    }
-    z += dz;
-  }
   const inside = (x, z, m) => [Math.max(r.x0 + m, Math.min(r.x1 - m, x)), Math.max(r.z0 + m, Math.min(r.z1 - m, z))];
-  const bush = (x, z, s) => {
-    const hf = 0.55 + R() * 0.3, sy = s * hf, c = pick(BUSH_GREENS);
-    it.bushes.push({ x, y: sy * 0.5 - 0.12, z, ry: R() * 6.28, sx: s * (0.9 + R() * 0.25), sy, sz: s * (0.9 + R() * 0.25), color: c });
-  };
-  const nClusters = Math.max(1, Math.round(area / 1000 * (0.5 + R()) * mob));       // bushes grow in clusters of different size
-  for (let c = 0; c < nClusters; c++) {
-    const cx0 = r.x0 + 3 + R() * (w - 6), cz0 = r.z0 + 3 + R() * (d - 6), rad = 4 + R() * 10, cnt = Math.round((3 + R() * 9) * mob) + 1;
-    for (let k = 0; k < cnt; k++) {
-      const a = R() * 6.283, rr = rad * Math.sqrt(R()), [x, z] = inside(cx0 + Math.cos(a) * rr, cz0 + Math.sin(a) * rr, 1.5);
-      bush(x, z, 1.1 + R() * 2.2 * (1 - rr / (rad * 1.4)));
-    }
+  const bush = (x, z, s) => it.bushes.push({ x, y: -0.1, z, ry: R() * 6.28, sx: s * (1 + R() * 0.3), sy: s * (0.7 + R() * 0.5), sz: s * (1 + R() * 0.3), color: pick(BUSH_TINTS) });
+  for (let c = Math.max(1, Math.round(area / 1500 * (0.5 + R()) * mob)); c > 0; c--) {      // bush clusters of different size and spread
+    const cx0 = r.x0 + 3 + R() * (w - 6), cz0 = r.z0 + 3 + R() * (d - 6), rad = 3 + R() * 7, cnt = Math.round((2 + R() * 6) * mob) + 1;
+    for (let k = 0; k < cnt; k++) { const a = R() * 6.283, rr = rad * Math.sqrt(R()), [x, z] = inside(cx0 + Math.cos(a) * rr, cz0 + Math.sin(a) * rr, 1.5); bush(x, z, 0.9 + R() * 1.5 * (1 - rr / (rad * 1.5))); }
   }
-  for (let k = Math.round(area / 1100 * mob * (0.4 + R())); k > 0; k--) { const [x, z] = inside(r.x0 + R() * w, r.z0 + R() * d, 1.5); bush(x, z, 0.9 + R() * 1.4); }
-  for (let k = Math.round(area / (IS_MOBILE ? 90 : 45)); k > 0; k--) {
-    const s = 0.8 + R() * 1.1;
-    it.tufts.push({ x: r.x0 + R() * w, y: -0.12, z: r.z0 + R() * d, ry: R() * 6.28, sx: s, sy: s * (0.8 + R() * 0.8), sz: s, color: pick(TUFT_GREENS) });
+  for (let k = Math.round(area / 1800 * mob * (0.4 + R())); k > 0; k--) { const [x, z] = inside(r.x0 + R() * w, r.z0 + R() * d, 1.5); bush(x, z, 0.7 + R() * 1.1); }
+  const tuft = (x, z) => { const s = 0.3 + R() * 0.45; it.tufts.push({ x, y: -0.1, z, ry: R() * 6.28, sx: s, sy: s * (0.9 + R() * 0.35), sz: s, color: pick(TUFT_TINTS) }); };
+  for (let c = Math.round(area / (IS_MOBILE ? 520 : 260)); c > 0; c--) {                       // grass grows in clumps, not evenly
+    const cx0 = r.x0 + R() * w, cz0 = r.z0 + R() * d, cnt = 3 + Math.floor(R() * 5), rad = 1.2 + R() * 2.4;
+    for (let k = 0; k < cnt; k++) { const a = R() * 6.283, rr = rad * Math.sqrt(R()); const [x, z] = inside(cx0 + Math.cos(a) * rr, cz0 + Math.sin(a) * rr, 0.5); tuft(x, z); }
   }
-  for (let k = Math.round(area / 2600 * (0.3 + R() * 1.4)); k > 0; k--) {
-    const s = 0.7 + R() * 1.5;
-    it.rocks.push({ x: r.x0 + 2 + R() * (w - 4), y: s * 0.25 - 0.15, z: r.z0 + 2 + R() * (d - 4), ry: R() * 6.28, sx: s * (0.8 + R() * 0.7), sy: s * (0.5 + R() * 0.4), sz: s * (0.8 + R() * 0.7), color: pick(ROCK_GREYS) });
+  for (let k = Math.round(area / 3500 * (0.3 + R() * 1.4)); k > 0; k--) {
+    const s = 0.6 + R() * 1.3;
+    it.rocks.push({ x: r.x0 + 2 + R() * (w - 4), y: s * 0.3 - 0.12, z: r.z0 + 2 + R() * (d - 4), ry: R() * 6.28, sx: s * (0.8 + R() * 0.7), sy: s * (0.5 + R() * 0.4), sz: s * (0.8 + R() * 0.7), color: pick(ROCK_GREYS) });
   }
-  for (let k = Math.round(area / 1500 * (0.3 + R() * 1.3)); k > 0; k--)            // a few palms standing in the fields
+  for (let k = Math.round(area / 1500 * (0.3 + R() * 1.3)); k > 0; k--)                        // a few palms standing in the fields
     it.trees.push({ x: r.x0 + 5 + R() * (w - 10), z: r.z0 + 5 + R() * (d - 10), type: R() < 0.5 ? 0 : 1, s: 0.75 + R() * 0.5, rot: R() * 6.28, tr: 0.9 + R() * 0.14, tg: 0.92 + R() * 0.14, tb: 0.88 + R() * 0.16 });
+  fieldCache.set(key, it);
+  if (fieldCache.size > 48) fieldCache.delete(fieldCache.keys().next().value);
   return it;
 }
 const wildFinal = new Set(), wildRectCache = new Map();
@@ -981,7 +1076,7 @@ function addRoadsideProps(cx, cz, box, L) {
           } else {                                                     // bush clump at the edge of the walkway
             for (let k = 0, m = 1 + Math.floor(h2(10) * 3); k < m; k++) {
               const [x, z] = at(AVE_HALF + 8.4 - h2(14 + k) * 0.6, q + (k - 1) * 2.2), s = 0.9 + h2(17 + k) * 0.9;
-              L.bushes.push({ x, y: s * 0.3, z, ry: h2(20 + k) * 6.28, sx: s, sy: s * 0.7, sz: s, color: BUSH_GREENS[Math.floor(h2(23 + k) * BUSH_GREENS.length)] });
+              L.bushes.push({ x, y: 0.05, z, ry: h2(20 + k) * 6.28, sx: s * 1.1, sy: s * 0.8, sz: s * 1.1, color: BUSH_TINTS[Math.floor(h2(23 + k) * BUSH_TINTS.length)] });
             }
           }
         }
@@ -1347,21 +1442,24 @@ function buildRoads(cx, cz, group, asphaltRecs) {
       if (iz < -5180 || iz > 5180) continue;
       const ni = Math.round(ix / ROAD_SPACING), nj = Math.round(iz / ROAD_SPACING);
       const aN = armOpen('x', ni, nj, -1), aS = armOpen('x', ni, nj, 1), aW = armOpen('z', nj, ni, -1), aE = armOpen('z', nj, ni, 1);   // which arms carry a road
+      const nOpen = (aN ? 1 : 0) + (aS ? 1 : 0) + (aW ? 1 : 0) + (aE ? 1 : 0);
+      const tH = nOpen === 3 && (!aN || !aS), tV = nOpen === 3 && (!aW || !aE);   // T-junction whose straight (through) road runs along x / along z
+      const sN = aN && !tV, sS = aS && !tV, sW = aW && !tH, sE = aE && !tH;       // zebra + stop line only on the side road (the stem of the T)
       const hx = roadHalfAt(ix), hz = roadHalfAt(iz);
       const yZ = -0.015, yX = -0.015, yB = -0.015;   // paint height follows each road's own lane-line convention
       const SL = 1.2, GAP = 0.6, OFF = ZW;   // stop line: 1.2 thick, pushed back OFF (=zebra length) so the zebra comes right after it
-      if (aN) white.push({ x: ix - (hx + GAP) / 2, y: yZ, z: iz - hz - OFF - GAP - SL / 2 - 0.2, sx: hx - GAP, sy: 0.03, sz: SL });
-      if (aS) white.push({ x: ix + (hx + GAP) / 2, y: yZ, z: iz + hz + OFF + GAP + SL / 2 + 0.2, sx: hx - GAP, sy: 0.03, sz: SL });
-      if (aW) white.push({ x: ix - hx - OFF - GAP - SL / 2 - 0.2, y: yX, z: iz + (hz + GAP) / 2, sx: SL, sy: 0.03, sz: hz - GAP });
-      if (aE) white.push({ x: ix + hx + OFF + GAP + SL / 2 + 0.2, y: yX, z: iz - (hz + GAP) / 2, sx: SL, sy: 0.03, sz: hz - GAP });
+      if (sN) white.push({ x: ix - (hx + GAP) / 2, y: yZ, z: iz - hz - OFF - GAP - SL / 2 - 0.2, sx: hx - GAP, sy: 0.03, sz: SL });
+      if (sS) white.push({ x: ix + (hx + GAP) / 2, y: yZ, z: iz + hz + OFF + GAP + SL / 2 + 0.2, sx: hx - GAP, sy: 0.03, sz: SL });
+      if (sW) white.push({ x: ix - hx - OFF - GAP - SL / 2 - 0.2, y: yX, z: iz + (hz + GAP) / 2, sx: SL, sy: 0.03, sz: hz - GAP });
+      if (sE) white.push({ x: ix + hx + OFF + GAP + SL / 2 + 0.2, y: yX, z: iz - (hz + GAP) / 2, sx: SL, sy: 0.03, sz: hz - GAP });
       {   // zebra crossings only on arms that exist
         const N = Math.floor((2 * hx - ZEBRA_T) / (2 * ZEBRA_T)) + 1, pitch = (2 * hx - ZEBRA_T) / (N - 1), yz = -0.015;
         for (let k = 0; k < N; k++) {
           const o = -hx + ZEBRA_T / 2 + k * pitch;
-          if (aN) white.push({ x: ix + o, y: yz, z: iz - hz - ZW / 2, sx: ZEBRA_T, sy: 0.03, sz: ZW });
-          if (aS) white.push({ x: ix + o, y: yz, z: iz + hz + ZW / 2, sx: ZEBRA_T, sy: 0.03, sz: ZW });
-          if (aW) white.push({ x: ix - hx - ZW / 2, y: yz, z: iz + o, sx: ZW, sy: 0.03, sz: ZEBRA_T });
-          if (aE) white.push({ x: ix + hx + ZW / 2, y: yz, z: iz + o, sx: ZW, sy: 0.03, sz: ZEBRA_T });
+          if (sN) white.push({ x: ix + o, y: yz, z: iz - hz - ZW / 2, sx: ZEBRA_T, sy: 0.03, sz: ZW });
+          if (sS) white.push({ x: ix + o, y: yz, z: iz + hz + ZW / 2, sx: ZEBRA_T, sy: 0.03, sz: ZW });
+          if (sW) white.push({ x: ix - hx - ZW / 2, y: yz, z: iz + o, sx: ZW, sy: 0.03, sz: ZEBRA_T });
+          if (sE) white.push({ x: ix + hx + ZW / 2, y: yz, z: iz + o, sx: ZW, sy: 0.03, sz: ZEBRA_T });
         }
       }
       // T-junction: the red walkway + kerb of the through road run straight across the closed arm
@@ -1369,6 +1467,12 @@ function buildRoads(cx, cz, group, asphaltRecs) {
       if (!aS) { pvm.push({ x: ix, y: 0.02, z: iz + (hz + PAVE_C), sx: 2 * hx, sy: 0.12, sz: PAVE_W }); kerb.push({ x: ix, y: 0.05, z: iz + (hz + 0.12), sx: 2 * hx, sy: 0.18, sz: 0.24 }); }
       if (!aW) { pvm.push({ x: ix - (hx + PAVE_C), y: 0.02, z: iz, sx: PAVE_W, sy: 0.12, sz: 2 * hz }); kerb.push({ x: ix - (hx + 0.12), y: 0.05, z: iz, sx: 0.24, sy: 0.18, sz: 2 * hz }); }
       if (!aE) { pvm.push({ x: ix + (hx + PAVE_C), y: 0.02, z: iz, sx: PAVE_W, sy: 0.12, sz: 2 * hz }); kerb.push({ x: ix + (hx + 0.12), y: 0.05, z: iz, sx: 0.24, sy: 0.18, sz: 2 * hz }); }
+      if (tH || tV) {   // the straight road keeps its yellow centre line and white lane dashes unbroken through the junction
+        const lo = (tH ? ix : iz) - AVE_HALF - WALK_W, hi = (tH ? ix : iz) + AVE_HALF + WALK_W, c = tH ? iz : ix;
+        for (const o of [-0.42, 0.42]) yellow.push(tH ? { x: ix, y: yB, z: c + o, sx: hi - lo, sy: 0.03, sz: 0.22 } : { x: c + o, y: yB, z: iz, sx: 0.22, sy: 0.03, sz: hi - lo });
+        for (let q = Math.ceil((lo + 2) / 14) * 14; q <= hi - 2; q += 14)
+          for (const o of [-12, 12]) white.push(tH ? { x: q, y: yB, z: c + o, sx: 4, sy: 0.03, sz: 0.15 } : { x: c + o, y: yB, z: q, sx: 0.15, sy: 0.03, sz: 4 });
+      }
       if (aN && aS && aW && aE) {   // yellow box junction only on real crossroads
         const ex = hx - 0.8, ez = hz - 0.8, t = 0.3;
         yellow.push({ x: ix, y: yB, z: iz - ez, sx: 2 * ex + t, sy: 0.03, sz: t }, { x: ix, y: yB, z: iz + ez, sx: 2 * ex + t, sy: 0.03, sz: t },
@@ -1465,13 +1569,15 @@ function buildChunkContent(cx, cz) {
     const L = { bushes: [], tufts: [], rocks: [], cones: [], drums: [], bins: [] };
     for (const r of fieldRectsIn(xMin, x1, zMin, z1)) {
       const it = fieldItems(r);
-      for (const c of it.cells) if (inC(c)) box(c.w, 0.1, c.d, c.color, c.x, -0.2, c.z);
       for (const b of it.bushes) if (inC(b)) L.bushes.push(b);
       for (const b of it.tufts) if (inC(b)) L.tufts.push(b);
       for (const b of it.rocks) if (inC(b)) L.rocks.push(b);
     }
     addRoadsideProps(cx, cz, box, L);
-    batch(L.bushes, BUSH_GEO, instMat, group, true); batch(L.tufts, TUFT_GEO, instMat, group, true); batch(L.rocks, ROCK_GEO, instMat, group, true);
+    vegMats();
+    const fr = fieldRectsIn(xMin, x1, zMin, z1), gg = fr.length ? fieldGroundGeo(fr, xMin, x1, zMin, z1) : null;
+    if (gg) { const gm = new THREE.Mesh(gg, groundMat); gm.matrixAutoUpdate = false; gm.updateMatrix(); group.add(gm); entry.disposables.push(gg); }   // one draw call, freed with the chunk
+    batch(L.bushes, BUSH_GEO, bushMat, group, true); batch(L.tufts, TUFT_GEO, tuftMat, group, true); batch(L.rocks, ROCK_GEO, rockMat, group, true);
     batch(L.cones, CONE_GEO, instMat, group, true); batch(L.drums, DRUM_GEO, instMat, group, true); batch(L.bins, BIN_GEO, instMat, group, true);
   });
   job(() => { batch(boxes, UNIT_BOX, instMat, group, true); });          // 2. one draw call for all boxes
@@ -2533,17 +2639,27 @@ function drawCityMap() {
     for (let a = kx0; a <= kx1; a++) for (let b = kz0; b <= kz1; b++) {
       const ix = a * ROAD_SPACING, iz = b * ROAD_SPACING, hw = AVE_HALF;
       const aN = armOpen('x', a, b, -1), aS = armOpen('x', a, b, 1), aW = armOpen('z', b, a, -1), aE = armOpen('z', b, a, 1);
+      const nOpen = (aN ? 1 : 0) + (aS ? 1 : 0) + (aW ? 1 : 0) + (aE ? 1 : 0), tH = nOpen === 3 && (!aN || !aS), tV = nOpen === 3 && (!aW || !aE);
+      const sN = aN && !tV, sS = aS && !tV, sW = aW && !tH, sE = aE && !tH;     // crossings only on the side road of a T
+      if (tH || tV) {                                                           // centre + lane lines continue straight through the T
+        const c0 = (tH ? ix : iz) - AVE_HALF - WALK_W, c1 = (tH ? ix : iz) + AVE_HALF + WALK_W, q0 = Math.ceil((c0 + 2) / 14) * 14 - 2;
+        ctx.setLineDash([]); ctx.strokeStyle = '#f1c84b'; ctx.lineWidth = yellowW; ctx.beginPath();
+        if (tH) { ctx.moveTo(X(c0), Y(iz)); ctx.lineTo(X(c1), Y(iz)); } else { ctx.moveTo(X(ix), Y(c0)); ctx.lineTo(X(ix), Y(c1)); }
+        ctx.stroke(); ctx.strokeStyle = '#f4f2df'; ctx.lineWidth = whiteW; ctx.setLineDash([4 * S, 10 * S]);
+        for (const sd of [-12, 12]) { ctx.beginPath(); if (tH) { ctx.moveTo(X(q0), Y(iz + sd)); ctx.lineTo(X(c1), Y(iz + sd)); } else { ctx.moveTo(X(ix + sd), Y(q0)); ctx.lineTo(X(ix + sd), Y(c1)); } ctx.stroke(); }
+        ctx.setLineDash([]);
+      }
       ctx.strokeStyle = '#f4f2df'; ctx.lineWidth = ZW_ * S; ctx.setLineDash([ZT * S, (ZP - ZT) * S]);
       for (const sg of [-1, 1]) {
-        if (sg < 0 ? aN : aS) { ctx.beginPath(); ctx.moveTo(X(ix - hw), Y(iz + sg * (hw + ZW_ / 2))); ctx.lineTo(X(ix + hw), Y(iz + sg * (hw + ZW_ / 2))); ctx.stroke(); }   // arms along z
-        if (sg < 0 ? aW : aE) { ctx.beginPath(); ctx.moveTo(X(ix + sg * (hw + ZW_ / 2)), Y(iz - hw)); ctx.lineTo(X(ix + sg * (hw + ZW_ / 2)), Y(iz + hw)); ctx.stroke(); }   // arms along x
+        if (sg < 0 ? sN : sS) { ctx.beginPath(); ctx.moveTo(X(ix - hw), Y(iz + sg * (hw + ZW_ / 2))); ctx.lineTo(X(ix + hw), Y(iz + sg * (hw + ZW_ / 2))); ctx.stroke(); }   // arms along z
+        if (sg < 0 ? sW : sE) { ctx.beginPath(); ctx.moveTo(X(ix + sg * (hw + ZW_ / 2)), Y(iz - hw)); ctx.lineTo(X(ix + sg * (hw + ZW_ / 2)), Y(iz + hw)); ctx.stroke(); }   // arms along x
       }
       ctx.setLineDash([]); ctx.fillStyle = '#f4f2df';
       const so = hw + ZW_ + GAPM + SLT / 2 + 0.2, sl = Math.max(SLT * S, 1.2);
-      if (aN) ctx.fillRect(X(ix - hw), Y(iz - so) - sl / 2, (hw - GAPM) * S, sl);
-      if (aS) ctx.fillRect(X(ix + GAPM), Y(iz + so) - sl / 2, (hw - GAPM) * S, sl);
-      if (aW) ctx.fillRect(X(ix - so) - sl / 2, Y(iz + GAPM), sl, (hw - GAPM) * S);
-      if (aE) ctx.fillRect(X(ix + so) - sl / 2, Y(iz - hw), sl, (hw - GAPM) * S);
+      if (sN) ctx.fillRect(X(ix - hw), Y(iz - so) - sl / 2, (hw - GAPM) * S, sl);
+      if (sS) ctx.fillRect(X(ix + GAPM), Y(iz + so) - sl / 2, (hw - GAPM) * S, sl);
+      if (sW) ctx.fillRect(X(ix - so) - sl / 2, Y(iz + GAPM), sl, (hw - GAPM) * S);
+      if (sE) ctx.fillRect(X(ix + so) - sl / 2, Y(iz - hw), sl, (hw - GAPM) * S);
       if (S >= 1.0 && aN && aS && aW && aE) {
         const e = hw - 0.8;
         ctx.strokeStyle = '#f1c84b'; ctx.lineWidth = Math.max(1, 0.3 * S);
