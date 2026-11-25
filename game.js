@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.86-RANDOMIZED-ROAD-TOPOLOGY (v0.85-ROTATING-MINIMAP base): avenues only, big modern high-rise towers, streamed + instanced chunks
+// THIS IS LAGOS v0.86-ROAD-NETWORK (v0.85-ROTATING-MINIMAP base): 20% T-junctions, dead ends, closed roads -> bush & green fields, random street objects, graph navigation. Avenues only, big modern high-rise towers, streamed + instanced chunks
 // Target: < 400 MB on phones. Add ?debug to the URL to log draw calls / GPU memory.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -379,51 +379,7 @@ const MAJOR_LANE_WIDTH = 12;
 const ROAD_EDGE_CLEARANCE = MAJOR_LANE_WIDTH, BLOCK_SETBACK = MAJOR_LANE_WIDTH;
 const ROAD_SPACING = 210, AVE_HALF = 24, BLOCK_N = 25;      // blocks run from -25 to +24 in x and z
 const blockIndex = (bi, bj) => (bi + BLOCK_N) * (BLOCK_N * 2) + (bj + BLOCK_N);
-
 const roadHalfWidthAt = () => AVE_HALF;
-
-// Deterministic, spatially irregular street topology. Exactly one arm is closed at
-// roughly 1 in 5 intersections; the seed makes the layout stable across chunks,
-// map redraws and navigation recalculations.
-function roadHash(ix, iz, salt = 0) {
-  let h = Math.imul(ix + 0x45d9f3b, 0x27d4eb2d) ^ Math.imul(iz + 0x119de1f3, 0x165667b1) ^ salt;
-  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
-  h = Math.imul(h ^ (h >>> 12), 0x297a2d39);
-  return ((h ^ (h >>> 15)) >>> 0) / 4294967296;
-}
-const T_JUNCTION_RATE = 0.20;
-const T_DIRS = ['N', 'S', 'E', 'W'];
-function closedTArm(ix, iz) {
-  if (roadHash(ix, iz, 0x51f15e) >= T_JUNCTION_RATE) return null;
-  return T_DIRS[Math.floor(roadHash(ix, iz, 0x2a91) * T_DIRS.length)];
-}
-const tArmClosed = (ix, iz, dir) => closedTArm(ix, iz) === dir;
-function roadArmOpen(ix, iz, dir) {
-  // A T junction closes the matching connection at either endpoint, so routing
-  // cannot accidentally enter a blocked arm from the opposite end.
-  if (tArmClosed(ix, iz, dir)) return false;
-  const nx = ix + (dir === 'E' ? 1 : dir === 'W' ? -1 : 0);
-  const nz = iz + (dir === 'S' ? 1 : dir === 'N' ? -1 : 0);
-  const opposite = dir === 'N' ? 'S' : dir === 'S' ? 'N' : dir === 'E' ? 'W' : 'E';
-  if (tArmClosed(nx, nz, opposite)) return false;
-  if (dir === 'E' || dir === 'W') return !roadEdgeClosed('z', iz, Math.min(ix, nx));
-  return !roadEdgeClosed('x', ix, Math.min(iz, nz));
-}
-// A small additional share of individual blocks become access-only dead ends.
-const DEAD_END_EDGE_RATE = 0.025;
-function roadEdgeClosed(axis, roadIndex, segmentIndex) {
-  const salt = axis === 'x' ? 0x4a117 : 0x7b223;
-  return roadHash(roadIndex, segmentIndex, salt) < DEAD_END_EDGE_RATE;
-}
-function segmentStreetName(axis, roadIndex, segmentIndex) {
-  const base = streetName(axis, roadIndex);
-  if (roadEdgeClosed(axis, roadIndex, segmentIndex - 1) || roadEdgeClosed(axis, roadIndex, segmentIndex))
-    return base + ' Access Link ' + String(segmentIndex + 26).padStart(2, '0');
-  return base;
-}
-const tJunctionAt = (ix, iz) => closedTArm(ix, iz) !== null;
-const T_DIR_DELTA = { N: [0, -1], S: [0, 1], E: [1, 0], W: [-1, 0] };
-
 function blockSpan(v) {
   const a = Math.floor(v / ROAD_SPACING) * ROAD_SPACING, b = a + ROAD_SPACING;
   return [a + AVE_HALF + BLOCK_SETBACK, b - AVE_HALF - BLOCK_SETBACK];
@@ -623,7 +579,10 @@ function designBuilding(x, z, w, d, kind, seedIn) {
   if (rem > 0) tiers[tiers.length - 1].floors += rem;
   const bx = x - Math.floor(x / ROAD_SPACING) * ROAD_SPACING, bz = z - Math.floor(z / ROAD_SPACING) * ROAD_SPACING;
   const toAve = [[bz, 1], [ROAD_SPACING - bz, 0], [bx, 3], [ROAD_SPACING - bx, 2]].sort((a, b) => a[0] - b[0]);   // faces: 0 +z, 1 -z, 2 +x, 3 -x
-  const face = R() < 0.25 ? toAve[1][1] : toAve[0][1];
+  const bI = Math.floor(x / ROAD_SPACING), bJ = Math.floor(z / ROAD_SPACING);
+  const faceOpen = f => f === 1 ? segOpen('z', bJ, bI) : f === 0 ? segOpen('z', bJ + 1, bI) : f === 3 ? segOpen('x', bI, bJ) : segOpen('x', bI + 1, bJ);
+  const usable = toAve.filter(e => faceOpen(e[1])), faceList = usable.length ? usable : toAve;   // entrance faces a road that exists
+  const face = R() < 0.25 ? faceList[Math.min(1, faceList.length - 1)][1] : faceList[0][1];
   const faceW = (face < 2 ? w : d) + 4;
   return {
     x, z, w, d, kind, floors, preset, tint, tiers, h: PODIUM_H + floors * FLOOR_H,
@@ -747,6 +706,290 @@ for (let tx = -2; tx <= 2; tx++) for (let tz = -2; tz <= 2; tz++) {
   for (const d of baseDistrictDefs) districtDefs.push([`${d[0]} DISTRICT ${String(tileNo).padStart(2, '0')}`, d[1] + tx * 2100, d[2] + tz * 2100, d[3]]);
 }
 
+// ============================================================================
+// ROAD NETWORK EDITS
+// ~20% of the crossroads become T-junctions (one arm is closed or cut short), some roads become dead ends with a single
+// entrance, and every closed stretch turns into bush + green field with no road markings. Deterministic and UNEVEN: a smooth
+// noise field decides where closures are dense or rare, and a random pick order decides who is chosen, so the gaps between
+// them are never regular.
+//   axis 'x' = a road at x = i*210 (runs along z); axis 'z' = a road at z = i*210 (runs along x).
+//   segment j of a road = the stretch between junction j and junction j+1 (coordinates j*210 .. (j+1)*210).
+// ============================================================================
+const NET_LO = -24, NET_HI = 24, NET_W = NET_HI - NET_LO + 1;
+const NET_T_SHARE = 0.20;                                    // share of ALL crossroads that must end up as T-junctions
+const SEG_SPAN = ROAD_SPACING - 2 * AVE_HALF;                // 162: one road stretch between two junction squares
+const FIELD_CAP = ROAD_EDGE_CLEARANCE;                       // 12: red walkway closing a dead end
+const roadSegs = new Map();                                  // changed stretches only: { k: 1 closed | 2 stub from low end | 3 stub from high end | 4 stubs from both ends, a, b }
+const wildBlocks = new Set();                                // blocks beside closed roads that are given back to nature
+const fieldRects = [];                                       // green fields on closed road stretches
+const deadEnds = [];                                         // { axis, i, g, q, dir }: end of a stub, dir = side the field lies on
+const segKey = (axis, i, j) => axis + i + ',' + j;
+const segOpen = (axis, i, j) => !roadSegs.has(segKey(axis, i, j));
+const smooth01 = t => t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t);
+
+function netRand(a, b, c = 0) {
+  let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1) ^ Math.imul(c | 0, 0x9e3779b1);
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b); h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35); h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+function netNoise(x, z) {   // smooth value noise, two octaves, 0..1
+  const oct = (sx, sz, c) => {
+    const ix = Math.floor(sx), iz = Math.floor(sz), fx = sx - ix, fz = sz - iz, ux = fx * fx * (3 - 2 * fx), uz = fz * fz * (3 - 2 * fz);
+    const a = netRand(ix, iz, c), b = netRand(ix + 1, iz, c), d = netRand(ix, iz + 1, c), e = netRand(ix + 1, iz + 1, c);
+    return a + (b - a) * ux + (d - a) * uz + (a - b - d + e) * ux * uz;
+  };
+  return 0.62 * oct(x / 7, z / 7, 1) + 0.38 * oct(x / 2.6 + 40, z / 2.6 + 40, 2);
+}
+
+// Is there real road at along-road coordinate q of road line (axis, i)?  (junction squares always are)
+function liveAt(axis, i, q) {
+  const S = ROAD_SPACING, j = Math.floor(q / S), r = q - j * S;
+  if (r <= AVE_HALF || r >= S - AVE_HALF) return true;
+  const rec = roadSegs.get(segKey(axis, i, j));
+  if (!rec) return true;
+  const lo = r - AVE_HALF, hi = S - AVE_HALF - r;
+  if (rec.k === 2) return lo <= rec.a;
+  if (rec.k === 3) return hi <= rec.b;
+  if (rec.k === 4) return lo <= rec.a || hi <= rec.b;
+  return false;
+}
+const roadLive = (axis, i, q, pad = 0) => liveAt(axis, i, q) && (!pad || (liveAt(axis, i, q - pad) && liveAt(axis, i, q + pad)));
+// Does the arm leaving junction jn of road (axis, i) in direction dir (+1 / -1) carry a road?
+function armOpen(axis, i, jn, dir) {
+  const rec = roadSegs.get(segKey(axis, i, dir > 0 ? jn : jn - 1));
+  if (!rec) return true;
+  if (rec.k === 1) return false;
+  return dir > 0 ? (rec.k === 2 || rec.k === 4) : (rec.k === 3 || rec.k === 4);
+}
+// Live stretches of a road line inside [lo, hi]: junction squares + open/stub parts, merged. [a, b, deadAtA, deadAtB]
+function roadRuns(axis, i, lo, hi) {
+  const S = ROAD_SPACING, out = [];
+  const add = (a, b, dl, dh) => {
+    if (b <= lo || a >= hi) return;
+    const dLo = dl && a >= lo, dHi = dh && b <= hi;
+    a = Math.max(a, lo); b = Math.min(b, hi);
+    const last = out[out.length - 1];
+    if (last && a <= last[1] + 0.001) { last[1] = Math.max(last[1], b); last[3] = dHi; } else out.push([a, b, dLo, dHi]);
+  };
+  for (let j = Math.floor(lo / S) - 1, e = Math.ceil(hi / S) + 1; j <= e; j++) {
+    add(j * S - AVE_HALF, j * S + AVE_HALF, false, false);
+    const rec = roadSegs.get(segKey(axis, i, j)), s0 = j * S + AVE_HALF, e0 = (j + 1) * S - AVE_HALF;
+    if (!rec) add(s0, e0, false, false);
+    else if (rec.k === 2) add(s0, s0 + rec.a, false, true);
+    else if (rec.k === 3) add(e0 - rec.b, e0, true, false);
+    else if (rec.k === 4) { add(s0, s0 + rec.a, false, true); add(e0 - rec.b, e0, true, false); }
+  }
+  return out;
+}
+// Same, but only the stretches BETWEEN junction squares (kerbs, walkways, lane markings live here). [s0, e0, deadAtS0, deadAtE0]
+function liveSpans(axis, i, lo, hi, clip = true) {
+  const S = ROAD_SPACING, out = [];
+  const add = (s0, e0, dl, dh) => {
+    if (e0 <= lo || s0 >= hi) return;
+    if (clip) { dl = dl && s0 >= lo; dh = dh && e0 <= hi; s0 = Math.max(s0, lo); e0 = Math.min(e0, hi); }
+    if (e0 - s0 > 0.5) out.push([s0, e0, dl, dh]);
+  };
+  for (let j = Math.floor(lo / S) - 1, e = Math.ceil(hi / S) + 1; j <= e; j++) {
+    const rec = roadSegs.get(segKey(axis, i, j)), s0 = j * S + AVE_HALF, e0 = (j + 1) * S - AVE_HALF;
+    if (!rec) add(s0, e0, false, false);
+    else if (rec.k === 2) add(s0, s0 + rec.a, false, true);
+    else if (rec.k === 3) add(e0 - rec.b, e0, true, false);
+    else if (rec.k === 4) { add(s0, s0 + rec.a, false, true); add(e0 - rec.b, e0, true, false); }
+  }
+  return out;
+}
+
+function netGenerate(protectedSegs) {
+  const S = ROAD_SPACING, nodeId = (ni, nj) => (ni - NET_LO) * NET_W + (nj - NET_LO), cand = [];
+  for (const axis of ['x', 'z']) for (let i = -23; i <= 23; i++) for (let j = -23; j <= 22; j++) {
+    const key = segKey(axis, i, j);
+    if (protectedSegs.has(key)) continue;
+    const mx = axis === 'x' ? i : j + 0.5, mz = axis === 'x' ? j + 0.5 : i, s = axis === 'x' ? 1 : 2;
+    cand.push({
+      axis, i, j, key,
+      n1: axis === 'x' ? nodeId(i, j) : nodeId(j, i), n2: axis === 'x' ? nodeId(i, j + 1) : nodeId(j + 1, i),
+      dens: 0.03 + 0.97 * Math.pow(smooth01((netNoise(mx, mz) - 0.40) / 0.26), 1.25),
+      r0: netRand(i, j, 100 + s), r1: netRand(i, j, 200 + s), r2: netRand(i, j, 300 + s), r3: netRand(i, j, 400 + s), r4: netRand(i, j, 500 + s), r5: netRand(i, j, 600 + s)
+    });
+  }
+  cand.sort((a, b) => a.r0 - b.r0);                     // random pick order: no scan-line regularity
+  const contrib = k => k === 1 ? 2 : k === 4 ? 0 : 1;  // junctions turned into T by each kind
+  const run = scale => {
+    const touched = new Set([nodeId(0, 0)]), acc = []; let t = 0;   // a junction is touched at most once, the start crossroads stays whole
+    for (const c of cand) {
+      if (touched.has(c.n1) || touched.has(c.n2) || c.r1 >= Math.min(1, scale * c.dens)) continue;
+      const k = c.r2 < 0.5 ? 1 : c.r2 < 0.8 ? (c.r3 < 0.5 ? 2 : 3) : 4;
+      touched.add(c.n1); touched.add(c.n2); t += contrib(k); acc.push({ c, k });
+    }
+    return { acc, t };
+  };
+  const target = Math.round(NET_T_SHARE * NET_W * NET_W);
+  let lo = 0, hi = 80;
+  for (let it = 0; it < 28; it++) { const mid = (lo + hi) / 2; if (run(mid).t >= target) hi = mid; else lo = mid; }
+  const res = run(hi);
+  while (res.acc.length) { const l = res.acc[res.acc.length - 1], d = contrib(l.k); if (res.t - d >= target) { res.acc.pop(); res.t -= d; } else break; }
+  return res;
+}
+
+{   // ---- commit the generated network: protect district gateways, build fields, dead ends, signs ----
+  const S = ROAD_SPACING, protectedSegs = new Set();
+  for (const d of districtDefs) {       // the gateway arch of every district stands over a road stretch: keep those open
+    const ax = Math.max(-5040, Math.min(5040, Math.round(d[1] / S) * S)), az = Math.max(-5040, Math.min(5040, Math.round(d[2] / S) * S));
+    if (Math.abs(ax - d[1]) <= Math.abs(az - d[2])) protectedSegs.add(segKey('x', ax / S, Math.floor(d[2] / S)));
+    else protectedSegs.add(segKey('z', az / S, Math.floor(d[1] / S)));
+  }
+  const res = netGenerate(protectedSegs);
+  for (const { c, k } of res.acc) {
+    const { axis, i, j } = c, g = i * S, s0 = j * S + AVE_HALF, e0 = (j + 1) * S - AVE_HALF;
+    const rec = { k, a: 0, b: 0 };
+    if (k === 2) rec.a = SEG_SPAN * (0.26 + 0.5 * c.r4);                  // 42..123 units of road, then it just ends
+    else if (k === 3) rec.b = SEG_SPAN * (0.26 + 0.5 * c.r4);
+    else if (k === 4) { rec.a = SEG_SPAN * (0.16 + 0.14 * c.r4); rec.b = SEG_SPAN * (0.16 + 0.14 * c.r5); }
+    roadSegs.set(c.key, rec);
+    const spans = [];                                                      // stretches of green field along the road
+    if (k === 1) spans.push([s0 + FIELD_CAP, e0 - FIELD_CAP]);
+    if (k === 2 || k === 4) { deadEnds.push({ axis, i, g, q: s0 + rec.a, dir: 1 }); }
+    if (k === 3 || k === 4) { deadEnds.push({ axis, i, g, q: e0 - rec.b, dir: -1 }); }
+    if (k === 2) spans.push([s0 + rec.a + FIELD_CAP, e0 - FIELD_CAP]);
+    if (k === 3) spans.push([s0 + FIELD_CAP, e0 - rec.b - FIELD_CAP]);
+    if (k === 4) spans.push([s0 + rec.a + FIELD_CAP, e0 - rec.b - FIELD_CAP]);
+    for (const [lo, hi] of spans) if (hi - lo > 6) {
+      const half = AVE_HALF + FIELD_CAP;
+      fieldRects.push(axis === 'x' ? { x0: g - half, x1: g + half, z0: lo, z1: hi, seed: i * 977 + j * 131 + 5 } : { x0: lo, x1: hi, z0: g - half, z1: g + half, seed: i * 977 + j * 131 + 9 });
+    }
+    // neighbouring blocks beside a closed stretch are sometimes given back to nature as well (bigger, irregular fields)
+    const pw = k === 1 ? 0.36 : 0.16, nb = axis === 'x' ? [[i - 1, j], [i, j]] : [[j, i - 1], [j, i]];
+    nb.forEach(([bi, bj], n) => { if (netRand(bi, bj, 700 + n) < pw) wildBlocks.add(blockIndex(bi, bj)); });
+  }
+  for (const e of deadEnds) {           // "DEAD END" board beside the entrance side of the road, facing the traffic that arrives
+    const off = AVE_HALF + 3.2, back = e.q - e.dir * 9;
+    registerSign('DEAD END', e.axis === 'x' ? e.g + off : back, e.axis === 'x' ? back : e.g + off, 7.5, 0xb3261e, STREET_SIGN_POLE_HEIGHT - 1.1, 'street', e.axis === 'x' ? 'z' : 'x');
+  }
+  if (DEBUG) console.log(`[road network] ${res.acc.length} changed stretches, ${deadEnds.length} dead ends, ${wildBlocks.size} wild blocks, T share ${(res.t / (NET_W * NET_W) * 100).toFixed(1)}%`);
+}
+
+// ---- green fields: ground patchwork, bushes, grass, rocks, trees (deterministic per field) ----
+const BUSH_GEO = new THREE.IcosahedronGeometry(1, 1);
+const ROCK_GEO = new THREE.DodecahedronGeometry(1, 0);
+const TUFT_GEO = new THREE.ConeGeometry(0.55, 1.7, 5); TUFT_GEO.translate(0, 0.85, 0);
+const CONE_GEO = new THREE.ConeGeometry(0.36, 0.95, 8); CONE_GEO.translate(0, 0.475, 0);
+const DRUM_GEO = new THREE.CylinderGeometry(0.46, 0.46, 1.15, 10); DRUM_GEO.translate(0, 0.575, 0);
+const BIN_GEO = new THREE.CylinderGeometry(0.42, 0.34, 1.05, 10); BIN_GEO.translate(0, 0.525, 0);
+const barRedMat = mat(0xc9362b, 0.7), barWhiteMat = mat(0xf0efe8, 0.7);
+const FIELD_GREENS = [0x5f8a4c, 0x6b9657, 0x77a05c, 0x4f7c40, 0x86a361, 0x6a8c45, 0x5a8450];
+const BUSH_GREENS = [0x2f6b34, 0x3a7a3c, 0x4a8a45, 0x2a5e2e, 0x55904a, 0x6a9a3f, 0x3f7a4f];
+const TUFT_GREENS = [0x8fb25a, 0x7aa24a, 0xa3b865, 0x6f9a45, 0xb0b86a];
+const ROCK_GREYS = [0x8c8c84, 0x77776f, 0x9a968a, 0x6d6f6a];
+function fieldItems(r) {
+  if (r.items) return r.items;
+  const R = rngFrom(r.seed * 7 + 3), w = r.x1 - r.x0, d = r.z1 - r.z0, area = w * d, mob = IS_MOBILE ? 0.5 : 1;
+  const it = r.items = { cells: [], bushes: [], tufts: [], rocks: [], trees: [] };
+  const pick = a => a[Math.floor(R() * a.length)];
+  for (let z = r.z0; z < r.z1 - 0.01;) {            // irregular patchwork of grass colours (cells never overlap: no z-fighting)
+    let dz = Math.min(r.z1 - z, 14 + R() * 22); if (r.z1 - (z + dz) < 8) dz = r.z1 - z;
+    for (let x = r.x0; x < r.x1 - 0.01;) {
+      let dx = Math.min(r.x1 - x, 14 + R() * 24); if (r.x1 - (x + dx) < 8) dx = r.x1 - x;
+      const n = netNoise(x / 60 + r.seed % 89, z / 60), idx = Math.min(FIELD_GREENS.length - 1, Math.floor(Math.max(0, Math.min(0.999, n * 0.75 + R() * 0.4)) * FIELD_GREENS.length));
+      it.cells.push({ x: x + dx / 2, z: z + dz / 2, w: dx, d: dz, color: R() < 0.07 ? 0x9d9264 : FIELD_GREENS[idx] });
+      x += dx;
+    }
+    z += dz;
+  }
+  const inside = (x, z, m) => [Math.max(r.x0 + m, Math.min(r.x1 - m, x)), Math.max(r.z0 + m, Math.min(r.z1 - m, z))];
+  const bush = (x, z, s) => {
+    const hf = 0.55 + R() * 0.3, sy = s * hf, c = pick(BUSH_GREENS);
+    it.bushes.push({ x, y: sy * 0.5 - 0.12, z, ry: R() * 6.28, sx: s * (0.9 + R() * 0.25), sy, sz: s * (0.9 + R() * 0.25), color: c });
+  };
+  const nClusters = Math.max(1, Math.round(area / 1000 * (0.5 + R()) * mob));       // bushes grow in clusters of different size
+  for (let c = 0; c < nClusters; c++) {
+    const cx0 = r.x0 + 3 + R() * (w - 6), cz0 = r.z0 + 3 + R() * (d - 6), rad = 4 + R() * 10, cnt = Math.round((3 + R() * 9) * mob) + 1;
+    for (let k = 0; k < cnt; k++) {
+      const a = R() * 6.283, rr = rad * Math.sqrt(R()), [x, z] = inside(cx0 + Math.cos(a) * rr, cz0 + Math.sin(a) * rr, 1.5);
+      bush(x, z, 1.1 + R() * 2.2 * (1 - rr / (rad * 1.4)));
+    }
+  }
+  for (let k = Math.round(area / 1100 * mob * (0.4 + R())); k > 0; k--) { const [x, z] = inside(r.x0 + R() * w, r.z0 + R() * d, 1.5); bush(x, z, 0.9 + R() * 1.4); }
+  for (let k = Math.round(area / (IS_MOBILE ? 90 : 45)); k > 0; k--) {
+    const s = 0.8 + R() * 1.1;
+    it.tufts.push({ x: r.x0 + R() * w, y: -0.12, z: r.z0 + R() * d, ry: R() * 6.28, sx: s, sy: s * (0.8 + R() * 0.8), sz: s, color: pick(TUFT_GREENS) });
+  }
+  for (let k = Math.round(area / 2600 * (0.3 + R() * 1.4)); k > 0; k--) {
+    const s = 0.7 + R() * 1.5;
+    it.rocks.push({ x: r.x0 + 2 + R() * (w - 4), y: s * 0.25 - 0.15, z: r.z0 + 2 + R() * (d - 4), ry: R() * 6.28, sx: s * (0.8 + R() * 0.7), sy: s * (0.5 + R() * 0.4), sz: s * (0.8 + R() * 0.7), color: pick(ROCK_GREYS) });
+  }
+  for (let k = Math.round(area / 1500 * (0.3 + R() * 1.3)); k > 0; k--)            // a few palms standing in the fields
+    it.trees.push({ x: r.x0 + 5 + R() * (w - 10), z: r.z0 + 5 + R() * (d - 10), type: R() < 0.5 ? 0 : 1, s: 0.75 + R() * 0.5, rot: R() * 6.28, tr: 0.9 + R() * 0.14, tg: 0.92 + R() * 0.14, tb: 0.88 + R() * 0.16 });
+  return it;
+}
+const wildFinal = new Set(), wildRectCache = new Map();
+function fieldRectsIn(x0, x1, z0, z1) {    // closed-road fields + wild blocks overlapping the box
+  const out = [];
+  for (const r of fieldRects) if (r.x1 > x0 && r.x0 < x1 && r.z1 > z0 && r.z0 < z1) out.push(r);
+  if (!wildBlocks.size) return out;
+  for (let bi = Math.floor(x0 / ROAD_SPACING), be = Math.floor(x1 / ROAD_SPACING); bi <= be; bi++)
+    for (let bj = Math.floor(z0 / ROAD_SPACING), bf = Math.floor(z1 / ROAD_SPACING); bj <= bf; bj++) {
+      if (bi < -BLOCK_N || bi >= BLOCK_N || bj < -BLOCK_N || bj >= BLOCK_N) continue;
+      const k = blockIndex(bi, bj);
+      if (!wildBlocks.has(k)) continue;
+      infillAt(bi, bj);
+      if (!wildFinal.has(k)) continue;
+      let r = wildRectCache.get(k);
+      if (!r) { const [a0, a1] = blockSpan(bi * ROAD_SPACING + 105), [c0, c1] = blockSpan(bj * ROAD_SPACING + 105); wildRectCache.set(k, r = { x0: a0, x1: a1, z0: c0, z1: c1, seed: k * 31 + 7 }); }
+      if (r.x1 > x0 && r.x0 < x1 && r.z1 > z0 && r.z0 < z1) out.push(r);
+    }
+  return out;
+}
+
+// ---- random street objects: cars, cones, drums, bins, kiosks, bushes. Dense in some stretches, absent in others. ----
+const CAR_COLORS = [0xb33a3a, 0x2f5d8a, 0xd8d8d0, 0x333a3f, 0xe0b43a, 0x4c7a4b, 0x8a8f94, 0xc9702b, 0x6a3f7a];
+const DRUM_COLORS = [0x2e5aa8, 0xb23a2a, 0x3a7a4a, 0x8a8f94, 0xc99a2a];
+const KIOSK_COLORS = [0xd5b46e, 0x4f8fb5, 0xc4563f, 0x6aa36b, 0xe0c24a, 0x9b6bb0];
+function addRoadsideProps(cx, cz, box, L) {
+  const xMin = cx * CHUNK_SIZE, zMin = cz * CHUNK_SIZE, STEP = 6;
+  for (const rAxis of ['x', 'z']) {
+    const aLo = rAxis === 'x' ? xMin : zMin, qLo = rAxis === 'x' ? zMin : xMin;
+    for (let gi = Math.ceil((aLo - 44) / ROAD_SPACING); gi * ROAD_SPACING <= aLo + CHUNK_SIZE + 44; gi++) {
+      if (gi < NET_LO || gi > NET_HI) continue;
+      const g = gi * ROAD_SPACING, fa = furnitureAlong(g, qLo - 12, qLo + CHUNK_SIZE + 12, rAxis);
+      for (let n = 0, nMax = Math.ceil(CHUNK_SIZE / STEP); n < nMax; n++) {
+        const q0 = qLo + n * STEP;
+        for (const side of [-1, 1]) {
+          const px = rAxis === 'x' ? g : q0, pz = rAxis === 'x' ? q0 : g;
+          const dens = 0.012 + 0.17 * smooth01((netNoise(px / 210 + 31.7, pz / 210 - 12.3) - 0.38) / 0.30);   // clustered, patchy
+          if (treeHash(g * 0.37 + side * 3.1, q0, rAxis === 'x' ? 51 : 52) > dens) continue;
+          const q = q0 + treeHash(q0, g, 53) * STEP;
+          if (Math.abs(q - Math.round(q / ROAD_SPACING) * ROAD_SPACING) < AVE_HALF + 16) continue;     // keep junctions clear
+          if (!roadLive(rAxis, gi, q, 8)) continue;
+          if (fa.poles.some(p => Math.abs(p - q) < 4) || fa.stops.some(p => Math.abs(p - q) < SHELTER_LEN / 2 + 8)) continue;
+          const t = treeHash(q, g, 54), h2 = k => treeHash(q, g + side, 60 + k);
+          const at = (off, al) => rAxis === 'x' ? [g + side * off, al] : [al, g + side * off];
+          const dim = (len, wid) => rAxis === 'x' ? [wid, len] : [len, wid];
+          if (t < 0.26) {                                              // car parked in the kerb lane
+            const col = CAR_COLORS[Math.floor(h2(1) * CAR_COLORS.length)], [x, z] = at(AVE_HALF - 6, q), [bw, bl] = dim(4.6, 1.95), [kw, kl] = dim(2.5, 1.75);
+            const sh = h2(2) < 0.5 ? -0.35 : 0.35, [ox, oz] = rAxis === 'x' ? [0, sh] : [sh, 0];
+            box(bw, 0.9, bl, col, x, 0.35, z); box(kw, 0.78, kl, 0x2d3b45, x + ox, 1.25, z + oz);
+            for (const a of [-1.45, 1.45]) for (const b of [-1, 1]) { const [wx, wz] = rAxis === 'x' ? [x + b * 0.98, z + a] : [x + a, z + b * 0.98], [ww, wl] = dim(0.8, 0.36); box(ww, 0.8, wl, 0x16181b, wx, 0, wz); }
+          } else if (t < 0.40) {                                       // a few traffic cones
+            for (let k = 0, m = 2 + Math.floor(h2(3) * 3); k < m; k++) { const [x, z] = at(AVE_HALF - 2.2 - h2(4 + k) * 1.2, q + k * 2.4); L.cones.push({ x, y: 0, z, sx: 1, sy: 1, sz: 1, color: 0xff6a1a }); }
+          } else if (t < 0.52) {                                       // oil drums by the building line
+            for (let k = 0, m = 2 + Math.floor(h2(5) * 3); k < m; k++) { const [x, z] = at(AVE_HALF + 9 + h2(6 + k) * 1.5, q + (k - 1) * 1.1 + h2(9 + k) * 0.4); L.drums.push({ x, y: 0, z, sx: 1, sy: 1, sz: 1, color: DRUM_COLORS[Math.floor(h2(12 + k) * DRUM_COLORS.length)] }); }
+          } else if (t < 0.63) {                                       // litter bin
+            const [x, z] = at(AVE_HALF + 7, q); L.bins.push({ x, y: 0, z, sx: 1, sy: 1, sz: 1, color: h2(7) < 0.5 ? 0x3c5a45 : 0x4d5156 });
+          } else if (t < 0.75) {                                       // roadside kiosk with a coloured canopy
+            const [x, z] = at(AVE_HALF + 6.4, q), [bw, bl] = dim(3.6, 2.6), [rw, rl] = dim(4.6, 3.6);
+            box(bw, 2.6, bl, 0xe6e0d2, x, 0, z); box(rw, 0.25, rl, KIOSK_COLORS[Math.floor(h2(8) * KIOSK_COLORS.length)], x, 2.6, z);
+          } else {                                                     // bush clump at the edge of the walkway
+            for (let k = 0, m = 1 + Math.floor(h2(10) * 3); k < m; k++) {
+              const [x, z] = at(AVE_HALF + 8.4 - h2(14 + k) * 0.6, q + (k - 1) * 2.2), s = 0.9 + h2(17 + k) * 0.9;
+              L.bushes.push({ x, y: s * 0.3, z, ry: h2(20 + k) * 6.28, sx: s, sy: s * 0.7, sz: s, color: BUSH_GREENS[Math.floor(h2(23 + k) * BUSH_GREENS.length)] });
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 for (const d of baseDistrictDefs) {   // reserve sports complexes first so buildings avoid them
   if (d[3] !== 'sports') continue;
   const cx = d[1], cz = d[2];
@@ -835,6 +1078,7 @@ for (const c of [...buildingColliders, amenityColliders[amenityColliders.length 
     for (let bj = Math.floor(c.minZ / ROAD_SPACING); bj <= Math.floor(c.maxZ / ROAD_SPACING); bj++) detailedBlocks.add(blockIndex(bi, bj));
 
 const infillCache = new Map();
+const markWild = k => { if (!wildBlocks.has(k)) return false; wildFinal.add(k); return true; };   // block given back to nature: no tower
 function infillAt(bi, bj) {
   if (bi < -BLOCK_N || bi >= BLOCK_N || bj < -BLOCK_N || bj >= BLOCK_N) return null;
   const k = blockIndex(bi, bj);
@@ -843,7 +1087,7 @@ function infillAt(bi, bj) {
   r = null;
   const gx = bi * ROAD_SPACING + ROAD_SPACING / 2, gz = bj * ROAD_SPACING + ROAD_SPACING / 2;
   if (k % 7 !== 0 && !detailedBlocks.has(k) && !claimedBlocks.has(bi + ',' + bj) &&
-      !baseDistrictDefs.some(d => Math.hypot(gx - d[1], gz - d[2]) < 105)) {
+      !baseDistrictDefs.some(d => Math.hypot(gx - d[1], gz - d[2]) < 105) && !markWild(k)) {
     const R = rngFrom(k * 7919 + 13), roll = R();
     const kind = roll < 0.2 ? 'office' : roll < 0.55 ? 'apartment' : roll < 0.7 ? 'mixed' : roll < 0.82 ? 'residential' : roll < 0.9 ? 'tenement' : roll < 0.96 ? 'shop' : 'duplex';
     const [x0, x1] = blockSpan(gx), [z0, z1] = blockSpan(gz);
@@ -889,7 +1133,8 @@ function chunkTrees(cx, cz) {
     for (let g = Math.ceil((aLo - 44) / ROAD_SPACING) * ROAD_SPACING; g <= aLo + CHUNK_SIZE + 44; g += ROAD_SPACING) {
       if (g < -5180 || g > 5180) continue;
       const half = AVE_HALF, SP = 10;
-      const fa = furnitureAlong(g, qLo - 12, qLo + CHUNK_SIZE + 12);
+      const rAxis = axis === 'z' ? 'x' : 'z', gI = Math.round(g / ROAD_SPACING);
+      const fa = furnitureAlong(g, qLo - 12, qLo + CHUNK_SIZE + 12, rAxis);
       for (const side of [-1, 1]) {
         const q0 = -5140 + (side > 0 ? SP / 2 : 0);
         for (let n = Math.max(0, Math.floor((qLo - 2 - q0) / SP)), nMax = Math.ceil((qLo + CHUNK_SIZE + 2 - q0) / SP); n <= nMax; n++) {
@@ -901,6 +1146,7 @@ function chunkTrees(cx, cz) {
           if (Math.floor(x / CHUNK_SIZE) !== cx || Math.floor(z / CHUNK_SIZE) !== cz) continue;
           const gc = Math.round(jq / ROAD_SPACING) * ROAD_SPACING;                // nearest crossing avenue
           if (Math.abs(jq - gc) < roadHalfAt(gc) + CORNER_PAD) continue;           // keep the corner walkways clear
+          if (!roadLive(rAxis, gI, jq, 7)) continue;                                // no roadside trees along closed roads
           if (fa.poles.some(p => Math.abs(p - jq) < 4) || fa.stops.some(p => Math.abs(p - jq) < SHELTER_LEN / 2 + 5.5)) continue;
           if (IS_MOBILE && treeHash(x, z, 21) < 0.5) continue;   // half density on phones
           out.push({
@@ -913,6 +1159,12 @@ function chunkTrees(cx, cz) {
       }
     }
   }
+  for (const r of fieldRectsIn(lo[0], lo[0] + CHUNK_SIZE, lo[1], lo[1] + CHUNK_SIZE))   // palms standing in the green fields
+    for (const t of fieldItems(r).trees) {
+      if (t.x < lo[0] || t.x >= lo[0] + CHUNK_SIZE || t.z < lo[1] || t.z >= lo[1] + CHUNK_SIZE) continue;
+      if (IS_MOBILE && treeHash(t.x, t.z, 21) < 0.4) continue;
+      out.push(t);
+    }
   return out;
 }
 
@@ -943,12 +1195,20 @@ const AVE_ARM = 9.5, LOCAL_ARM = 8.5;          // lamp arm lengths: they reach o
 const CORNER_PAD = WALK_W + 1.5;               // keep furniture out of the crossing road's own walkway
 // Furniture positions along road line g (a constant x or z) for along-road coordinates in [lo, hi).
 // One lamp per block on avenues (every second block on local roads); a bus stop in every second avenue block.
-function furnitureAlong(g, lo, hi) {
-  const out = { poles: [], stops: [], avenue: true };
+function furnitureAlong(g, lo, hi, axis = 'x') {
+  const out = { poles: [], stops: [], avenue: true }, gi = Math.round(g / ROAD_SPACING);
   for (let a = Math.floor(lo / ROAD_SPACING) * ROAD_SPACING - ROAD_SPACING; a < hi; a += ROAD_SPACING) {
     if (a < -5180 || a + ROAD_SPACING > 5180) continue;
+    const c = Math.round(a / ROAD_SPACING), rec = roadSegs.get(segKey(axis, gi, c));
+    if (rec && rec.k === 1) continue;                                                   // closed road: no lamps, no shelters
     const l0 = a + AVE_HALF + CORNER_PAD, l1 = a + ROAD_SPACING - AVE_HALF - CORNER_PAD;
-    const mid = (l0 + l1) / 2, c = Math.round(a / ROAD_SPACING);
+    if (rec) {                                                                          // dead-end stubs: a couple of lamps along the road that exists
+      const add = (from, len, sgn) => { for (const d of [18, len - 14]) if (d >= 18 && d <= len - 10) { const q = from + sgn * d; if (q >= lo && q < hi) out.poles.push(q); } };
+      if (rec.k === 2 || rec.k === 4) add(a + AVE_HALF, rec.a, 1);
+      if (rec.k === 3 || rec.k === 4) add(a + ROAD_SPACING - AVE_HALF, rec.b, -1);
+      continue;
+    }
+    const mid = (l0 + l1) / 2;
     const stop = (((c % BUS_STOP_EVERY) + BUS_STOP_EVERY) % BUS_STOP_EVERY === 0);   // a shelter pair in every 3rd block = 630 units apart
     if (stop && mid >= lo && mid < hi) out.stops.push(mid);
     for (const t of [0.12, 0.5, 0.88]) {                                              // three lamps per block, one beside the shelter if there is one
@@ -962,35 +1222,35 @@ function furnitureAlong(g, lo, hi) {
 function buildRoads(cx, cz, group, asphaltRecs) {
   const xMin = cx * CHUNK_SIZE, xMax = xMin + CHUNK_SIZE, zMin = cz * CHUNK_SIZE, zMax = zMin + CHUNK_SIZE;
   const midX = (xMin + xMax) / 2, midZ = (zMin + zMax) / 2;
-  const pvm = [], kerb = [], white = [], yellow = [], poles = [], arms = [], heads = [], pools = [], fieldRecs = [], bushRecs = [];
+  const pvm = [], kerb = [], white = [], yellow = [], poles = [], arms = [], heads = [], pools = [];
   const shelterRoofs = [], shelterBacks = [], shelterSides = [], shelterBenches = [], shelterFrames = [], busLaneMarks = [], busSignPoles = [], busSignDiscs = [], busSignFaces = [];
-  const spansZ = spansAlong(zMin, zMax), spansX = spansAlong(xMin, xMax);
   const ZW = WALK_W, ZEBRA_T = 0.15 * 3 * 2;   // zebra: stripes run along the drive direction, ZW long (= red walkway width), 6x the lane-line thickness (3x, then doubled)
   const PAVE_W = WALK_W - 0.24, PAVE_C = 0.24 + PAVE_W / 2;   // red walkway: from the kerb out to the building line
   // Zebra crossings fill the first WALK_W (12) units of every road beside each junction, so centre / lane lines start after them.
-  const markSpan = (s0, e0) => {
+  const markSpan = (s0, e0, loDead, hiDead) => {   // a dead end stops the paint 4 units short of the cap instead of leaving room for a zebra
     const g = Math.floor((s0 - AVE_HALF + 0.01) / ROAD_SPACING) * ROAD_SPACING;
-    return [Math.max(s0, g + AVE_HALF + WALK_W), Math.min(e0, g + ROAD_SPACING - AVE_HALF - WALK_W)];
+    return [loDead ? s0 + 4 : Math.max(s0, g + AVE_HALF + WALK_W), hiDead ? e0 - 4 : Math.min(e0, g + ROAD_SPACING - AVE_HALF - WALK_W)];
   };
+  const barRed = [], barWhite = [];
 
   for (let gx = Math.floor(xMin / ROAD_SPACING) * ROAD_SPACING; gx < xMax; gx += ROAD_SPACING) {   // avenues running along z
     if (gx < -5180 || gx > 5180 || gx < xMin) continue;
-    const isAve = true, half = AVE_HALF;
-    asphaltRecs.push({ x: gx, y: isAve ? -0.12 : -0.16, z: midZ, sx: half * 2, sy: isAve ? 0.18 : 0.12, sz: CHUNK_SIZE });
-    for (const [s0, e0] of spansZ) {
+    const isAve = true, half = AVE_HALF, gi = Math.round(gx / ROAD_SPACING);
+    for (const [a, b] of roadRuns('x', gi, zMin, zMax)) asphaltRecs.push({ x: gx, y: -0.12, z: (a + b) / 2, sx: half * 2, sy: 0.18, sz: b - a });   // asphalt only where the road really exists
+    for (const [s0, e0, loDead, hiDead] of liveSpans('x', gi, zMin, zMax)) {
       const mz = (s0 + e0) / 2, len = e0 - s0;
       for (const side of [-1, 1]) {
         kerb.push({ x: gx + side * (half + 0.12), y: 0.05, z: mz, sx: 0.24, sy: 0.18, sz: len });
         pvm.push({ x: gx + side * (half + PAVE_C), y: 0.02, z: mz, sx: PAVE_W, sy: 0.12, sz: len });
       }
       if (isAve) {
-        const [m0, m1] = markSpan(s0, e0), mm = (m0 + m1) / 2, ml = m1 - m0;
+        const [m0, m1] = markSpan(s0, e0, loDead, hiDead), mm = (m0 + m1) / 2, ml = m1 - m0;
         if (ml > 0.5) yellow.push({ x: gx - 0.42, y: -0.015, z: mm, sx: 0.22, sy: 0.03, sz: ml }, { x: gx + 0.42, y: -0.015, z: mm, sx: 0.22, sy: 0.03, sz: ml });
         for (let q = Math.ceil((m0 + 2) / 14) * 14; q <= m1 - 2; q += 14)
           white.push({ x: gx - 12, y: -0.015, z: q, sx: 0.15, sy: 0.03, sz: 4 }, { x: gx + 12, y: -0.015, z: q, sx: 0.15, sy: 0.03, sz: 4 });
       }
     }
-    const fa = furnitureAlong(gx, zMin, zMax);
+    const fa = furnitureAlong(gx, zMin, zMax, 'x');
     // Streetlights: pole on the house side of the walkway, arm reaching out toward the road, lamp head on the arm's end.
     const armLen = isAve ? AVE_ARM : LOCAL_ARM;
     for (const q of fa.poles) for (const side of [-1, 1]) {
@@ -1029,22 +1289,22 @@ function buildRoads(cx, cz, group, asphaltRecs) {
   }
   for (let gz = Math.floor(zMin / ROAD_SPACING) * ROAD_SPACING; gz < zMax; gz += ROAD_SPACING) {   // avenues running along x
     if (gz < -5180 || gz > 5180 || gz < zMin) continue;
-    const isAve = true, half = AVE_HALF;
-    asphaltRecs.push({ x: midX, y: isAve ? -0.12 : -0.16, z: gz, sx: CHUNK_SIZE, sy: isAve ? 0.18 : 0.12, sz: half * 2 });
-    for (const [s0, e0] of spansX) {
+    const isAve = true, half = AVE_HALF, gi = Math.round(gz / ROAD_SPACING);
+    for (const [a, b] of roadRuns('z', gi, xMin, xMax)) asphaltRecs.push({ x: (a + b) / 2, y: -0.12, z: gz, sx: b - a, sy: 0.18, sz: half * 2 });
+    for (const [s0, e0, loDead, hiDead] of liveSpans('z', gi, xMin, xMax)) {
       const mx = (s0 + e0) / 2, len = e0 - s0;
       for (const side of [-1, 1]) {
         kerb.push({ x: mx, y: 0.05, z: gz + side * (half + 0.12), sx: len, sy: 0.18, sz: 0.24 });
         pvm.push({ x: mx, y: 0.02, z: gz + side * (half + PAVE_C), sx: len, sy: 0.12, sz: PAVE_W });
       }
       if (isAve) {
-        const [m0, m1] = markSpan(s0, e0), mm = (m0 + m1) / 2, ml = m1 - m0;
+        const [m0, m1] = markSpan(s0, e0, loDead, hiDead), mm = (m0 + m1) / 2, ml = m1 - m0;
         if (ml > 0.5) yellow.push({ x: mm, y: -0.015, z: gz - 0.42, sx: ml, sy: 0.03, sz: 0.22 }, { x: mm, y: -0.015, z: gz + 0.42, sx: ml, sy: 0.03, sz: 0.22 });
         for (let q = Math.ceil((m0 + 2) / 14) * 14; q <= m1 - 2; q += 14)
           white.push({ x: q, y: -0.015, z: gz - 12, sx: 4, sy: 0.03, sz: 0.15 }, { x: q, y: -0.015, z: gz + 12, sx: 4, sy: 0.03, sz: 0.15 });
       }
     }
-    const fa = furnitureAlong(gz, xMin, xMax);
+    const fa = furnitureAlong(gz, xMin, xMax, 'z');
     const armLen = isAve ? AVE_ARM : LOCAL_ARM;
     for (const q of fa.poles) for (const side of [-1, 1]) {
       const pz = gz + side * (half + POLE_LINE), toRoad = -side;
@@ -1085,71 +1345,61 @@ function buildRoads(cx, cz, group, asphaltRecs) {
     if (ix < -5180 || ix > 5180) continue;
     for (let iz = Math.ceil(zMin / ROAD_SPACING) * ROAD_SPACING; iz < zMax; iz += ROAD_SPACING) {
       if (iz < -5180 || iz > 5180) continue;
-      if (tJunctionAt(ix / ROAD_SPACING, iz / ROAD_SPACING)) continue; // no stop/zebra/box paint at converted T-junctions
+      const ni = Math.round(ix / ROAD_SPACING), nj = Math.round(iz / ROAD_SPACING);
+      const aN = armOpen('x', ni, nj, -1), aS = armOpen('x', ni, nj, 1), aW = armOpen('z', nj, ni, -1), aE = armOpen('z', nj, ni, 1);   // which arms carry a road
       const hx = roadHalfAt(ix), hz = roadHalfAt(iz);
       const yZ = -0.015, yX = -0.015, yB = -0.015;   // paint height follows each road's own lane-line convention
       const SL = 1.2, GAP = 0.6, OFF = ZW;   // stop line: 1.2 thick, pushed back OFF (=zebra length) so the zebra comes right after it
-      white.push({ x: ix - (hx + GAP) / 2, y: yZ, z: iz - hz - OFF - GAP - SL / 2 - 0.2, sx: hx - GAP, sy: 0.03, sz: SL },   // southbound traffic (west half), north of the crossing
-                 { x: ix + (hx + GAP) / 2, y: yZ, z: iz + hz + OFF + GAP + SL / 2 + 0.2, sx: hx - GAP, sy: 0.03, sz: SL },   // northbound traffic (east half), south of it
-                 { x: ix - hx - OFF - GAP - SL / 2 - 0.2, y: yX, z: iz + (hz + GAP) / 2, sx: SL, sy: 0.03, sz: hz - GAP },   // eastbound traffic (south half), west of it
-                 { x: ix + hx + OFF + GAP + SL / 2 + 0.2, y: yX, z: iz - (hz + GAP) / 2, sx: SL, sy: 0.03, sz: hz - GAP }); // westbound traffic (north half), east of it
-      // ZEBRA CROSSINGS: on each of the 4 arms, in the 12-unit strip beside the junction (exactly where the red walkway of the
-      // crossing road meets this road), after the stop line. Stripes run along the direction of drive and fill the road kerb to kerb.
-      {
+      if (aN) white.push({ x: ix - (hx + GAP) / 2, y: yZ, z: iz - hz - OFF - GAP - SL / 2 - 0.2, sx: hx - GAP, sy: 0.03, sz: SL });
+      if (aS) white.push({ x: ix + (hx + GAP) / 2, y: yZ, z: iz + hz + OFF + GAP + SL / 2 + 0.2, sx: hx - GAP, sy: 0.03, sz: SL });
+      if (aW) white.push({ x: ix - hx - OFF - GAP - SL / 2 - 0.2, y: yX, z: iz + (hz + GAP) / 2, sx: SL, sy: 0.03, sz: hz - GAP });
+      if (aE) white.push({ x: ix + hx + OFF + GAP + SL / 2 + 0.2, y: yX, z: iz - (hz + GAP) / 2, sx: SL, sy: 0.03, sz: hz - GAP });
+      {   // zebra crossings only on arms that exist
         const N = Math.floor((2 * hx - ZEBRA_T) / (2 * ZEBRA_T)) + 1, pitch = (2 * hx - ZEBRA_T) / (N - 1), yz = -0.015;
         for (let k = 0; k < N; k++) {
           const o = -hx + ZEBRA_T / 2 + k * pitch;
-          white.push({ x: ix + o, y: yz, z: iz - hz - ZW / 2, sx: ZEBRA_T, sy: 0.03, sz: ZW },   // arm to the north (-z)
-                     { x: ix + o, y: yz, z: iz + hz + ZW / 2, sx: ZEBRA_T, sy: 0.03, sz: ZW },   // arm to the south (+z)
-                     { x: ix - hx - ZW / 2, y: yz, z: iz + o, sx: ZW, sy: 0.03, sz: ZEBRA_T },   // arm to the west (-x)
-                     { x: ix + hx + ZW / 2, y: yz, z: iz + o, sx: ZW, sy: 0.03, sz: ZEBRA_T });  // arm to the east (+x)
+          if (aN) white.push({ x: ix + o, y: yz, z: iz - hz - ZW / 2, sx: ZEBRA_T, sy: 0.03, sz: ZW });
+          if (aS) white.push({ x: ix + o, y: yz, z: iz + hz + ZW / 2, sx: ZEBRA_T, sy: 0.03, sz: ZW });
+          if (aW) white.push({ x: ix - hx - ZW / 2, y: yz, z: iz + o, sx: ZW, sy: 0.03, sz: ZEBRA_T });
+          if (aE) white.push({ x: ix + hx + ZW / 2, y: yz, z: iz + o, sx: ZW, sy: 0.03, sz: ZEBRA_T });
         }
       }
-      const ex = hx - 0.8, ez = hz - 0.8, t = 0.3;
-      yellow.push({ x: ix, y: yB, z: iz - ez, sx: 2 * ex + t, sy: 0.03, sz: t }, { x: ix, y: yB, z: iz + ez, sx: 2 * ex + t, sy: 0.03, sz: t },
-                  { x: ix - ex, y: yB, z: iz, sx: t, sy: 0.03, sz: 2 * ez }, { x: ix + ex, y: yB, z: iz, sx: t, sy: 0.03, sz: 2 * ez });
-      const dl = Math.hypot(2 * ex, 2 * ez), da = Math.atan2(ez, ex);
-      yellow.push({ x: ix, y: yB, z: iz, sx: dl, sy: 0.03, sz: t, ry: -da }, { x: ix, y: yB, z: iz, sx: dl, sy: 0.03, sz: t, ry: da });
-    }
-  }
-
-  // Close the selected approach with a natural green verge/field. This covers the
-  // asphalt and walkway, removes road paint visually, and uses shared instancing.
-  // Random block-level road ends: a short field/bush barrier closes the road
-  // mid-block, leaving an entrance-only access road on either side.
-  for (let ix = Math.floor(xMin / ROAD_SPACING) - 1; ix <= Math.ceil(xMax / ROAD_SPACING); ix++) {
-    for (let iz = Math.floor(zMin / ROAD_SPACING) - 1; iz <= Math.ceil(zMax / ROAD_SPACING); iz++) {
-      if (roadEdgeClosed('x', ix, iz) && ix * ROAD_SPACING >= xMin - 45 && ix * ROAD_SPACING <= xMax + 45 &&
-          (iz + 0.5) * ROAD_SPACING >= zMin - 45 && (iz + 0.5) * ROAD_SPACING <= zMax + 45) {
-        fieldRecs.push({ x: ix * ROAD_SPACING, y: -0.005, z: (iz + 0.5) * ROAD_SPACING, sx: 64, sy: 0.24, sz: 48 });
-      }
-      if (roadEdgeClosed('z', iz, ix) && (ix + 0.5) * ROAD_SPACING >= xMin - 45 && (ix + 0.5) * ROAD_SPACING <= xMax + 45 &&
-          iz * ROAD_SPACING >= zMin - 45 && iz * ROAD_SPACING <= zMax + 45) {
-        fieldRecs.push({ x: (ix + 0.5) * ROAD_SPACING, y: -0.005, z: iz * ROAD_SPACING, sx: 48, sy: 0.24, sz: 64 });
+      // T-junction: the red walkway + kerb of the through road run straight across the closed arm
+      if (!aN) { pvm.push({ x: ix, y: 0.02, z: iz - (hz + PAVE_C), sx: 2 * hx, sy: 0.12, sz: PAVE_W }); kerb.push({ x: ix, y: 0.05, z: iz - (hz + 0.12), sx: 2 * hx, sy: 0.18, sz: 0.24 }); }
+      if (!aS) { pvm.push({ x: ix, y: 0.02, z: iz + (hz + PAVE_C), sx: 2 * hx, sy: 0.12, sz: PAVE_W }); kerb.push({ x: ix, y: 0.05, z: iz + (hz + 0.12), sx: 2 * hx, sy: 0.18, sz: 0.24 }); }
+      if (!aW) { pvm.push({ x: ix - (hx + PAVE_C), y: 0.02, z: iz, sx: PAVE_W, sy: 0.12, sz: 2 * hz }); kerb.push({ x: ix - (hx + 0.12), y: 0.05, z: iz, sx: 0.24, sy: 0.18, sz: 2 * hz }); }
+      if (!aE) { pvm.push({ x: ix + (hx + PAVE_C), y: 0.02, z: iz, sx: PAVE_W, sy: 0.12, sz: 2 * hz }); kerb.push({ x: ix + (hx + 0.12), y: 0.05, z: iz, sx: 0.24, sy: 0.18, sz: 2 * hz }); }
+      if (aN && aS && aW && aE) {   // yellow box junction only on real crossroads
+        const ex = hx - 0.8, ez = hz - 0.8, t = 0.3;
+        yellow.push({ x: ix, y: yB, z: iz - ez, sx: 2 * ex + t, sy: 0.03, sz: t }, { x: ix, y: yB, z: iz + ez, sx: 2 * ex + t, sy: 0.03, sz: t },
+                    { x: ix - ex, y: yB, z: iz, sx: t, sy: 0.03, sz: 2 * ez }, { x: ix + ex, y: yB, z: iz, sx: t, sy: 0.03, sz: 2 * ez });
+        const dl = Math.hypot(2 * ex, 2 * ez), da = Math.atan2(ez, ex);
+        yellow.push({ x: ix, y: yB, z: iz, sx: dl, sy: 0.03, sz: t, ry: -da }, { x: ix, y: yB, z: iz, sx: dl, sy: 0.03, sz: t, ry: da });
       }
     }
   }
-  for (let ix = Math.ceil(xMin / ROAD_SPACING); ix < xMax / ROAD_SPACING; ix++) {
-    for (let iz = Math.ceil(zMin / ROAD_SPACING); iz < zMax / ROAD_SPACING; iz++) {
-      const dir = closedTArm(ix, iz);
-      if (!dir) continue;
-      const x = ix * ROAD_SPACING, z = iz * ROAD_SPACING, d = T_DIR_DELTA[dir];
-      const px = x + d[0] * 38, pz = z + d[1] * 38;
-      fieldRecs.push({ x: px, y: -0.005, z: pz, sx: d[0] ? 52 : 64, sy: 0.24, sz: d[1] ? 52 : 64 });
-      const R = n => roadHash(ix, iz, 0x7700 + n);
-      for (let n = 0; n < 7; n++) {
-        const along = (R(n) - 0.5) * 34, across = (R(n + 11) - 0.5) * 30;
-        bushRecs.push({ x: px + (d[0] ? along : across), y: 1.0 + R(n + 20) * 1.4, z: pz + (d[1] ? along : across),
-          sx: 2.8 + R(n + 30) * 3.2, sy: 2.0 + R(n + 40) * 2.2, sz: 2.8 + R(n + 50) * 3.2,
-          color: [0x2d6534, 0x3f7a38, 0x5b8b43, 0x244f2b][n % 4] });
-      }
+  // Dead ends: kerb + red walkway across the end of the road, and a striped barrier just before it.
+  for (const d of deadEnds) {
+    const ex = d.axis === 'x' ? d.g : d.q, ez = d.axis === 'x' ? d.q : d.g;
+    if (ex < xMin || ex >= xMax || ez < zMin || ez >= zMax) continue;
+    const q = d.q, dir = d.dir, hw = AVE_HALF;
+    if (d.axis === 'x') {
+      kerb.push({ x: d.g, y: 0.05, z: q + dir * 0.12, sx: 2 * hw + 0.48, sy: 0.18, sz: 0.24 });
+      pvm.push({ x: d.g, y: 0.02, z: q + dir * (0.24 + PAVE_W / 2), sx: 2 * (hw + WALK_W), sy: 0.12, sz: PAVE_W });
+    } else {
+      kerb.push({ x: q + dir * 0.12, y: 0.05, z: d.g, sx: 0.24, sy: 0.18, sz: 2 * hw + 0.48 });
+      pvm.push({ x: q + dir * (0.24 + PAVE_W / 2), y: 0.02, z: d.g, sx: PAVE_W, sy: 0.12, sz: 2 * (hw + WALK_W) });
+    }
+    for (let k = 0; k < 8; k++) {   // 8 striped boards across the 48-wide road, standing on legs
+      const o = -hw + 1.2 + k * 5.8, bq = q - dir * 1.2, list = k % 2 ? barWhite : barRed;
+      list.push(d.axis === 'x' ? { x: d.g + o + 2.6, y: 1.8, z: bq, sx: 5.4, sy: 1.0, sz: 0.5 } : { x: bq, y: 1.8, z: d.g + o + 2.6, sx: 0.5, sy: 1.0, sz: 5.4 });
+      if (k % 2 === 0) barWhite.push(d.axis === 'x' ? { x: d.g + o + 2.6, y: 0.7, z: bq, sx: 0.5, sy: 1.4, sz: 0.5 } : { x: bq, y: 0.7, z: d.g + o + 2.6, sx: 0.5, sy: 1.4, sz: 0.5 });
     }
   }
   batch(asphaltRecs, UNIT_BOX, asphaltMat, group);
-  batch(fieldRecs, UNIT_BOX, cityGroundMat, group);
-  batch(bushRecs, UNIT_BOX, mat(0x3b7135), group, true);
   batch(pvm, UNIT_BOX, pavementMat, group);
   batch(kerb, UNIT_BOX, kerbEdgeMat, group);
+  batch(barRed, UNIT_BOX, barRedMat, group); batch(barWhite, UNIT_BOX, barWhiteMat, group);
   batch(white, UNIT_BOX, paintWhite, group);
   batch(yellow, UNIT_BOX, paintYellow, group);
   batch(poles, poleGeo, poleMat, group);
@@ -1210,6 +1460,20 @@ function buildChunkContent(cx, cz) {
       }
     }
   });
+  job(() => {   // 1b. green fields on closed roads / wild blocks + random street objects (ground cells go into the shared box batch)
+    const x1 = xMin + CHUNK_SIZE, z1 = zMin + CHUNK_SIZE, inC = o => o.x >= xMin && o.x < x1 && o.z >= zMin && o.z < z1;
+    const L = { bushes: [], tufts: [], rocks: [], cones: [], drums: [], bins: [] };
+    for (const r of fieldRectsIn(xMin, x1, zMin, z1)) {
+      const it = fieldItems(r);
+      for (const c of it.cells) if (inC(c)) box(c.w, 0.1, c.d, c.color, c.x, -0.2, c.z);
+      for (const b of it.bushes) if (inC(b)) L.bushes.push(b);
+      for (const b of it.tufts) if (inC(b)) L.tufts.push(b);
+      for (const b of it.rocks) if (inC(b)) L.rocks.push(b);
+    }
+    addRoadsideProps(cx, cz, box, L);
+    batch(L.bushes, BUSH_GEO, instMat, group, true); batch(L.tufts, TUFT_GEO, instMat, group, true); batch(L.rocks, ROCK_GEO, instMat, group, true);
+    batch(L.cones, CONE_GEO, instMat, group, true); batch(L.drums, DRUM_GEO, instMat, group, true); batch(L.bins, BIN_GEO, instMat, group, true);
+  });
   job(() => { batch(boxes, UNIT_BOX, instMat, group, true); });          // 2. one draw call for all boxes
   job(() => { buildRoads(cx, cz, group, asphalt); });                       // 3. roads, kerbs, markings, lamps
   job(() => {                                                               // 4. palms
@@ -1265,10 +1529,14 @@ function buildChunkContent(cx, cz) {
       board.rotation.y = axis === 'x' ? Math.PI / 2 : 0;
       board.position.set(x, STREET_SIGN_POLE_HEIGHT - 1.1, z); group.add(board);
     };
-    for (let gx = Math.ceil(x0 / ROAD_SPACING) * ROAD_SPACING; gx < x1 && gx >= -5180 && gx <= 5180; gx += ROAD_SPACING)
-      addStreetNameSign(segmentStreetName('x', Math.round(gx / ROAD_SPACING), Math.floor(((z0 + z1) / 2) / ROAD_SPACING)), gx + AVE_HALF + 2, (z0 + z1) / 2, 'x');
-    for (let gz = Math.ceil(z0 / ROAD_SPACING) * ROAD_SPACING; gz < z1 && gz >= -5180 && gz <= 5180; gz += ROAD_SPACING)
-      addStreetNameSign(segmentStreetName('z', Math.round(gz / ROAD_SPACING), Math.floor(((x0 + x1) / 2) / ROAD_SPACING)), (x0 + x1) / 2, gz + AVE_HALF + 2, 'z');
+    for (let gx = Math.ceil(x0 / ROAD_SPACING) * ROAD_SPACING; gx < x1 && gx >= -5180 && gx <= 5180; gx += ROAD_SPACING) {
+      if (!roadLive('x', Math.round(gx / ROAD_SPACING), (z0 + z1) / 2, 6)) continue;      // no name board beside a closed road
+      addStreetNameSign(streetName('x', Math.round(gx / ROAD_SPACING)), gx + AVE_HALF + 2, (z0 + z1) / 2, 'x');
+    }
+    for (let gz = Math.ceil(z0 / ROAD_SPACING) * ROAD_SPACING; gz < z1 && gz >= -5180 && gz <= 5180; gz += ROAD_SPACING) {
+      if (!roadLive('z', Math.round(gz / ROAD_SPACING), (x0 + x1) / 2, 6)) continue;
+      addStreetNameSign(streetName('z', Math.round(gz / ROAD_SPACING)), (x0 + x1) / 2, gz + AVE_HALF + 2, 'z');
+    }
   });
 }
 
@@ -1599,8 +1867,8 @@ function updateStreetLighting(level) {
   const ax = Math.round(player.position.x / 210) * 210, az = Math.round(player.position.z / 210) * 210, cand = [];
   const headOff = 24 + POLE_LINE - AVE_ARM * 0.9;   // lamp heads hang over the kerb side of the walkway
   const add = (x, z) => cand.push({ x, z, d: (x - player.position.x) ** 2 + (z - player.position.z) ** 2 });
-  for (const q of furnitureAlong(ax, player.position.z - 320, player.position.z + 320).poles) for (const sd of [-1, 1]) add(ax + sd * headOff, q);
-  for (const q of furnitureAlong(az, player.position.x - 320, player.position.x + 320).poles) for (const sd of [-1, 1]) add(q, az + sd * headOff);
+  for (const q of furnitureAlong(ax, player.position.z - 320, player.position.z + 320, 'x').poles) for (const sd of [-1, 1]) add(ax + sd * headOff, q);
+  for (const q of furnitureAlong(az, player.position.x - 320, player.position.x + 320, 'z').poles) for (const sd of [-1, 1]) add(q, az + sd * headOff);
   cand.sort((a, b) => a.d - b.d);
   slRealLights.forEach((L, i) => { if (!cand[i]) { L.intensity = 0; return; } L.position.set(cand[i].x, STREETLIGHT_HEIGHT - 1, cand[i].z); L.intensity = L.userData.peak * level; });
 }
@@ -1788,7 +2056,7 @@ function mapNearestDistrict(x, z) {
 //   tap / search a place -> "Directions" -> pick Walk / Bus / Drive (time, distance, arrival clock) -> "Start".
 // Start shrinks the map into a corner mini-map that follows the player. The route stays drawn as a blue line from the
 // player to the destination, and a banner shows the next turn, remaining time / distance and the arrival time.
-// Routes follow the real avenue grid (ROAD_SPACING). Walk uses the normal walking pace; Bus and Drive raise the player's
+// Routes follow the real road network (closed roads and dead ends are avoided; ROAD_SPACING grid). Walk uses the normal walking pace; Bus and Drive raise the player's
 // travel speed while navigating (NAV_SPEEDS, metres per second) so the estimated time matches what you actually experience.
 // ============================================================================
 const NAV_SPEEDS = { walk: 2.3, bus: 9, car: 16 };
@@ -1819,12 +2087,24 @@ function mapUpright(ctx, x, y, fn) {  // draw something at (x,y) that must stay 
 // <nav-pure>
 const navClampIdx = i => Math.max(-NAV_ROAD_MAX, Math.min(NAV_ROAD_MAX, i));
 const navClampPos = v => Math.max(-NAV_ROAD_MAX * ROAD_SPACING, Math.min(NAV_ROAD_MAX * ROAD_SPACING, v));
-// nearest point on the avenue network: axis 'x' = a road at x = i*210 (runs along z), axis 'z' = a road at z = i*210 (runs along x)
-function navSnap(x, z) {
-  const ix = navClampIdx(Math.round(x / ROAD_SPACING)), iz = navClampIdx(Math.round(z / ROAD_SPACING));
-  if (Math.abs(x - ix * ROAD_SPACING) <= Math.abs(z - iz * ROAD_SPACING)) return { axis: 'x', i: ix, x: ix * ROAD_SPACING, z: navClampPos(z) };
-  return { axis: 'z', i: iz, x: navClampPos(x), z: iz * ROAD_SPACING };
+// Nearest point of road line (axis, i) that really exists (junction squares + open / stub stretches) to along-road coordinate q.
+function navLiveQ(axis, i, q) {
+  let best = q, bd = Infinity;
+  for (const [a, b] of roadRuns(axis, i, q - 2 * ROAD_SPACING, q + 2 * ROAD_SPACING)) {
+    const c = Math.max(a, Math.min(b, q)), d = Math.abs(c - q);
+    if (d < bd) { bd = d; best = c; }
+  }
+  return navClampPos(best);
 }
+// The roads beside a point (two lines each side, snapped onto road that exists), nearest first. axis 'x' = road at x = i*210 (runs along z).
+function navSnaps(x, z) {
+  const out = [], X0 = Math.floor(x / ROAD_SPACING), Z0 = Math.floor(z / ROAD_SPACING);
+  for (const ix of [X0, X0 + 1]) { const i = navClampIdx(ix), q = navLiveQ('x', i, z); out.push({ axis: 'x', i, x: i * ROAD_SPACING, z: q, d: Math.hypot(x - i * ROAD_SPACING, z - q) }); }
+  for (const iz of [Z0, Z0 + 1]) { const i = navClampIdx(iz), q = navLiveQ('z', i, x); out.push({ axis: 'z', i, x: q, z: i * ROAD_SPACING, d: Math.hypot(x - q, z - i * ROAD_SPACING) }); }
+  out.sort((a, b) => a.d - b.d);
+  return out;
+}
+const navSnap = (x, z) => navSnaps(x, z)[0];
 function navFree(x, z) {   // a walkable point: if (x,z) is inside a building, use the nearest road point instead
   x = Math.max(-5200, Math.min(5200, x)); z = Math.max(-5200, Math.min(5200, z));
   if (!collidesWithBuilding(x, z)) return [x, z];
@@ -1833,57 +2113,60 @@ function navFree(x, z) {   // a walkable point: if (x,z) is inside a building, u
 const navStreet = (x, z) => { const s = navSnap(x, z); return streetName(s.axis, s.i); };
 const NAV_DIRS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
 
-// Route along the avenue grid: start -> nearest road -> (at most 2 turns) -> road nearest the destination -> destination.
-function navBuildPath(from, dest, A, B) {
-  const S = ROAD_SPACING;
-  const pts = [[from[0], from[1]]], names = [];
-  const add = (x, z, name) => { const l = pts[pts.length - 1]; if (Math.hypot(x - l[0], z - l[1]) < 0.5) return; pts.push([x, z]); names.push(name); };
-  add(A.x, A.z, null);
-  const sx = A.axis === 'x' ? A.i : navClampIdx(Math.round(A.x / S));
-  const sz = A.axis === 'x' ? navClampIdx(Math.round(A.z / S)) : A.i;
-  const ex = B.axis === 'x' ? B.i : navClampIdx(Math.round(B.x / S));
-  const ez = B.axis === 'x' ? navClampIdx(Math.round(B.z / S)) : B.i;
-  add(sx * S, sz * S, streetName(A.axis, A.i));
-
-  // Breadth-first search through the actual open junction connections. T-junction
-  // arms are excluded, so turn-by-turn directions and the blue route avoid closures.
-  const key = (x, z) => x + ',' + z, queue = [[sx, sz]], prev = new Map();
-  prev.set(key(sx, sz), null);
-  const dirs = [['N', 0, -1], ['S', 0, 1], ['E', 1, 0], ['W', -1, 0]];
-  for (let qi = 0; qi < queue.length && !prev.has(key(ex, ez)); qi++) {
-    const [x, z] = queue[qi];
-    for (const [dir, dx, dz] of dirs) {
-      const nx = navClampIdx(x + dx), nz = navClampIdx(z + dz), nk = key(nx, nz);
-      if (prev.has(nk) || !roadArmOpen(x, z, dir)) continue;
-      prev.set(nk, [x, z]); queue.push([nx, nz]);
+// ---- junction graph: 49 x 49 junctions, an edge for every road stretch that is fully open (closed roads and dead-end stubs lead nowhere) ----
+const navNodeId = (ni, nj) => (ni + 24) * 49 + (nj + 24);
+function navLoc(s) {   // where a snapped point sits: on a junction square, or inside one road stretch (with the junctions it can reach)
+  const S = ROAD_SPACING, ax = s.axis, q = ax === 'x' ? s.z : s.x, j = Math.round(q / S);
+  const nodeOf = jj => ax === 'x' ? [s.i, jj] : [jj, s.i];
+  if (Math.abs(q - j * S) <= AVE_HALF) return { ends: [{ n: nodeOf(j), d: Math.abs(q - j * S), dirs: [0, 1, 2, 3] }], part: 'n' + nodeOf(j).join(',') };
+  const j0 = Math.floor(q / S), rec = roadSegs.get(segKey(ax, s.i, j0)), r = q - j0 * S;
+  let low = true, high = true, part = 'o';
+  if (rec) {
+    const inLo = (r - AVE_HALF) <= rec.a, inHi = (S - AVE_HALF - r) <= rec.b;
+    if (rec.k === 2) { high = false; part = 'l'; } else if (rec.k === 3) { low = false; part = 'h'; }
+    else if (rec.k === 4) { if (inLo || !inHi) { high = false; part = 'l'; } else { low = false; part = 'h'; } }
+    else { low = high = false; }
+  }
+  const ends = [];
+  if (low) ends.push({ n: nodeOf(j0), d: q - j0 * S, dirs: [ax === 'x' ? 3 : 1] });         // heading toward lower coordinates
+  if (high) ends.push({ n: nodeOf(j0 + 1), d: (j0 + 1) * S - q, dirs: [ax === 'x' ? 2 : 0] });
+  return { ends, part: ax + s.i + ':' + j0 + part, q };
+}
+const NAV_TURN_COST = 70;   // a turn costs like 70 extra units of road, so routes prefer long straight runs over staircases
+function navDijkstra(sources) {   // multi-source shortest paths over (junction, heading) states
+  const N = 49 * 49 * 4, dist = new Float64Array(N).fill(Infinity), prev = new Int32Array(N).fill(-1), heap = [];
+  const push = (d, id) => { let k = heap.length; heap.push([d, id]); while (k > 0) { const p = (k - 1) >> 1; if (heap[p][0] <= heap[k][0]) break; [heap[p], heap[k]] = [heap[k], heap[p]]; k = p; } };
+  const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let k = 0; for (;;) { let m = k; const l = 2 * k + 1, r = l + 1; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === k) break; [heap[m], heap[k]] = [heap[k], heap[m]]; k = m; } } return top; };
+  for (const s of sources) for (const dr of s.dirs) { const id = navNodeId(s.n[0], s.n[1]) * 4 + dr; if (s.d < dist[id]) { dist[id] = s.d; push(s.d, id); } }
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  while (heap.length) {
+    const [d, st] = pop(); if (d > dist[st]) continue;
+    const id = st >> 2, dir = st & 3, ni = Math.floor(id / 49) - 24, nj = (id % 49) - 24;
+    for (let nd2 = 0; nd2 < 4; nd2++) {
+      if (nd2 === (dir ^ 1)) continue;                                                              // no U-turns
+      const mi = ni + DIRS[nd2][0], mj = nj + DIRS[nd2][1]; if (mi < -24 || mi > 24 || mj < -24 || mj > 24) continue;
+      const open = nd2 < 2 ? segOpen('z', nj, Math.min(ni, mi)) : segOpen('x', ni, Math.min(nj, mj));   // road along x at z-line nj / along z at x-line ni
+      if (!open) continue;
+      const m = navNodeId(mi, mj) * 4 + nd2, nd = d + ROAD_SPACING + (nd2 === dir ? 0 : NAV_TURN_COST);
+      if (nd < dist[m]) { dist[m] = nd; prev[m] = st; push(nd, m); }
     }
   }
-  const routeNodes = [];
-  if (prev.has(key(ex, ez))) {
-    let cur = [ex, ez];
-    while (cur) { routeNodes.push(cur); cur = prev.get(key(cur[0], cur[1])); }
-    routeNodes.reverse();
-  } else routeNodes.push([sx, sz], [ex, ez]); // defensive fallback if a future topology isolates a district
-  for (let k = 1; k < routeNodes.length; k++) {
-    const [x0, z0] = routeNodes[k - 1], [x1, z1] = routeNodes[k];
-    const axis = x0 !== x1 ? 'z' : 'x', streetIdx = axis === 'z' ? z0 : x0;
-    const segIdx = axis === 'z' ? Math.min(x0, x1) : Math.min(z0, z1);
-    add(x1 * S, z1 * S, segmentStreetName(axis, streetIdx, segIdx));
-  }
-  add(B.x, B.z, streetName(B.axis, B.i));
-  add(dest.x, dest.z, null);
+  return { dist, prev };
+}
+function navFinish(pts, names, dest) {
   if (pts.length < 2) { pts.push([dest.x + 0.01, dest.z]); names.push(null); }
   const n = pts.length, cum = [0];
   for (let k = 1; k < n; k++) cum.push(cum[k - 1] + Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]));
-
-  // bus stops that lie on the road legs of the route (a shelter pair every 3rd block = every 630 units, mid-block)
+  // bus stops that lie on the road legs of the route (a shelter pair every 3rd block, mid-block) - only on fully open stretches
   const stops = [];
   for (let k = 0; k < names.length; k++) {
     if (!names[k]) continue;
     const x0 = pts[k][0], z0 = pts[k][1], x1 = pts[k + 1][0], z1 = pts[k + 1][1], vertical = Math.abs(x1 - x0) < 0.5;
-    const lo = vertical ? Math.min(z0, z1) : Math.min(x0, x1), hi = vertical ? Math.max(z0, z1) : Math.max(x0, x1);
+    const lo = vertical ? Math.min(z0, z1) : Math.min(x0, x1), hi = vertical ? Math.max(z0, z1) : Math.max(x0, x1), line = Math.round((vertical ? x0 : z0) / ROAD_SPACING);
     for (let m = Math.ceil((lo - ROAD_SPACING / 2) / NAV_BUS_SPACING), e = Math.floor((hi - ROAD_SPACING / 2) / NAV_BUS_SPACING); m <= e; m++) {
-      const q = m * NAV_BUS_SPACING + ROAD_SPACING / 2; stops.push(vertical ? [x0, q] : [q, z0]);
+      const q = m * NAV_BUS_SPACING + ROAD_SPACING / 2;
+      if (!segOpen(vertical ? 'x' : 'z', line, Math.floor(q / ROAD_SPACING))) continue;
+      stops.push(vertical ? [x0, q] : [q, z0]);
     }
   }
   // turn-by-turn steps: v = index of the vertex where the manoeuvre happens
@@ -1901,18 +2184,40 @@ function navBuildPath(from, dest, A, B) {
   for (let k = 0; k < names.length; k++) if (names[k] && cum[k + 1] - cum[k] > bestLeg) { bestLeg = cum[k + 1] - cum[k]; via = names[k]; }
   return { pts, names, cum, len: cum[n - 1], steps, stops, via };
 }
-// both roads beside a point (the vertical one and the horizontal one); the planner tries every pairing and keeps the shortest
-function navSnaps(x, z) {
-  const ix = navClampIdx(Math.round(x / ROAD_SPACING)), iz = navClampIdx(Math.round(z / ROAD_SPACING));
-  return [{ axis: 'x', i: ix, x: ix * ROAD_SPACING, z: navClampPos(z) }, { axis: 'z', i: iz, x: navClampPos(x), z: iz * ROAD_SPACING }];
+// Route over the real road network: start -> its road -> junction to junction (shortest way round closed roads and dead ends) -> destination road -> destination.
+function navRoute(from, dest, A, B, la, lb, D) {
+  const S = ROAD_SPACING, pts = [[from[0], from[1]]], names = [];
+  const add = (x, z, name) => { const l = pts[pts.length - 1]; if (Math.hypot(x - l[0], z - l[1]) < 0.5) return; pts.push([x, z]); names.push(name); };
+  add(A.x, A.z, null);
+  const nA = streetName(A.axis, A.i), nB = streetName(B.axis, B.i);
+  if (la.part === lb.part) add(B.x, B.z, nA);                               // same stretch (or same junction square): straight there
+  else {
+    let best = Infinity, bestState = -1;
+    for (const e of lb.ends) for (let dr = 0; dr < 4; dr++) { const st = navNodeId(e.n[0], e.n[1]) * 4 + dr, t = D.dist[st] + e.d; if (t < best) { best = t; bestState = st; } }
+    if (bestState < 0) return null;
+    const seq = []; let st = bestState;
+    while (st !== -1) { const id = st >> 2; if (seq[seq.length - 1] !== id) seq.push(id); st = D.prev[st]; }
+    seq.reverse();
+    const P = id2 => [(Math.floor(id2 / 49) - 24) * S, ((id2 % 49) - 24) * S];
+    let p = P(seq[0]); add(p[0], p[1], nA);                                 // along the start road to the first junction
+    for (let k = 1; k < seq.length; k++) {
+      const q = P(seq[k]);
+      add(q[0], q[1], q[0] === p[0] ? streetName('x', p[0] / S) : streetName('z', p[1] / S));
+      p = q;
+    }
+    add(B.x, B.z, nB);                                                      // along the destination road to the snapped point
+  }
+  add(dest.x, dest.z, null);
+  return navFinish(pts, names, dest);
 }
 function navMakePath(from, dest) {
+  const sa = navSnaps(from[0], from[1]).slice(0, 3), sb = navSnaps(dest.x, dest.z).slice(0, 3), lbs = sb.map(navLoc);
   let best = null;
-  for (const A of navSnaps(from[0], from[1])) for (const B of navSnaps(dest.x, dest.z)) {
-    const r = navBuildPath(from, dest, A, B);
-    if (!best || r.len < best.len - 0.5) best = r;
+  for (const A of sa) {
+    const la = navLoc(A), D = navDijkstra(la.ends);
+    sb.forEach((B, k) => { const r = navRoute(from, dest, A, B, la, lbs[k], D); if (r && (!best || r.len < best.len - 0.5)) best = r; });
   }
-  return best;
+  return best || navFinish([[from[0], from[1]], [dest.x, dest.z]], [null], dest);
 }
 const navFmtDist = m => m < 950 ? Math.max(10, Math.round(m / 10) * 10) + ' m' : (m / 1000).toFixed(1) + ' km';
 const navFmtDur = s => { const m = Math.max(1, Math.round(s / 60)); return m < 60 ? m + ' min' : Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : ''); };
@@ -2156,40 +2461,54 @@ function drawCityMap() {
     }
   }
 
-  // 3. roads: walkways, casings, fills, then lane detail when zoomed in
+  // 3. green fields where roads were closed, then roads (only road that really exists): walkways, casings, fills, lane detail when zoomed in
   const kx0 = Math.max(-24, Math.ceil((wx0 - 40) / ROAD_SPACING)), kx1 = Math.min(24, Math.floor((wx1 + 40) / ROAD_SPACING));
   const kz0 = Math.max(-24, Math.ceil((wz0 - 40) / ROAD_SPACING)), kz1 = Math.min(24, Math.floor((wz1 + 40) / ROAD_SPACING));
   const isMajor = k => ((k % 3) + 3) % 3 === 0;
   const zLo = Math.max(wz0 - 60, -CITY_HALF), zHi = Math.min(wz1 + 60, CITY_HALF), xLo = Math.max(wx0 - 60, -CITY_HALF), xHi = Math.min(wx1 + 60, CITY_HALF);
-  const vRoad = (g, off, wd) => ctx.fillRect(X(g) - Math.max(wd * S, 1.4) / 2, Y(zLo), Math.max(wd * S, 1.4), (zHi - zLo) * S);   // a road along z
-  const hRoad = (g, off, wd) => ctx.fillRect(X(xLo), Y(g) - Math.max(wd * S, 1.4) / 2, (xHi - xLo) * S, Math.max(wd * S, 1.4));   // a road along x
+  if (S >= 0.04) {
+    const fields = fieldRectsIn(wx0 - 60, wx1 + 60, wz0 - 60, wz1 + 60);
+    ctx.fillStyle = '#cde6bd';
+    for (const r of fields) ctx.fillRect(X(r.x0), Y(r.z0), (r.x1 - r.x0) * S, (r.z1 - r.z0) * S);
+    if (S >= 0.7) {
+      ctx.fillStyle = '#a6cf92';
+      for (const r of fields) for (const b of fieldItems(r).bushes) { if (!vis(b.x, b.z, 4, 4)) continue; ctx.beginPath(); ctx.arc(X(b.x), Y(b.z), Math.max(1.5, b.sx * S * 0.9), 0, 6.283); ctx.fill(); }
+    }
+  }
+  const roadBand = (axis, k, wd, ext = 0) => {   // one road line as a band, broken wherever the road is closed; ext pads dead ends (the red cap)
+    const g = k * ROAD_SPACING, w = Math.max(wd * S, 1.4);
+    for (const [a, b, dl, dh] of roadRuns(axis, k, axis === 'x' ? zLo : xLo, axis === 'x' ? zHi : xHi)) {
+      const a2 = a - (dl ? ext : 0), b2 = b + (dh ? ext : 0);
+      if (axis === 'x') ctx.fillRect(X(g) - w / 2, Y(a2), w, (b2 - a2) * S); else ctx.fillRect(X(a2), Y(g) - w / 2, (b2 - a2) * S, w);
+    }
+  };
   if (S >= 0.3) {
     ctx.fillStyle = '#e8dccf';
-    for (let k = kx0; k <= kx1; k++) vRoad(k * ROAD_SPACING, 0, 2 * (AVE_HALF + WALK_W));
-    for (let k = kz0; k <= kz1; k++) hRoad(k * ROAD_SPACING, 0, 2 * (AVE_HALF + WALK_W));
+    for (let k = kx0; k <= kx1; k++) roadBand('x', k, 2 * (AVE_HALF + WALK_W), WALK_W);
+    for (let k = kz0; k <= kz1; k++) roadBand('z', k, 2 * (AVE_HALF + WALK_W), WALK_W);
   }
   const casing = S < 0.3 ? 1.2 / S : 2.2 / S;
   for (const major of [false, true]) {
     ctx.fillStyle = major ? '#e5c46f' : '#cfd3d8';
-    for (let k = kx0; k <= kx1; k++) if (isMajor(k) === major) vRoad(k * ROAD_SPACING, 0, 2 * AVE_HALF + casing);
-    for (let k = kz0; k <= kz1; k++) if (isMajor(k) === major) hRoad(k * ROAD_SPACING, 0, 2 * AVE_HALF + casing);
+    for (let k = kx0; k <= kx1; k++) if (isMajor(k) === major) roadBand('x', k, 2 * AVE_HALF + casing);
+    for (let k = kz0; k <= kz1; k++) if (isMajor(k) === major) roadBand('z', k, 2 * AVE_HALF + casing);
   }
   for (const major of [false, true]) {
     ctx.fillStyle = major ? '#fde293' : '#ffffff';
-    for (let k = kx0; k <= kx1; k++) if (isMajor(k) === major) vRoad(k * ROAD_SPACING, 0, 2 * AVE_HALF);
-    for (let k = kz0; k <= kz1; k++) if (isMajor(k) === major) hRoad(k * ROAD_SPACING, 0, 2 * AVE_HALF);
+    for (let k = kx0; k <= kx1; k++) if (isMajor(k) === major) roadBand('x', k, 2 * AVE_HALF);
+    for (let k = kz0; k <= kz1; k++) if (isMajor(k) === major) roadBand('z', k, 2 * AVE_HALF);
   }
   const detail = Math.max(0, Math.min(1, (S - 0.55) / 0.4));
   if (detail > 0.01) {                                  // real asphalt + paint fade in as you zoom
     ctx.globalAlpha = detail; ctx.fillStyle = '#50565a';
-    for (let k = kx0; k <= kx1; k++) vRoad(k * ROAD_SPACING, 0, 2 * AVE_HALF);
-    for (let k = kz0; k <= kz1; k++) hRoad(k * ROAD_SPACING, 0, 2 * AVE_HALF);
+    for (let k = kx0; k <= kx1; k++) roadBand('x', k, 2 * AVE_HALF);
+    for (let k = kz0; k <= kz1; k++) roadBand('z', k, 2 * AVE_HALF);
     ctx.lineCap = 'butt';
-    const blocks = (lo, hi, fn) => { for (let a = Math.floor(lo / ROAD_SPACING) * ROAD_SPACING; a < hi; a += ROAD_SPACING) { if (a < -5180 || a + ROAD_SPACING > 5180) continue; fn(a, a + AVE_HALF + WALK_W, a + ROAD_SPACING - AVE_HALF - WALK_W); } };
     const yellowW = Math.max(1, 1.06 * S), whiteW = Math.max(1, 0.15 * S);
+    const marks = (axis, k, lo, hi, fn) => { for (const [s0, e0, dl, dh] of liveSpans(axis, k, lo, hi, false)) fn(dl ? s0 + 4 : s0 + WALK_W, dh ? e0 - 4 : e0 - WALK_W); };   // paint stops short of junctions / dead ends
     for (let k = kx0; k <= kx1; k++) {                  // roads along z (constant x = g)
       const g = k * ROAD_SPACING;
-      blocks(wz0 - 5, wz1 + 5, (a, m0, m1) => {
+      marks('x', k, wz0 - 5, wz1 + 5, (m0, m1) => {
         ctx.setLineDash([]); ctx.strokeStyle = '#f1c84b'; ctx.lineWidth = yellowW;
         ctx.beginPath(); ctx.moveTo(X(g), Y(m0)); ctx.lineTo(X(g), Y(m1)); ctx.stroke();
         const q0 = Math.ceil((m0 + 2) / 14) * 14 - 2;
@@ -2200,7 +2519,7 @@ function drawCityMap() {
     }
     for (let k = kz0; k <= kz1; k++) {                  // roads along x (constant z = g)
       const g = k * ROAD_SPACING;
-      blocks(wx0 - 5, wx1 + 5, (a, m0, m1) => {
+      marks('z', k, wx0 - 5, wx1 + 5, (m0, m1) => {
         ctx.setLineDash([]); ctx.strokeStyle = '#f1c84b'; ctx.lineWidth = yellowW;
         ctx.beginPath(); ctx.moveTo(X(m0), Y(g)); ctx.lineTo(X(m1), Y(g)); ctx.stroke();
         const q0 = Math.ceil((m0 + 2) / 14) * 14 - 2;
@@ -2209,22 +2528,23 @@ function drawCityMap() {
         ctx.setLineDash([]);
       });
     }
-    // junctions: zebra crossings, stop lines, yellow box
+    // junctions: zebra crossings and stop lines only on arms that exist; yellow box only on real crossroads
     const ZT = 0.9, ZW_ = WALK_W, ZN = Math.floor((2 * AVE_HALF - ZT) / (2 * ZT)) + 1, ZP = (2 * AVE_HALF - ZT) / (ZN - 1), SLT = 1.2, GAPM = 0.6;
     for (let a = kx0; a <= kx1; a++) for (let b = kz0; b <= kz1; b++) {
       const ix = a * ROAD_SPACING, iz = b * ROAD_SPACING, hw = AVE_HALF;
+      const aN = armOpen('x', a, b, -1), aS = armOpen('x', a, b, 1), aW = armOpen('z', b, a, -1), aE = armOpen('z', b, a, 1);
       ctx.strokeStyle = '#f4f2df'; ctx.lineWidth = ZW_ * S; ctx.setLineDash([ZT * S, (ZP - ZT) * S]);
       for (const sg of [-1, 1]) {
-        ctx.beginPath(); ctx.moveTo(X(ix - hw), Y(iz + sg * (hw + ZW_ / 2))); ctx.lineTo(X(ix + hw), Y(iz + sg * (hw + ZW_ / 2))); ctx.stroke();   // arms along z
-        ctx.beginPath(); ctx.moveTo(X(ix + sg * (hw + ZW_ / 2)), Y(iz - hw)); ctx.lineTo(X(ix + sg * (hw + ZW_ / 2)), Y(iz + hw)); ctx.stroke();   // arms along x
+        if (sg < 0 ? aN : aS) { ctx.beginPath(); ctx.moveTo(X(ix - hw), Y(iz + sg * (hw + ZW_ / 2))); ctx.lineTo(X(ix + hw), Y(iz + sg * (hw + ZW_ / 2))); ctx.stroke(); }   // arms along z
+        if (sg < 0 ? aW : aE) { ctx.beginPath(); ctx.moveTo(X(ix + sg * (hw + ZW_ / 2)), Y(iz - hw)); ctx.lineTo(X(ix + sg * (hw + ZW_ / 2)), Y(iz + hw)); ctx.stroke(); }   // arms along x
       }
       ctx.setLineDash([]); ctx.fillStyle = '#f4f2df';
       const so = hw + ZW_ + GAPM + SLT / 2 + 0.2, sl = Math.max(SLT * S, 1.2);
-      ctx.fillRect(X(ix - hw), Y(iz - so) - sl / 2, (hw - GAPM) * S, sl);
-      ctx.fillRect(X(ix + GAPM), Y(iz + so) - sl / 2, (hw - GAPM) * S, sl);
-      ctx.fillRect(X(ix - so) - sl / 2, Y(iz + GAPM), sl, (hw - GAPM) * S);
-      ctx.fillRect(X(ix + so) - sl / 2, Y(iz - hw), sl, (hw - GAPM) * S);
-      if (S >= 1.0) {
+      if (aN) ctx.fillRect(X(ix - hw), Y(iz - so) - sl / 2, (hw - GAPM) * S, sl);
+      if (aS) ctx.fillRect(X(ix + GAPM), Y(iz + so) - sl / 2, (hw - GAPM) * S, sl);
+      if (aW) ctx.fillRect(X(ix - so) - sl / 2, Y(iz + GAPM), sl, (hw - GAPM) * S);
+      if (aE) ctx.fillRect(X(ix + so) - sl / 2, Y(iz - hw), sl, (hw - GAPM) * S);
+      if (S >= 1.0 && aN && aS && aW && aE) {
         const e = hw - 0.8;
         ctx.strokeStyle = '#f1c84b'; ctx.lineWidth = Math.max(1, 0.3 * S);
         ctx.strokeRect(X(ix - e), Y(iz - e), 2 * e * S, 2 * e * S);
@@ -2233,41 +2553,19 @@ function drawCityMap() {
     }
     ctx.globalAlpha = 1; ctx.setLineDash([]);
   }
-
-  // Map topology overlay: green fields/bushes cover the same closed approach
-  // used by the streamed 3D city, so the map and navigation stay consistent.
-  ctx.fillStyle = '#719b61';
-  for (let ix = kx0; ix <= kx1; ix++) for (let iz = kz0; iz <= kz1; iz++) {
-    const dir = closedTArm(ix, iz); if (!dir) continue;
-    const px = ix * ROAD_SPACING + T_DIR_DELTA[dir][0] * 38;
-    const pz = iz * ROAD_SPACING + T_DIR_DELTA[dir][1] * 38;
-    const w = dir === 'E' || dir === 'W' ? 52 : 64, h = dir === 'N' || dir === 'S' ? 52 : 64;
-    ctx.fillRect(X(px) - w * S / 2, Y(pz) - h * S / 2, Math.max(1, w * S), Math.max(1, h * S));
-    ctx.fillStyle = '#3e7539';
-    for (let n = 0; n < 6; n++) {
-      const ox = (roadHash(ix, iz, 0x7700 + n) - 0.5) * 32, oz = (roadHash(ix, iz, 0x8800 + n) - 0.5) * 32;
-      ctx.beginPath(); ctx.arc(X(px + ox), Y(pz + oz), Math.max(1.2, 2.4 * S), 0, Math.PI * 2); ctx.fill();
+  if (S >= 0.5) {                                       // dead-end caps: a small red bar across the end of the road
+    ctx.fillStyle = '#c9362b';
+    for (const d of deadEnds) {
+      const ex = d.axis === 'x' ? d.g : d.q, ez = d.axis === 'x' ? d.q : d.g; if (!vis(ex, ez, 30, 30)) continue;
+      if (d.axis === 'x') ctx.fillRect(X(d.g - AVE_HALF), Y(d.q) - 1.5, 2 * AVE_HALF * S, 3); else ctx.fillRect(X(d.q) - 1.5, Y(d.g - AVE_HALF), 3, 2 * AVE_HALF * S);
     }
-    ctx.fillStyle = '#719b61';
   }
-  // Random access-road ends, drawn on the map in the same positions as the 3D fields.
-  ctx.fillStyle = '#719b61';
-  for (let ix = kx0 - 1; ix <= kx1; ix++) for (let iz = kz0 - 1; iz <= kz1; iz++) {
-    if (roadEdgeClosed('x', ix, iz)) ctx.fillRect(X(ix * ROAD_SPACING) - 32 * S, Y((iz + 0.5) * ROAD_SPACING) - 24 * S, 64 * S, 48 * S);
-    if (roadEdgeClosed('z', iz, ix)) ctx.fillRect(X((ix + 0.5) * ROAD_SPACING) - 24 * S, Y(iz * ROAD_SPACING) - 32 * S, 48 * S, 64 * S);
-  }
-  // Small scattered shrub marks reinforce the uneven, natural green patches.
-  ctx.fillStyle = '#3e7539';
-  for (let ix = kx0 - 1; ix <= kx1; ix++) for (let iz = kz0 - 1; iz <= kz1; iz++) {
-    if (!roadEdgeClosed('x', ix, iz) && !roadEdgeClosed('z', iz, ix)) continue;
-    const px = (ix + 0.5) * ROAD_SPACING, pz = (iz + 0.5) * ROAD_SPACING;
-    ctx.beginPath(); ctx.arc(X(px), Y(pz), Math.max(1.2, 2.0 * S), 0, Math.PI * 2); ctx.fill();
-  }
+
   // 4. bus stops (shelters) along the avenues
   const stopPts = [];
   if (S >= 0.45) {
-    for (let k = kx0; k <= kx1; k++) { const g = k * ROAD_SPACING; for (const q of furnitureAlong(g, wz0 - 40, wz1 + 40).stops) for (const sd of [-1, 1]) stopPts.push([g + sd * (AVE_HALF + SHELTER_OFFSET), q, SHELTER_DEPTH, SHELTER_LEN]); }
-    for (let k = kz0; k <= kz1; k++) { const g = k * ROAD_SPACING; for (const q of furnitureAlong(g, wx0 - 40, wx1 + 40).stops) for (const sd of [-1, 1]) stopPts.push([q, g + sd * (AVE_HALF + SHELTER_OFFSET), SHELTER_LEN, SHELTER_DEPTH]); }
+    for (let k = kx0; k <= kx1; k++) { const g = k * ROAD_SPACING; for (const q of furnitureAlong(g, wz0 - 40, wz1 + 40, 'x').stops) for (const sd of [-1, 1]) stopPts.push([g + sd * (AVE_HALF + SHELTER_OFFSET), q, SHELTER_DEPTH, SHELTER_LEN]); }
+    for (let k = kz0; k <= kz1; k++) { const g = k * ROAD_SPACING; for (const q of furnitureAlong(g, wx0 - 40, wx1 + 40, 'z').stops) for (const sd of [-1, 1]) stopPts.push([q, g + sd * (AVE_HALF + SHELTER_OFFSET), SHELTER_LEN, SHELTER_DEPTH]); }
   }
 
   // 5. buildings: real footprints, set-back tiers, entrance canopy
@@ -2365,12 +2663,12 @@ function drawCityMap() {
     for (let k = kx0; k <= kx1; k++) {
       if (S < 0.25 && !isMajor(k)) continue;
       const name = streetName('x', k), tw = ctx.measureText(name).width, step = Math.max(1, Math.ceil((tw + 50) / (ROAD_SPACING * S)));
-      for (let m = Math.floor(wz0 / ROAD_SPACING); m * ROAD_SPACING < wz1; m++) { if (m < -24 || m > 23 || ((m % step) + step) % step) continue; drawName(name, X(k * ROAD_SPACING), Y(m * ROAD_SPACING + 105), true); }
+      for (let m = Math.floor(wz0 / ROAD_SPACING); m * ROAD_SPACING < wz1; m++) { if (m < -24 || m > 23 || ((m % step) + step) % step || !segOpen('x', k, m)) continue; drawName(name, X(k * ROAD_SPACING), Y(m * ROAD_SPACING + 105), true); }
     }
     for (let k = kz0; k <= kz1; k++) {
       if (S < 0.25 && !isMajor(k)) continue;
       const name = streetName('z', k), tw = ctx.measureText(name).width, step = Math.max(1, Math.ceil((tw + 50) / (ROAD_SPACING * S)));
-      for (let m = Math.floor(wx0 / ROAD_SPACING); m * ROAD_SPACING < wx1; m++) { if (m < -24 || m > 23 || ((m % step) + step) % step) continue; drawName(name, X(m * ROAD_SPACING + 105), Y(k * ROAD_SPACING), false); }
+      for (let m = Math.floor(wx0 / ROAD_SPACING); m * ROAD_SPACING < wx1; m++) { if (m < -24 || m > 23 || ((m % step) + step) % step || !segOpen('z', k, m)) continue; drawName(name, X(m * ROAD_SPACING + 105), Y(k * ROAD_SPACING), false); }
     }
   }
 
