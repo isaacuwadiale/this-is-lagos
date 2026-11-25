@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.85-ROTATING-MINIMAP (v0.84-MAP-NAVIGATION base): avenues only, big modern high-rise towers, streamed + instanced chunks
+// THIS IS LAGOS v0.86-RANDOMIZED-ROAD-TOPOLOGY (v0.85-ROTATING-MINIMAP base): avenues only, big modern high-rise towers, streamed + instanced chunks
 // Target: < 400 MB on phones. Add ?debug to the URL to log draw calls / GPU memory.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -379,7 +379,51 @@ const MAJOR_LANE_WIDTH = 12;
 const ROAD_EDGE_CLEARANCE = MAJOR_LANE_WIDTH, BLOCK_SETBACK = MAJOR_LANE_WIDTH;
 const ROAD_SPACING = 210, AVE_HALF = 24, BLOCK_N = 25;      // blocks run from -25 to +24 in x and z
 const blockIndex = (bi, bj) => (bi + BLOCK_N) * (BLOCK_N * 2) + (bj + BLOCK_N);
+
 const roadHalfWidthAt = () => AVE_HALF;
+
+// Deterministic, spatially irregular street topology. Exactly one arm is closed at
+// roughly 1 in 5 intersections; the seed makes the layout stable across chunks,
+// map redraws and navigation recalculations.
+function roadHash(ix, iz, salt = 0) {
+  let h = Math.imul(ix + 0x45d9f3b, 0x27d4eb2d) ^ Math.imul(iz + 0x119de1f3, 0x165667b1) ^ salt;
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+  h = Math.imul(h ^ (h >>> 12), 0x297a2d39);
+  return ((h ^ (h >>> 15)) >>> 0) / 4294967296;
+}
+const T_JUNCTION_RATE = 0.20;
+const T_DIRS = ['N', 'S', 'E', 'W'];
+function closedTArm(ix, iz) {
+  if (roadHash(ix, iz, 0x51f15e) >= T_JUNCTION_RATE) return null;
+  return T_DIRS[Math.floor(roadHash(ix, iz, 0x2a91) * T_DIRS.length)];
+}
+const tArmClosed = (ix, iz, dir) => closedTArm(ix, iz) === dir;
+function roadArmOpen(ix, iz, dir) {
+  // A T junction closes the matching connection at either endpoint, so routing
+  // cannot accidentally enter a blocked arm from the opposite end.
+  if (tArmClosed(ix, iz, dir)) return false;
+  const nx = ix + (dir === 'E' ? 1 : dir === 'W' ? -1 : 0);
+  const nz = iz + (dir === 'S' ? 1 : dir === 'N' ? -1 : 0);
+  const opposite = dir === 'N' ? 'S' : dir === 'S' ? 'N' : dir === 'E' ? 'W' : 'E';
+  if (tArmClosed(nx, nz, opposite)) return false;
+  if (dir === 'E' || dir === 'W') return !roadEdgeClosed('z', iz, Math.min(ix, nx));
+  return !roadEdgeClosed('x', ix, Math.min(iz, nz));
+}
+// A small additional share of individual blocks become access-only dead ends.
+const DEAD_END_EDGE_RATE = 0.025;
+function roadEdgeClosed(axis, roadIndex, segmentIndex) {
+  const salt = axis === 'x' ? 0x4a117 : 0x7b223;
+  return roadHash(roadIndex, segmentIndex, salt) < DEAD_END_EDGE_RATE;
+}
+function segmentStreetName(axis, roadIndex, segmentIndex) {
+  const base = streetName(axis, roadIndex);
+  if (roadEdgeClosed(axis, roadIndex, segmentIndex - 1) || roadEdgeClosed(axis, roadIndex, segmentIndex))
+    return base + ' Access Link ' + String(segmentIndex + 26).padStart(2, '0');
+  return base;
+}
+const tJunctionAt = (ix, iz) => closedTArm(ix, iz) !== null;
+const T_DIR_DELTA = { N: [0, -1], S: [0, 1], E: [1, 0], W: [-1, 0] };
+
 function blockSpan(v) {
   const a = Math.floor(v / ROAD_SPACING) * ROAD_SPACING, b = a + ROAD_SPACING;
   return [a + AVE_HALF + BLOCK_SETBACK, b - AVE_HALF - BLOCK_SETBACK];
@@ -918,7 +962,7 @@ function furnitureAlong(g, lo, hi) {
 function buildRoads(cx, cz, group, asphaltRecs) {
   const xMin = cx * CHUNK_SIZE, xMax = xMin + CHUNK_SIZE, zMin = cz * CHUNK_SIZE, zMax = zMin + CHUNK_SIZE;
   const midX = (xMin + xMax) / 2, midZ = (zMin + zMax) / 2;
-  const pvm = [], kerb = [], white = [], yellow = [], poles = [], arms = [], heads = [], pools = [];
+  const pvm = [], kerb = [], white = [], yellow = [], poles = [], arms = [], heads = [], pools = [], fieldRecs = [], bushRecs = [];
   const shelterRoofs = [], shelterBacks = [], shelterSides = [], shelterBenches = [], shelterFrames = [], busLaneMarks = [], busSignPoles = [], busSignDiscs = [], busSignFaces = [];
   const spansZ = spansAlong(zMin, zMax), spansX = spansAlong(xMin, xMax);
   const ZW = WALK_W, ZEBRA_T = 0.15 * 3 * 2;   // zebra: stripes run along the drive direction, ZW long (= red walkway width), 6x the lane-line thickness (3x, then doubled)
@@ -1041,7 +1085,7 @@ function buildRoads(cx, cz, group, asphaltRecs) {
     if (ix < -5180 || ix > 5180) continue;
     for (let iz = Math.ceil(zMin / ROAD_SPACING) * ROAD_SPACING; iz < zMax; iz += ROAD_SPACING) {
       if (iz < -5180 || iz > 5180) continue;
-      const hx = roadHalfAt(ix), hz = roadHalfAt(iz);
+      if (tJunctionAt(ix / ROAD_SPACING, iz / ROAD_SPACING)) continue; // no stop/zebra/box paint at converted T-junctions\n      const hx = roadHalfAt(ix), hz = roadHalfAt(iz);
       const yZ = -0.015, yX = -0.015, yB = -0.015;   // paint height follows each road's own lane-line convention
       const SL = 1.2, GAP = 0.6, OFF = ZW;   // stop line: 1.2 thick, pushed back OFF (=zebra length) so the zebra comes right after it
       white.push({ x: ix - (hx + GAP) / 2, y: yZ, z: iz - hz - OFF - GAP - SL / 2 - 0.2, sx: hx - GAP, sy: 0.03, sz: SL },   // southbound traffic (west half), north of the crossing
@@ -1067,7 +1111,42 @@ function buildRoads(cx, cz, group, asphaltRecs) {
       yellow.push({ x: ix, y: yB, z: iz, sx: dl, sy: 0.03, sz: t, ry: -da }, { x: ix, y: yB, z: iz, sx: dl, sy: 0.03, sz: t, ry: da });
     }
   }
+
+  // Close the selected approach with a natural green verge/field. This covers the
+  // asphalt and walkway, removes road paint visually, and uses shared instancing.
+  // Random block-level road ends: a short field/bush barrier closes the road
+  // mid-block, leaving an entrance-only access road on either side.
+  for (let ix = Math.floor(xMin / ROAD_SPACING) - 1; ix <= Math.ceil(xMax / ROAD_SPACING); ix++) {
+    for (let iz = Math.floor(zMin / ROAD_SPACING) - 1; iz <= Math.ceil(zMax / ROAD_SPACING); iz++) {
+      if (roadEdgeClosed('x', ix, iz) && ix * ROAD_SPACING >= xMin - 45 && ix * ROAD_SPACING <= xMax + 45 &&
+          (iz + 0.5) * ROAD_SPACING >= zMin - 45 && (iz + 0.5) * ROAD_SPACING <= zMax + 45) {
+        fieldRecs.push({ x: ix * ROAD_SPACING, y: -0.005, z: (iz + 0.5) * ROAD_SPACING, sx: 64, sy: 0.24, sz: 48 });
+      }
+      if (roadEdgeClosed('z', iz, ix) && (ix + 0.5) * ROAD_SPACING >= xMin - 45 && (ix + 0.5) * ROAD_SPACING <= xMax + 45 &&
+          iz * ROAD_SPACING >= zMin - 45 && iz * ROAD_SPACING <= zMax + 45) {
+        fieldRecs.push({ x: (ix + 0.5) * ROAD_SPACING, y: -0.005, z: iz * ROAD_SPACING, sx: 48, sy: 0.24, sz: 64 });
+      }
+    }
+  }
+  for (let ix = Math.ceil(xMin / ROAD_SPACING); ix < xMax / ROAD_SPACING; ix++) {
+    for (let iz = Math.ceil(zMin / ROAD_SPACING); iz < zMax / ROAD_SPACING; iz++) {
+      const dir = closedTArm(ix, iz);
+      if (!dir) continue;
+      const x = ix * ROAD_SPACING, z = iz * ROAD_SPACING, d = T_DIR_DELTA[dir];
+      const px = x + d[0] * 38, pz = z + d[1] * 38;
+      fieldRecs.push({ x: px, y: -0.005, z: pz, sx: d[0] ? 52 : 64, sy: 0.24, sz: d[1] ? 52 : 64 });
+      const R = n => roadHash(ix, iz, 0x7700 + n);
+      for (let n = 0; n < 7; n++) {
+        const along = (R(n) - 0.5) * 34, across = (R(n + 11) - 0.5) * 30;
+        bushRecs.push({ x: px + (d[0] ? along : across), y: 1.0 + R(n + 20) * 1.4, z: pz + (d[1] ? along : across),
+          sx: 2.8 + R(n + 30) * 3.2, sy: 2.0 + R(n + 40) * 2.2, sz: 2.8 + R(n + 50) * 3.2,
+          color: [0x2d6534, 0x3f7a38, 0x5b8b43, 0x244f2b][n % 4] });
+      }
+    }
+  }
   batch(asphaltRecs, UNIT_BOX, asphaltMat, group);
+  batch(fieldRecs, UNIT_BOX, cityGroundMat, group);
+  batch(bushRecs, UNIT_BOX, mat(0x3b7135), group, true);
   batch(pvm, UNIT_BOX, pavementMat, group);
   batch(kerb, UNIT_BOX, kerbEdgeMat, group);
   batch(white, UNIT_BOX, paintWhite, group);
@@ -1186,9 +1265,9 @@ function buildChunkContent(cx, cz) {
       board.position.set(x, STREET_SIGN_POLE_HEIGHT - 1.1, z); group.add(board);
     };
     for (let gx = Math.ceil(x0 / ROAD_SPACING) * ROAD_SPACING; gx < x1 && gx >= -5180 && gx <= 5180; gx += ROAD_SPACING)
-      addStreetNameSign(streetName('x', Math.round(gx / ROAD_SPACING)), gx + AVE_HALF + 2, (z0 + z1) / 2, 'x');
+      addStreetNameSign(segmentStreetName('x', Math.round(gx / ROAD_SPACING), Math.floor(((z0 + z1) / 2) / ROAD_SPACING)), gx + AVE_HALF + 2, (z0 + z1) / 2, 'x');
     for (let gz = Math.ceil(z0 / ROAD_SPACING) * ROAD_SPACING; gz < z1 && gz >= -5180 && gz <= 5180; gz += ROAD_SPACING)
-      addStreetNameSign(streetName('z', Math.round(gz / ROAD_SPACING)), (x0 + x1) / 2, gz + AVE_HALF + 2, 'z');
+      addStreetNameSign(segmentStreetName('z', Math.round(gz / ROAD_SPACING), Math.floor(((x0 + x1) / 2) / ROAD_SPACING)), (x0 + x1) / 2, gz + AVE_HALF + 2, 'z');
   });
 }
 
@@ -1759,21 +1838,38 @@ function navBuildPath(from, dest, A, B) {
   const pts = [[from[0], from[1]]], names = [];
   const add = (x, z, name) => { const l = pts[pts.length - 1]; if (Math.hypot(x - l[0], z - l[1]) < 0.5) return; pts.push([x, z]); names.push(name); };
   add(A.x, A.z, null);
-  if (A.axis === B.axis) {
-    const ax = A.axis, a1 = ax === 'x' ? A.z : A.x, b1 = ax === 'x' ? B.z : B.x;
-    if (A.i === B.i) add(B.x, B.z, streetName(ax, A.i));
-    else {                                                       // two parallel roads: cross over on a road between the two points
-      const lo = Math.min(a1, b1), hi = Math.max(a1, b1), jc = Math.ceil(lo / S), jf = Math.floor(hi / S);
-      let j;
-      if (jc <= jf) j = Math.max(jc, Math.min(jf, Math.round(a1 / S)));
-      else { const c1 = Math.floor(lo / S), c2 = c1 + 1; j = (Math.abs(a1 - c1 * S) + Math.abs(b1 - c1 * S) <= Math.abs(a1 - c2 * S) + Math.abs(b1 - c2 * S)) ? c1 : c2; }
-      j = navClampIdx(j);
-      if (ax === 'x') { add(A.x, j * S, streetName('x', A.i)); add(B.x, j * S, streetName('z', j)); }
-      else { add(j * S, A.z, streetName('z', A.i)); add(j * S, B.z, streetName('x', j)); }
-      add(B.x, B.z, streetName(ax, B.i));
+  const sx = A.axis === 'x' ? A.i : navClampIdx(Math.round(A.x / S));
+  const sz = A.axis === 'x' ? navClampIdx(Math.round(A.z / S)) : A.i;
+  const ex = B.axis === 'x' ? B.i : navClampIdx(Math.round(B.x / S));
+  const ez = B.axis === 'x' ? navClampIdx(Math.round(B.z / S)) : B.i;
+  add(sx * S, sz * S, streetName(A.axis, A.i));
+
+  // Breadth-first search through the actual open junction connections. T-junction
+  // arms are excluded, so turn-by-turn directions and the blue route avoid closures.
+  const key = (x, z) => x + ',' + z, queue = [[sx, sz]], prev = new Map();
+  prev.set(key(sx, sz), null);
+  const dirs = [['N', 0, -1], ['S', 0, 1], ['E', 1, 0], ['W', -1, 0]];
+  for (let qi = 0; qi < queue.length && !prev.has(key(ex, ez)); qi++) {
+    const [x, z] = queue[qi];
+    for (const [dir, dx, dz] of dirs) {
+      const nx = navClampIdx(x + dx), nz = navClampIdx(z + dz), nk = key(nx, nz);
+      if (prev.has(nk) || !roadArmOpen(x, z, dir)) continue;
+      prev.set(nk, [x, z]); queue.push([nx, nz]);
     }
-  } else if (A.axis === 'x') { add(A.x, B.z, streetName('x', A.i)); add(B.x, B.z, streetName('z', B.i)); }   // one turn at the junction
-  else { add(B.x, A.z, streetName('z', A.i)); add(B.x, B.z, streetName('x', B.i)); }
+  }
+  const routeNodes = [];
+  if (prev.has(key(ex, ez))) {
+    let cur = [ex, ez];
+    while (cur) { routeNodes.push(cur); cur = prev.get(key(cur[0], cur[1])); }
+    routeNodes.reverse();
+  } else routeNodes.push([sx, sz], [ex, ez]); // defensive fallback if a future topology isolates a district
+  for (let k = 1; k < routeNodes.length; k++) {
+    const [x0, z0] = routeNodes[k - 1], [x1, z1] = routeNodes[k];
+    const axis = x0 !== x1 ? 'z' : 'x', streetIdx = axis === 'z' ? z0 : x0;
+    const segIdx = axis === 'z' ? Math.min(x0, x1) : Math.min(z0, z1);
+    add(x1 * S, z1 * S, segmentStreetName(axis, streetIdx, segIdx));
+  }
+  add(B.x, B.z, streetName(B.axis, B.i));
   add(dest.x, dest.z, null);
   if (pts.length < 2) { pts.push([dest.x + 0.01, dest.z]); names.push(null); }
   const n = pts.length, cum = [0];
@@ -2137,6 +2233,35 @@ function drawCityMap() {
     ctx.globalAlpha = 1; ctx.setLineDash([]);
   }
 
+  // Map topology overlay: green fields/bushes cover the same closed approach
+  // used by the streamed 3D city, so the map and navigation stay consistent.
+  ctx.fillStyle = '#719b61';
+  for (let ix = kx0; ix <= kx1; ix++) for (let iz = kz0; iz <= kz1; iz++) {
+    const dir = closedTArm(ix, iz); if (!dir) continue;
+    const px = ix * ROAD_SPACING + T_DIR_DELTA[dir][0] * 38;
+    const pz = iz * ROAD_SPACING + T_DIR_DELTA[dir][1] * 38;
+    const w = dir === 'E' || dir === 'W' ? 52 : 64, h = dir === 'N' || dir === 'S' ? 52 : 64;
+    ctx.fillRect(X(px) - w * S / 2, Y(pz) - h * S / 2, Math.max(1, w * S), Math.max(1, h * S));
+    ctx.fillStyle = '#3e7539';
+    for (let n = 0; n < 6; n++) {
+      const ox = (roadHash(ix, iz, 0x7700 + n) - 0.5) * 32, oz = (roadHash(ix, iz, 0x8800 + n) - 0.5) * 32;
+      ctx.beginPath(); ctx.arc(X(px + ox), Y(pz + oz), Math.max(1.2, 2.4 * S), 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.fillStyle = '#719b61';
+  }
+  // Random access-road ends, drawn on the map in the same positions as the 3D fields.
+  ctx.fillStyle = '#719b61';
+  for (let ix = kx0 - 1; ix <= kx1; ix++) for (let iz = kz0 - 1; iz <= kz1; iz++) {
+    if (roadEdgeClosed('x', ix, iz)) ctx.fillRect(X(ix * ROAD_SPACING) - 32 * S, Y((iz + 0.5) * ROAD_SPACING) - 24 * S, 64 * S, 48 * S);
+    if (roadEdgeClosed('z', iz, ix)) ctx.fillRect(X((ix + 0.5) * ROAD_SPACING) - 24 * S, Y(iz * ROAD_SPACING) - 32 * S, 48 * S, 64 * S);
+  }
+  // Small scattered shrub marks reinforce the uneven, natural green patches.
+  ctx.fillStyle = '#3e7539';
+  for (let ix = kx0 - 1; ix <= kx1; ix++) for (let iz = kz0 - 1; iz <= kz1; iz++) {
+    if (!roadEdgeClosed('x', ix, iz) && !roadEdgeClosed('z', iz, ix)) continue;
+    const px = (ix + 0.5) * ROAD_SPACING, pz = (iz + 0.5) * ROAD_SPACING;
+    ctx.beginPath(); ctx.arc(X(px), Y(pz), Math.max(1.2, 2.0 * S), 0, Math.PI * 2); ctx.fill();
+  }
   // 4. bus stops (shelters) along the avenues
   const stopPts = [];
   if (S >= 0.45) {
