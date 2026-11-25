@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.83-LIVE-MAP (v0.81-HIGHRISE-AVENUES base): avenues only, big modern high-rise towers, streamed + instanced chunks
+// THIS IS LAGOS v0.84-MAP-NAVIGATION (v0.83-LIVE-MAP base): avenues only, big modern high-rise towers, streamed + instanced chunks
 // Target: < 400 MB on phones. Add ?debug to the URL to log draw calls / GPU memory.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -1703,6 +1703,277 @@ function mapNearestDistrict(x, z) {
   return best;
 }
 
+// ============================================================================
+// NAVIGATION: Google-Maps style directions on top of the city map.
+//   tap / search a place -> "Directions" -> pick Walk / Bus / Drive (time, distance, arrival clock) -> "Start".
+// Start shrinks the map into a corner mini-map that follows the player. The route stays drawn as a blue line from the
+// player to the destination, and a banner shows the next turn, remaining time / distance and the arrival time.
+// Routes follow the real avenue grid (ROAD_SPACING). Walk uses the normal walking pace; Bus and Drive raise the player's
+// travel speed while navigating (NAV_SPEEDS, metres per second) so the estimated time matches what you actually experience.
+// ============================================================================
+const NAV_SPEEDS = { walk: 2.3, bus: 9, car: 16 };
+const NAV_MODES = ['walk', 'bus', 'car'];
+const NAV_MODE_INFO = { walk: ['🚶', 'Walk'], bus: ['🚌', 'Bus'], car: ['🚗', 'Drive'] };
+const NAV_MINI_SCALE = { walk: 0.8, bus: 0.45, car: 0.32 };          // zoom of the corner mini-map per mode
+const NAV_ROAD_MAX = 24, NAV_ARRIVE_R = 22, NAV_OFF_ROUTE = 80, NAV_BUS_SPACING = ROAD_SPACING * BUS_STOP_EVERY;
+const nav = { active: false, plan: null, mode: 'car', lastMode: 'car', dest: null, route: null, line: null, remain: 0, arrived: false, arriveT: 0, offT: 0, uiT: 1, mini: false };
+let mapSelDest = null, mapMiniAcc = 0;
+
+// <nav-pure>
+const navClampIdx = i => Math.max(-NAV_ROAD_MAX, Math.min(NAV_ROAD_MAX, i));
+const navClampPos = v => Math.max(-NAV_ROAD_MAX * ROAD_SPACING, Math.min(NAV_ROAD_MAX * ROAD_SPACING, v));
+// nearest point on the avenue network: axis 'x' = a road at x = i*210 (runs along z), axis 'z' = a road at z = i*210 (runs along x)
+function navSnap(x, z) {
+  const ix = navClampIdx(Math.round(x / ROAD_SPACING)), iz = navClampIdx(Math.round(z / ROAD_SPACING));
+  if (Math.abs(x - ix * ROAD_SPACING) <= Math.abs(z - iz * ROAD_SPACING)) return { axis: 'x', i: ix, x: ix * ROAD_SPACING, z: navClampPos(z) };
+  return { axis: 'z', i: iz, x: navClampPos(x), z: iz * ROAD_SPACING };
+}
+function navFree(x, z) {   // a walkable point: if (x,z) is inside a building, use the nearest road point instead
+  x = Math.max(-5200, Math.min(5200, x)); z = Math.max(-5200, Math.min(5200, z));
+  if (!collidesWithBuilding(x, z)) return [x, z];
+  const s = navSnap(x, z); return [s.x, s.z];
+}
+const navStreet = (x, z) => { const s = navSnap(x, z); return streetName(s.axis, s.i); };
+const NAV_DIRS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
+
+// Route along the avenue grid: start -> nearest road -> (at most 2 turns) -> road nearest the destination -> destination.
+function navBuildPath(from, dest, A, B) {
+  const S = ROAD_SPACING;
+  const pts = [[from[0], from[1]]], names = [];
+  const add = (x, z, name) => { const l = pts[pts.length - 1]; if (Math.hypot(x - l[0], z - l[1]) < 0.5) return; pts.push([x, z]); names.push(name); };
+  add(A.x, A.z, null);
+  if (A.axis === B.axis) {
+    const ax = A.axis, a1 = ax === 'x' ? A.z : A.x, b1 = ax === 'x' ? B.z : B.x;
+    if (A.i === B.i) add(B.x, B.z, streetName(ax, A.i));
+    else {                                                       // two parallel roads: cross over on a road between the two points
+      const lo = Math.min(a1, b1), hi = Math.max(a1, b1), jc = Math.ceil(lo / S), jf = Math.floor(hi / S);
+      let j;
+      if (jc <= jf) j = Math.max(jc, Math.min(jf, Math.round(a1 / S)));
+      else { const c1 = Math.floor(lo / S), c2 = c1 + 1; j = (Math.abs(a1 - c1 * S) + Math.abs(b1 - c1 * S) <= Math.abs(a1 - c2 * S) + Math.abs(b1 - c2 * S)) ? c1 : c2; }
+      j = navClampIdx(j);
+      if (ax === 'x') { add(A.x, j * S, streetName('x', A.i)); add(B.x, j * S, streetName('z', j)); }
+      else { add(j * S, A.z, streetName('z', A.i)); add(j * S, B.z, streetName('x', j)); }
+      add(B.x, B.z, streetName(ax, B.i));
+    }
+  } else if (A.axis === 'x') { add(A.x, B.z, streetName('x', A.i)); add(B.x, B.z, streetName('z', B.i)); }   // one turn at the junction
+  else { add(B.x, A.z, streetName('z', A.i)); add(B.x, B.z, streetName('x', B.i)); }
+  add(dest.x, dest.z, null);
+  if (pts.length < 2) { pts.push([dest.x + 0.01, dest.z]); names.push(null); }
+  const n = pts.length, cum = [0];
+  for (let k = 1; k < n; k++) cum.push(cum[k - 1] + Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]));
+
+  // bus stops that lie on the road legs of the route (a shelter pair every 3rd block = every 630 units, mid-block)
+  const stops = [];
+  for (let k = 0; k < names.length; k++) {
+    if (!names[k]) continue;
+    const x0 = pts[k][0], z0 = pts[k][1], x1 = pts[k + 1][0], z1 = pts[k + 1][1], vertical = Math.abs(x1 - x0) < 0.5;
+    const lo = vertical ? Math.min(z0, z1) : Math.min(x0, x1), hi = vertical ? Math.max(z0, z1) : Math.max(x0, x1);
+    for (let m = Math.ceil((lo - ROAD_SPACING / 2) / NAV_BUS_SPACING), e = Math.floor((hi - ROAD_SPACING / 2) / NAV_BUS_SPACING); m <= e; m++) {
+      const q = m * NAV_BUS_SPACING + ROAD_SPACING / 2; stops.push(vertical ? [x0, q] : [q, z0]);
+    }
+  }
+  // turn-by-turn steps: v = index of the vertex where the manoeuvre happens
+  const steps = [];
+  for (let k = 1; k < n - 1; k++) {
+    const d1x = pts[k][0] - pts[k - 1][0], d1z = pts[k][1] - pts[k - 1][1], d2x = pts[k + 1][0] - pts[k][0], d2z = pts[k + 1][1] - pts[k][1];
+    const l1 = Math.hypot(d1x, d1z), l2 = Math.hypot(d2x, d2z); if (!l1 || !l2) continue;
+    const dot = (d1x * d2x + d1z * d2z) / (l1 * l2), cross = (d1x * d2z - d1z * d2x) / (l1 * l2), road = names[k];   // map y points down, so cross > 0 = right turn
+    if (dot > 0.93) { if (road && road !== names[k - 1]) steps.push({ v: k, icon: '⬆', text: 'Continue onto ' + road }); continue; }
+    if (dot < -0.93) steps.push({ v: k, icon: '↩', text: 'Make a U-turn' + (road ? ' onto ' + road : '') });
+    else steps.push({ v: k, icon: cross > 0 ? '↱' : '↰', text: (cross > 0 ? 'Turn right' : 'Turn left') + (road ? ' onto ' + road : ' toward ' + dest.name) });
+  }
+  steps.push({ v: n - 1, icon: '🏁', text: 'Arrive at ' + dest.name });
+  let via = '', bestLeg = 0;
+  for (let k = 0; k < names.length; k++) if (names[k] && cum[k + 1] - cum[k] > bestLeg) { bestLeg = cum[k + 1] - cum[k]; via = names[k]; }
+  return { pts, names, cum, len: cum[n - 1], steps, stops, via };
+}
+// both roads beside a point (the vertical one and the horizontal one); the planner tries every pairing and keeps the shortest
+function navSnaps(x, z) {
+  const ix = navClampIdx(Math.round(x / ROAD_SPACING)), iz = navClampIdx(Math.round(z / ROAD_SPACING));
+  return [{ axis: 'x', i: ix, x: ix * ROAD_SPACING, z: navClampPos(z) }, { axis: 'z', i: iz, x: navClampPos(x), z: iz * ROAD_SPACING }];
+}
+function navMakePath(from, dest) {
+  let best = null;
+  for (const A of navSnaps(from[0], from[1])) for (const B of navSnaps(dest.x, dest.z)) {
+    const r = navBuildPath(from, dest, A, B);
+    if (!best || r.len < best.len - 0.5) best = r;
+  }
+  return best;
+}
+const navFmtDist = m => m < 950 ? Math.max(10, Math.round(m / 10) * 10) + ' m' : (m / 1000).toFixed(1) + ' km';
+const navFmtDur = s => { const m = Math.max(1, Math.round(s / 60)); return m < 60 ? m + ' min' : Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : ''); };
+const navClock = s => new Date(Date.now() + s * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });   // real clock: you travel in real time
+// </nav-pure>
+
+// ---- UI: styles, directions sheet, mini-map expand button, turn banner --------
+const navStyleEl = document.createElement('style');
+navStyleEl.textContent = `
+#mapCardDir{margin-top:8px;margin-right:6px;border:0;border-radius:18px;background:#1a73e8;color:#fff;padding:7px 14px;font:700 12px "DM Sans",system-ui,sans-serif;cursor:pointer}
+#mapCardGo{background:#fff;color:#1a73e8;border:1px solid #dadce0}
+#mapDir{left:12px;bottom:78px;width:min(360px,calc(100% - 84px));padding:12px 14px 14px;border-radius:14px;display:none;z-index:3}
+#mapDir h4{margin:0 26px 8px 0;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#mapDirX{position:absolute;right:8px;top:6px;border:0;background:transparent;font-size:20px;color:#5f6368;cursor:pointer}
+#mapDirTabs{display:flex;gap:6px}
+#mapDirTabs button{flex:1;display:flex;flex-direction:column;align-items:center;gap:1px;border:1px solid #dadce0;background:#fff;border-radius:12px;padding:6px 2px;font:inherit;color:#3c4043;cursor:pointer}
+#mapDirTabs button span{font-size:18px;line-height:1.1}#mapDirTabs button b{font-size:13px}#mapDirTabs button small{font-size:10.5px;color:#70757a}
+#mapDirTabs button.on{background:#e8f0fe;border-color:#1a73e8;color:#1a73e8}#mapDirTabs button.on small{color:#1a73e8}
+#mapDirInfo{margin:10px 0 0;color:#3c4043;font-size:12.5px;line-height:1.45}#mapDirInfo b{color:#188038}
+#mapDirStart{margin-top:10px;width:100%;border:0;border-radius:20px;background:#1a73e8;color:#fff;padding:10px 14px;font:700 14px "DM Sans",system-ui,sans-serif;cursor:pointer}
+#mapMiniExpand{display:none;position:absolute;right:6px;top:6px;width:34px;height:34px;border-radius:50%;border:0;background:#fff;box-shadow:0 2px 8px rgba(60,64,67,.45);font-size:17px;line-height:1;color:#1a73e8;cursor:pointer;z-index:5;pointer-events:auto}
+#cityMapPanel.navigating #mapSearchBox,#cityMapPanel.navigating #mapResults{display:none!important}
+#cityMapPanel.mini{left:auto;right:10px;top:78px;bottom:auto;width:220px;height:220px;transform:none;border-radius:16px;border:3px solid #fff;box-shadow:0 6px 22px rgba(0,0,0,.5);pointer-events:none}
+#cityMapPanel.mini #mapSearchBox,#cityMapPanel.mini #mapResults,#cityMapPanel.mini #cityMapClose,#cityMapPanel.mini #mapCompass,#cityMapPanel.mini #mapCtl,#cityMapPanel.mini #mapLocate,#cityMapPanel.mini #mapCard,#cityMapPanel.mini #mapDir,#cityMapPanel.mini #mapFoot{display:none!important}
+#cityMapPanel.mini #mapMiniExpand{display:block}
+@media(max-width:700px){#cityMapPanel.mini{left:auto;right:8px;top:74px;bottom:auto;width:150px;height:150px}#mapDir{bottom:84px}}
+#navBanner{position:fixed;left:50%;top:10px;transform:translateX(-50%);width:min(560px,calc(100vw - 16px));box-sizing:border-box;min-height:56px;display:none;align-items:center;gap:10px;padding:8px 10px 8px 10px;border-radius:16px;background:#0b6b46;color:#fff;box-shadow:0 6px 22px rgba(0,0,0,.45);z-index:12001;font:13px/1.3 "DM Sans",system-ui,sans-serif}
+#navBanner.on{display:flex}
+#navIcon{flex:none;width:40px;text-align:center;font-size:30px;line-height:1}
+#navTxt{flex:1;min-width:0}
+#navMain{display:block;font-size:16px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#navSub{display:block;font-size:12px;opacity:.92;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#navExit{flex:none;border:0;border-radius:18px;background:#fff;color:#0b6b46;font:700 12px "DM Sans",system-ui,sans-serif;padding:8px 14px;cursor:pointer}`;
+document.head.appendChild(navStyleEl);
+cityMapPanel.insertAdjacentHTML('beforeend', `<div class="mapChip" id="mapDir"><button id="mapDirX" type="button" aria-label="Close directions">×</button><h4 id="mapDirTitle"></h4>
+<div id="mapDirTabs"><button type="button" data-mode="walk"></button><button type="button" data-mode="bus"></button><button type="button" data-mode="car"></button></div>
+<p id="mapDirInfo"></p><button id="mapDirStart" type="button">▶ Start</button></div>
+<button id="mapMiniExpand" type="button" aria-label="Expand map" title="Expand map">⤢</button>`);
+const mapDirEl = mapEl('mapDir');
+const navBannerEl = document.createElement('div');
+navBannerEl.id = 'navBanner';
+navBannerEl.innerHTML = '<div id="navIcon">⬆</div><div id="navTxt"><b id="navMain"></b><span id="navSub"></span></div><button id="navExit" type="button">End</button>';
+document.body.appendChild(navBannerEl);
+const navQ = id => navBannerEl.querySelector('#' + id);
+const mapCardDirBtn = document.createElement('button');
+mapCardDirBtn.id = 'mapCardDir'; mapCardDirBtn.type = 'button'; mapCardDirBtn.textContent = 'Directions';
+mapCardEl.insertBefore(mapCardDirBtn, mapEl('mapCardGo'));
+
+// ---- planning (directions sheet) -------------------------------------------------
+function navRefreshSheet() {
+  const p = nav.plan; if (!p) return;
+  mapEl('mapDirTitle').textContent = 'To ' + p.dest.name;
+  mapEl('mapDirTabs').querySelectorAll('button').forEach(b => {
+    const m = b.dataset.mode;
+    b.classList.toggle('on', m === p.mode);
+    b.innerHTML = `<span>${NAV_MODE_INFO[m][0]}</span><b>${navFmtDur(p.route.len / NAV_SPEEDS[m])}</b><small>${NAV_MODE_INFO[m][1]}</small>`;
+  });
+  const sec = p.route.len / NAV_SPEEDS[p.mode], ns = p.route.stops.length;
+  mapEl('mapDirInfo').innerHTML = `<b>Arrive ${navClock(sec)}</b> · ${navFmtDist(p.route.len)}` + (p.route.via ? ` · via ${p.route.via}` : '') +
+    (p.mode === 'bus' ? `<br>🚌 ${ns} bus stop${ns === 1 ? '' : 's'} on the way` : '');
+}
+function navPlanTo(dest) {
+  const route = navMakePath([player.position.x, player.position.z], dest);
+  nav.plan = { dest, route, mode: nav.lastMode };
+  mapCardEl.style.display = 'none';
+  navRefreshSheet(); mapDirEl.style.display = 'block';
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;           // fit the whole route in view
+  for (const p of route.pts) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); z0 = Math.min(z0, p[1]); z1 = Math.max(z1, p[1]); }
+  const sc = Math.min(Math.max(100, mapW - 140) / Math.max(60, x1 - x0), Math.max(100, mapH - 240) / Math.max(60, z1 - z0), 1.3);
+  mapFlyTo((x0 + x1) / 2, (z0 + z1) / 2 + 40 / Math.max(sc, 0.04), mapClampScale(sc));
+}
+function navCancelPlan() {
+  if (!nav.plan) return;
+  nav.plan = null; mapDirEl.style.display = 'none'; mapDirty = true;
+}
+
+// ---- driving the navigation ---------------------------------------------------------
+function setMapMini(on) {
+  nav.mini = on; cityMapPanel.classList.toggle('mini', on);
+  mapResultsEl.style.display = 'none';
+  mapSetFollow(true);
+  mapView.scale = on ? NAV_MINI_SCALE[nav.mode] : MAP_DEFAULT_SCALE;
+  mapResize(); mapDirty = true; drawCityMap();
+}
+function navStart() {
+  const p = nav.plan; if (!p) return;
+  nav.active = true; nav.mode = nav.lastMode = p.mode; nav.dest = p.dest;
+  nav.route = navMakePath([player.position.x, player.position.z], p.dest);
+  nav.plan = null; nav.arrived = false; nav.offT = 0; nav.uiT = 1; nav.line = null;
+  mapDirEl.style.display = 'none'; mapCardEl.style.display = 'none'; mapSelDest = null;
+  mapTrail.length = 0;
+  cityMapPanel.classList.add('navigating'); navBannerEl.classList.add('on');
+  updateNav(0);
+  setMapMini(true);
+}
+function navEnd() {
+  nav.active = false; nav.route = nav.line = nav.dest = null; nav.arrived = false;
+  navBannerEl.classList.remove('on'); cityMapPanel.classList.remove('navigating');
+  if (nav.mini) { nav.mini = false; cityMapPanel.classList.remove('mini'); setCityMapOpen(false); }
+  mapDirty = true;
+}
+function updateNav(dt) {
+  if (!nav.active) return;
+  if (nav.arrived) { if ((nav.arriveT -= dt) <= 0) navEnd(); return; }
+  const P = nav.route, dest = nav.dest, px = player.position.x, pz = player.position.z;
+  let bd = Infinity, bi = 0, bt = 0, qx = px, qz = pz;                               // closest point of the route to the player
+  for (let k = 0; k < P.pts.length - 1; k++) {
+    const ax = P.pts[k][0], az = P.pts[k][1], dx = P.pts[k + 1][0] - ax, dz = P.pts[k + 1][1] - az, l2 = dx * dx + dz * dz || 1;
+    const t = Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / l2)), cx = ax + dx * t, cz = az + dz * t, d = (px - cx) ** 2 + (pz - cz) ** 2;
+    if (d < bd) { bd = d; bi = k; bt = t; qx = cx; qz = cz; }
+  }
+  const off = Math.sqrt(bd), along = P.cum[bi] + bt * (P.cum[bi + 1] - P.cum[bi]);
+  nav.remain = Math.max(0, P.len - along) + (off > 8 ? off : 0);
+  const line = [[px, pz]];                                                           // blue line: player -> route -> destination
+  if (off > 8) line.push([qx, qz]);
+  for (let k = bi + 1; k < P.pts.length; k++) line.push(P.pts[k]);
+  nav.line = line;
+
+  if (Math.hypot(px - dest.x, pz - dest.z) < NAV_ARRIVE_R) {                         // arrived
+    nav.arrived = true; nav.arriveT = 4; nav.remain = 0;
+    navQ('navIcon').textContent = '🏁'; navQ('navMain').textContent = 'You have arrived'; navQ('navSub').textContent = dest.name;
+    return;
+  }
+  if (off > NAV_OFF_ROUTE) { if ((nav.offT += dt) > 1.5) { nav.route = navMakePath([px, pz], dest); nav.offT = 0; } } else nav.offT = 0;   // wandered off: re-route
+
+  if ((nav.uiT += dt) >= 0.2) {
+    nav.uiT = 0;
+    const st = P.steps.find(s => s.v > bi) || P.steps[P.steps.length - 1];
+    const toStep = Math.max(0, P.cum[st.v] - along) + (off > 8 ? off : 0), sec = nav.remain / NAV_SPEEDS[nav.mode];
+    navQ('navIcon').textContent = st.icon; navQ('navMain').textContent = st.text;
+    navQ('navSub').textContent = `in ${navFmtDist(toStep)} · ${navFmtDur(sec)} · ${navFmtDist(nav.remain)} · Arrive ${navClock(sec)}`;
+  }
+}
+
+// ---- drawing: blue route line (dotted when walking), bus stops, destination pin ------------
+function drawNavRoute(ctx, X, Y, S) {
+  const mode = nav.active ? nav.mode : nav.plan ? nav.plan.mode : null;
+  const route = nav.active ? nav.route : nav.plan ? nav.plan.route : null;
+  const line = nav.active ? nav.line : route ? route.pts : null;
+  if (line && line.length > 1) {
+    const w = Math.max(5, Math.min(10, 12 * S + 2));
+    ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.beginPath(); line.forEach((p, i) => { if (i) ctx.lineTo(X(p[0]), Y(p[1])); else ctx.moveTo(X(p[0]), Y(p[1])); });
+    if (mode === 'walk') ctx.setLineDash([0.01, w * 1.7]);
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = w + 4; ctx.stroke();
+    ctx.strokeStyle = '#1a73e8'; ctx.lineWidth = w; ctx.stroke();
+    ctx.restore();
+    if (mode === 'bus' && route && S >= 0.2) {
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = '11px system-ui, sans-serif';
+      for (const st of route.stops) {
+        const sx = X(st[0]), sy = Y(st[1]); if (sx < -20 || sx > mapW + 20 || sy < -20 || sy > mapH + 20) continue;
+        ctx.fillStyle = '#fff'; ctx.strokeStyle = '#1a73e8'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(sx, sy, 9, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = '#1a73e8'; ctx.fillText('🚌', sx, sy + 0.5);
+      }
+    }
+  }
+  const d = nav.active ? nav.dest : nav.plan ? nav.plan.dest : mapSelDest;
+  if (d) {
+    const px = X(d.x), py = Y(d.z);
+    if (px > -30 && px < mapW + 30 && py > -40 && py < mapH + 30) {
+      ctx.fillStyle = '#ea4335'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.bezierCurveTo(px - 4, py - 8, px - 12, py - 14, px - 12, py - 22); ctx.arc(px, py - 22, 12, Math.PI, 0); ctx.bezierCurveTo(px + 12, py - 14, px + 4, py - 8, px, py); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(px, py - 22, 4.5, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+}
+
+mapCardDirBtn.addEventListener('click', () => { if (mapSelDest) navPlanTo(mapSelDest); });
+mapEl('mapDirTabs').addEventListener('click', e => { const b = e.target.closest('button'); if (!b || !nav.plan) return; nav.plan.mode = b.dataset.mode; navRefreshSheet(); mapDirty = true; });
+mapEl('mapDirX').addEventListener('click', navCancelPlan);
+mapEl('mapDirStart').addEventListener('click', navStart);
+mapEl('mapMiniExpand').addEventListener('click', () => setMapMini(false));
+navQ('navExit').addEventListener('click', navEnd);
+
+
 // ---- drawing ----------------------------------------------------------------
 function drawCityMap() {
   const ctx = mapCtx, W = mapW, H = mapH, S = mapView.scale, cx = mapView.cx, cz = mapView.cz;
@@ -1937,9 +2208,11 @@ function drawCityMap() {
     }
   }
 
+  drawNavRoute(ctx, X, Y, S);   // navigation: blue route line, bus stops, destination pin
+
   // 8. live player: trail, direction beam, pulsing blue dot
   const pl = player.position, pxp = X(pl.x), pyp = Y(pl.z);
-  if (mapTrail.length > 1) {
+  if (mapTrail.length > 1 && !nav.active) {
     ctx.strokeStyle = 'rgba(26,115,232,.45)'; ctx.lineWidth = 4; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
     ctx.beginPath(); mapTrail.forEach((p, i) => { const tx = X(p[0]), ty = Y(p[1]); if (i) ctx.lineTo(tx, ty); else ctx.moveTo(tx, ty); });
     ctx.lineTo(pxp, pyp); ctx.stroke(); ctx.lineJoin = 'miter'; ctx.lineCap = 'butt';
@@ -1977,7 +2250,8 @@ function mapPick(wx, wz) {
   return null;
 }
 function mapShowCard(hit) {
-  mapSelected = hit; mapDirty = true;
+  mapSelected = hit; mapDirty = true; mapSelDest = null;
+  if (hit) navCancelPlan();
   if (!hit) { mapCardEl.style.display = 'none'; return; }
   const title = mapEl('mapCardTitle'), body = mapEl('mapCardBody');
   if (hit.b) {
@@ -1989,11 +2263,27 @@ function mapShowCard(hit) {
       <p>Entrance on the ${MAP_FACE_NAME[b.door.face]} side</p>
       <p>Block of ${streetName('x', bi)}, ${streetName('x', bi + 1)}, ${streetName('z', bj)} and ${streetName('z', bj + 1)}</p>`;
     mapCardEl._go = [b.x, b.z, Math.max(mapView.scale, 0.9)];
-  } else {
+    const dd = b.door, hw = (b.w + 4) / 2, hd = (b.d + 4) / 2, lo = 9;   // a point just outside the entrance
+    const dp = dd.face === 0 ? [b.x + dd.off, b.z + hd + lo] : dd.face === 1 ? [b.x - dd.off, b.z - hd - lo] : dd.face === 2 ? [b.x + hw + lo, b.z - dd.off] : [b.x - hw - lo, b.z + dd.off];
+    mapSelDest = { name: title.textContent + ' on ' + navStreet(dp[0], dp[1]), x: dp[0], z: dp[1] };
+  } else if (hit.f) {
     const f = hit.f;
     title.textContent = f.label || MAP_FACILITY_LABEL[f.type];
     body.innerHTML = `<p>${MAP_FACILITY_LABEL[f.type] || f.type} · ${Math.round(f.w)} × ${Math.round(f.d)} m</p><p>Near ${mapNearestDistrict(f.x, f.z)}</p>`;
     mapCardEl._go = [f.x, f.z, Math.max(mapView.scale, 1.2)];
+    const fp = navFree(f.x, f.z); mapSelDest = { name: title.textContent, x: fp[0], z: fp[1] };
+  } else if (hit.s) {                                           // a search result (district, facility or street)
+    const it = hit.s, sx = it.x === null ? mapView.cx : it.x, sz = it.z === null ? mapView.cz : it.z, sp = navFree(sx, sz);
+    title.textContent = it.name;
+    body.innerHTML = `<p>${it.sub}</p><p>Near ${mapNearestDistrict(sx, sz)}</p>`;
+    mapCardEl._go = [sx, sz, it.s];
+    mapSelDest = { name: it.name, x: sp[0], z: sp[1] };
+  } else if (hit.pin) {                                         // a tap on open ground / a road: dropped pin
+    const pp = navFree(hit.pin[0], hit.pin[1]);
+    title.textContent = 'Dropped pin';
+    body.innerHTML = `<p>Near ${navStreet(pp[0], pp[1])}</p><p>${mapNearestDistrict(pp[0], pp[1])} area</p>`;
+    mapCardEl._go = [pp[0], pp[1], Math.max(mapView.scale, 0.9)];
+    mapSelDest = { name: 'Dropped pin near ' + navStreet(pp[0], pp[1]), x: pp[0], z: pp[1] };
   }
   mapCardEl.style.display = 'block';
 }
@@ -2016,6 +2306,7 @@ function mapSearchItems(q) {
 function mapGoSearch(it) {
   mapFlyTo(it.x === null ? mapView.cx : it.x, it.z === null ? mapView.cz : it.z, it.s);
   mapResultsEl.style.display = 'none'; mapSearchEl.value = it.name; mapSearchEl.blur();
+  mapShowCard({ s: it });
 }
 mapSearchEl.addEventListener('input', () => {
   const items = mapSearchItems(mapSearchEl.value);
@@ -2065,7 +2356,8 @@ const mapPointerEnd = e => {
   const p = mapPtrs.get(e.pointerId);
   mapPtrs.delete(e.pointerId); cityMapCanvas.classList.remove('grabbing');
   if (mapGesture && mapGesture.type === 'pan' && e.type === 'pointerup' && mapGesture.moved < 6 && performance.now() - mapGesture.t0 < 600)
-    mapShowCard(mapPick(mapView.cx + (p.x - mapW / 2) / mapView.scale, mapView.cz + (p.y - mapH / 2) / mapView.scale));
+  { const wx = mapView.cx + (p.x - mapW / 2) / mapView.scale, wz = mapView.cz + (p.y - mapH / 2) / mapView.scale;
+    mapShowCard(mapPick(wx, wz) || (Math.abs(wx) < CITY_HALF && Math.abs(wz) < CITY_HALF ? { pin: [wx, wz] } : null)); }
   const rest = [...mapPtrs.values()];
   mapGesture = rest.length === 1 ? { type: 'pan', x0: rest[0].x, y0: rest[0].y, cx0: mapView.cx, cz0: mapView.cz, moved: 99, t0: 0 } : null;
 };
@@ -2082,7 +2374,8 @@ mapEl('mapCardGo').addEventListener('click', () => { const g = mapCardEl._go; if
 // ---- open / close / per-frame update ----------------------------------------
 function setCityMapOpen(open) {
   cityMapOpen = open; cityMapPanel.classList.toggle('open', open);
-  if (!open) { mapResultsEl.style.display = 'none'; return; }
+  if (!open && nav.active) { setMapMini(true); return; }   // while navigating, closing just minimises
+  if (!open) { mapResultsEl.style.display = 'none'; navCancelPlan(); mapSelDest = null; return; }
   mapResize();
   mapView.cx = player.position.x; mapView.cz = player.position.z; mapSetFollow(true);
   mapTrail.length = 0; mapLastX = mapLastZ = mapLastR = NaN;
@@ -2101,16 +2394,16 @@ function updateCityMap(dt) {
     if (!last || Math.hypot(last[0] - p.x, last[1] - p.z) > 4) { mapTrail.push([p.x, p.z]); if (mapTrail.length > 300) mapTrail.shift(); }
   }
   if ((mapPulse += dt) > 0.1) { mapPulse = 0; mapDirty = true; }   // keeps the blue dot pulsing
-  if (mapDirty) { mapDirty = false; drawCityMap(); }
+  if (mapDirty && (!nav.mini || (mapMiniAcc += dt) >= (IS_MOBILE ? 0.08 : 0.033))) { mapMiniAcc = 0; mapDirty = false; drawCityMap(); }   // mini-map redraws a little less often
 }
-mapOpenBtn.addEventListener('click', () => setCityMapOpen(!cityMapOpen));
-mapEl('cityMapClose').addEventListener('click', () => setCityMapOpen(false));
+mapOpenBtn.addEventListener('click', () => { if (nav.active) setMapMini(!nav.mini); else setCityMapOpen(!cityMapOpen); });
+mapEl('cityMapClose').addEventListener('click', () => { if (nav.active) setMapMini(true); else setCityMapOpen(false); });
 window.addEventListener('resize', () => { if (cityMapOpen) mapResize(); });
 window.addEventListener('keydown', e => {
   if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
   const k = (e.key || '').toLowerCase();
-  if (k === 'm') setCityMapOpen(!cityMapOpen);
-  else if (k === 'escape' && cityMapOpen) setCityMapOpen(false);
+  if (k === 'm') { if (nav.active) setMapMini(!nav.mini); else setCityMapOpen(!cityMapOpen); }
+  else if (k === 'escape' && cityMapOpen) { if (nav.active) setMapMini(true); else setCityMapOpen(false); }
 });
 
 // Use the single original zoom panel already defined in index.html.
@@ -2189,6 +2482,7 @@ function animate() {
 
   worldMinutes = (worldMinutes + uiDt * daySpeed) % 1440;
   uiUpdateElapsed += uiDt;
+  if (nav.active) updateNav(uiDt);
   if (cityMapOpen) updateCityMap(uiDt);
   if (uiUpdateElapsed >= 0.3) {
     uiUpdateElapsed = 0;
@@ -2227,7 +2521,8 @@ function animate() {
     let iz = Math.cos(lookAngle) * forward - Math.sin(lookAngle) * side;
     const len = Math.hypot(ix, iz) || 1;
     ix /= len; iz /= len;
-    const distance = (running ? 5.0 : 2.3) * frameDt, dx = ix * distance, dz = iz * distance;
+    const rideSpeed = nav.active && NAV_SPEEDS[nav.mode] > NAV_SPEEDS.walk ? NAV_SPEEDS[nav.mode] : 0;   // Bus / Drive: faster travel while navigating
+    const distance = (rideSpeed || (running ? 5.0 : 2.3)) * frameDt, dx = ix * distance, dz = iz * distance;
     const steps = Math.max(1, Math.ceil(distance / 0.2));
     for (let i = 0; i < steps; i++) {
       const nextX = Math.max(-5210, Math.min(5210, player.position.x + dx / steps));
