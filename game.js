@@ -1085,7 +1085,8 @@ function buildRoads(cx, cz, group, asphaltRecs) {
     if (ix < -5180 || ix > 5180) continue;
     for (let iz = Math.ceil(zMin / ROAD_SPACING) * ROAD_SPACING; iz < zMax; iz += ROAD_SPACING) {
       if (iz < -5180 || iz > 5180) continue;
-      if (tJunctionAt(ix / ROAD_SPACING, iz / ROAD_SPACING)) continue; // no stop/zebra/box paint at converted T-junctions\n      const hx = roadHalfAt(ix), hz = roadHalfAt(iz);
+      if (tJunctionAt(ix / ROAD_SPACING, iz / ROAD_SPACING)) continue; // no stop/zebra/box paint at converted T-junctions
+      const hx = roadHalfAt(ix), hz = roadHalfAt(iz);
       const yZ = -0.015, yX = -0.015, yB = -0.015;   // paint height follows each road's own lane-line convention
       const SL = 1.2, GAP = 0.6, OFF = ZW;   // stop line: 1.2 thick, pushed back OFF (=zebra length) so the zebra comes right after it
       white.push({ x: ix - (hx + GAP) / 2, y: yZ, z: iz - hz - OFF - GAP - SL / 2 - 0.2, sx: hx - GAP, sy: 0.03, sz: SL },   // southbound traffic (west half), north of the crossing
