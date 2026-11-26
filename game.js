@@ -1,4 +1,4 @@
-// THIS IS LAGOS v0.86-ROAD-NETWORK (v0.85-ROTATING-MINIMAP base): 20% T-junctions, dead ends, closed roads -> bush & green fields, random street objects, graph navigation. Avenues only, big modern high-rise towers, streamed + instanced chunks
+// THIS IS LAGOS v0.88-CITYWIDE-DISTRICTS-ADDRESSES (v0.85-ROTATING-MINIMAP base): 20% T-junctions, dead ends, closed roads -> bush & green fields, random street objects, graph navigation. Avenues only, big modern high-rise towers, streamed + instanced chunks
 // Target: < 400 MB on phones. Add ?debug to the URL to log draw calls / GPU memory.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -584,8 +584,17 @@ function designBuilding(x, z, w, d, kind, seedIn) {
   const usable = toAve.filter(e => faceOpen(e[1])), faceList = usable.length ? usable : toAve;   // entrance faces a road that exists
   const face = R() < 0.25 ? faceList[Math.min(1, faceList.length - 1)][1] : faceList[0][1];
   const faceW = (face < 2 ? w : d) + 4;
+  // Deterministic registered address and apartment capacity for detailed and streamed infill houses.
+  const district = nearestDistrictFor(x, z);
+  const roadX = Math.round(x / ROAD_SPACING), roadZ = Math.round(z / ROAD_SPACING);
+  const streetAxis = Math.abs(x - roadX * ROAD_SPACING) <= Math.abs(z - roadZ * ROAD_SPACING) ? 'x' : 'z';
+  const streetIndex = streetAxis === 'x' ? roadX : roadZ;
+  const houseNumber = Math.max(1, Math.round((streetAxis === 'x' ? z + CITY_HALF : x + CITY_HALF) * 10));
+  const street = streetName(streetAxis, streetIndex);
+  const apartmentCount = Math.max(20, Math.min(500, Math.round((w * d * floors * 0.72) / 250)));
   return {
     x, z, w, d, kind, floors, preset, tint, tiers, h: PODIUM_H + floors * FLOOR_H,
+    address: { district: district[0], street, houseNumber, full: `${houseNumber} ${street}, ${district[0]}`, apartmentCount },
     roofColor: ROOF_COLORS[Math.floor(R() * ROOF_COLORS.length)],
     plant: R() < 0.6 ? { fw: 0.25 + R() * 0.3, fd: 0.25 + R() * 0.3, h: 5 + R() * 8, ox: (R() - 0.5) * 0.3, oz: (R() - 0.5) * 0.3 } : null,
     antenna: R() < 0.28 ? 14 + R() * 40 : 0,
@@ -700,10 +709,26 @@ const districtDefs = [
   ['FESTAC TOWN', -760, 760, 'residential'], ['APAPA PORT', -980, 520, 'civic']
 ];
 const baseDistrictDefs = districtDefs.slice();
-for (let tx = -2; tx <= 2; tx++) for (let tz = -2; tz <= 2; tz++) {
+// City-wide district distribution: 7x7 staggered cells cover the full 10.5 km
+// world, rather than repeating every district only in a central 5x5 pattern.
+// Each outer cell receives one district marker, with a second marker in
+// alternating cells. The original 14 central districts remain unchanged.
+const DISTRICT_GRID_STEP = 1500, DISTRICT_WORLD_LIMIT = 5000;
+for (let tz = -3; tz <= 3; tz++) for (let tx = -3; tx <= 3; tx++) {
   if (tx === 0 && tz === 0) continue;
-  const tileNo = (tz + 2) * 5 + (tx + 2) + 1;
-  for (const d of baseDistrictDefs) districtDefs.push([`${d[0]} DISTRICT ${String(tileNo).padStart(2, '0')}`, d[1] + tx * 2100, d[2] + tz * 2100, d[3]]);
+  const tileNo = (tz + 3) * 7 + (tx + 3) + 1;
+  const pick = (tileNo * 3 + 2) % baseDistrictDefs.length;
+  const d = baseDistrictDefs[pick];
+  const staggerX = (tz % 2) * 210;
+  const x = Math.max(-DISTRICT_WORLD_LIMIT, Math.min(DISTRICT_WORLD_LIMIT, tx * DISTRICT_GRID_STEP + d[1] * 0.42 + staggerX));
+  const z = Math.max(-DISTRICT_WORLD_LIMIT, Math.min(DISTRICT_WORLD_LIMIT, tz * DISTRICT_GRID_STEP + d[2] * 0.42));
+  districtDefs.push([`${d[0]} AREA ${String(tileNo).padStart(2, '0')}`, x, z, d[3]]);
+  if ((tileNo % 2) === 0) {
+    const d2 = baseDistrictDefs[(pick + 7) % baseDistrictDefs.length];
+    const x2 = Math.max(-DISTRICT_WORLD_LIMIT, Math.min(DISTRICT_WORLD_LIMIT, tx * DISTRICT_GRID_STEP - d2[1] * 0.32 - staggerX));
+    const z2 = Math.max(-DISTRICT_WORLD_LIMIT, Math.min(DISTRICT_WORLD_LIMIT, tz * DISTRICT_GRID_STEP - d2[2] * 0.32));
+    districtDefs.push([`${d2[0]} AREA ${String(tileNo).padStart(2, '0')}B`, x2, z2, d2[3]]);
+  }
 }
 
 // ============================================================================
@@ -1163,6 +1188,47 @@ function nearestDistrictFor(x, z) {
   let best = districtDefs[0], bestD = Infinity;
   for (const d of districtDefs) { const q = (x - d[1]) ** 2 + (z - d[2]) ** 2; if (q < bestD) { bestD = q; best = d; } }
   return best;
+}
+
+// Entrance proximity UI: property metadata is deterministic and exists for every detailed and streamed infill house.
+const entrancePanel = document.querySelector('#buildingEntrancePanel');
+let entranceBuildingKey = null;
+function buildingEntrancePoint(b) {
+  const D = b.door, hw = (b.w + 4) / 2, hd = (b.d + 4) / 2, off = D.off;
+  if (D.face === 0) return { x: b.x + off, z: b.z + hd + 8 };
+  if (D.face === 1) return { x: b.x - off, z: b.z - hd - 8 };
+  if (D.face === 2) return { x: b.x + hw + 8, z: b.z - off };
+  return { x: b.x - hw - 8, z: b.z + off };
+}
+function updateBuildingEntranceWindow() {
+  if (!entrancePanel) return;
+  const px = player.position.x, pz = player.position.z, candidates = cityMapSpecs.slice();
+  const bi = Math.floor(px / ROAD_SPACING), bj = Math.floor(pz / ROAD_SPACING);
+  for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) {
+    const b = infillAt(bi + dx, bj + dz);
+    if (b && !candidates.includes(b)) candidates.push(b);
+  }
+  let nearest = null, nearestD = 13;
+  for (const b of candidates) {
+    if (!b || !b.door || Math.abs(b.x - px) > 160 || Math.abs(b.z - pz) > 160) continue;
+    const e = buildingEntrancePoint(b), d = Math.hypot(e.x - px, e.z - pz);
+    if (d < nearestD) { nearestD = d; nearest = b; }
+  }
+  if (!nearest) {
+    entrancePanel.classList.add('hidden'); entranceBuildingKey = null; return;
+  }
+  const a = nearest.address, key = `${a.houseNumber}|${a.street}|${nearest.x}|${nearest.z}`;
+  if (key !== entranceBuildingKey) {
+    entranceBuildingKey = key;
+    const total = a.apartmentCount;
+    const opts = Array.from({ length: total }, (_, i) => `<option value="${i + 1}">Apartment ${String(i + 1).padStart(3, '0')}</option>`).join('');
+    entrancePanel.innerHTML = `<div class="be-head"><div><div class="be-kicker">Building registered · Entrance</div><div class="be-title">${a.district}</div></div></div><div class="be-address">${a.full}<br>House No. ${a.houseNumber} · ${String(nearest.kind).toUpperCase()} building</div><div class="be-grid"><div class="be-stat"><small>Building floors</small><b>${nearest.floors}</b></div><div class="be-stat"><small>Total apartments</small><b>${total}</b></div><div class="be-stat"><small>Apartment range</small><b>001–${String(total).padStart(3, '0')}</b></div></div><div class="be-buyrow"><select id="entranceApartmentSelect" aria-label="Select apartment number">${opts}</select><button class="be-buy" id="entranceBuyApartment">Buy Apartment</button></div><p class="be-note">Every apartment requires purchase. Availability and payment will be verified by the connected ownership and wallet service.</p>`;
+    entrancePanel.querySelector('#entranceBuyApartment')?.addEventListener('click', () => {
+      const chosen = entrancePanel.querySelector('#entranceApartmentSelect')?.value || '1';
+      toast(`Apartment ${String(chosen).padStart(3, '0')} selected. Purchase requires the online wallet/property service.`);
+    });
+  }
+  entrancePanel.classList.remove('hidden');
 }
 
 // ============================================================================
@@ -2754,7 +2820,7 @@ function drawCityMap() {
     ctx.globalAlpha = dAlpha;
     for (const d of districtDefs) {
       const isBase = baseDistrictDefs.indexOf(d) >= 0;
-      if (!isBase && (S < 0.16 || S > 0.35)) continue;   // the repeated tile districts only appear at mid zoom, so the overview stays clean
+      if (!isBase && S > 0.35) continue;   // city-wide district labels show on overview and mid-zoom; hide only at close zoom
       if (d[1] < wx0 - 400 || d[1] > wx1 + 400 || d[2] < wz0 - 100 || d[2] > wz1 + 100) continue;
       const px = X(d[1]), py = Y(d[2]), size = isBase ? 12 : 10;
       ctx.font = `700 ${size}px "DM Sans", system-ui, sans-serif`;
@@ -2869,7 +2935,9 @@ function mapShowCard(hit) {
   if (hit.b) {
     const b = hit.b, bi = Math.floor(b.x / ROAD_SPACING), bj = Math.floor(b.z / ROAD_SPACING), p = FACADE_PRESETS[b.preset];
     title.textContent = MAP_KIND_LABEL[b.kind] || 'Building';
-    body.innerHTML = `<p><b>${b.floors}</b> floors · <b>${Math.round(b.h)}</b> m tall${b.tiers.length > 1 ? ' · ' + b.tiers.length + ' stepped tiers' : ''}</p>
+    body.innerHTML = `<p><b>${b.address.houseNumber} ${b.address.street}</b><br>${b.address.district}</p>
+      <p><b>${b.address.apartmentCount}</b> apartments · numbers 001–${String(b.address.apartmentCount).padStart(3, '0')} · purchase required</p>
+      <p><b>${b.floors}</b> floors · <b>${Math.round(b.h)}</b> m tall${b.tiers.length > 1 ? ' · ' + b.tiers.length + ' stepped tiers' : ''}</p>
       <p>Footprint ${Math.round(b.w + 4)} × ${Math.round(b.d + 4)} m</p>
       <p>${p.glassy ? 'Glass tower' : 'Solid facade'} · ${MAP_FACADE_LABEL[p.style]}</p>
       <p>Entrance on the ${MAP_FACE_NAME[b.door.face]} side</p>
@@ -3108,6 +3176,7 @@ function animate() {
       const n = nearestDistrictFor(player.position.x, player.position.z);
       districtEl.textContent = Math.hypot(player.position.x - n[1], player.position.z - n[2]) < 260 ? n[0] : 'Lagos';
     }
+    updateBuildingEntranceWindow();
     setDay();
   }
 
