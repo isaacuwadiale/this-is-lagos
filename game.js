@@ -139,10 +139,66 @@ const horizontalStreetNames = [
   'Admiralty Road', 'Freedom Way', 'Jakande Roundabout Road', 'Chevron Drive', 'Orchid Road',
   'Allen Avenue', 'Opebi Road', 'Obafemi Awolowo Way', 'Adeniyi Jones Avenue', 'Mobolaji Bank Anthony Way', 'Ikeja Along Road'
 ];
-function streetName(axis, index) {
-  const names = axis === 'x' ? verticalStreetNames : horizontalStreetNames;
-  if (index >= -15 && index <= 15) return names[index + 15];
-  return `${axis === 'x' ? 'Lagos North-South' : 'Lagos East-West'} Street ${String(index + 75).padStart(3, '0')}`;
+const extraStreetNames = [
+  'Adetokunbo Ademola Street', 'Ahmed Onibudo Street', 'Idowu Taylor Street', 'Idejo Street',
+  'Saka Tinubu Street', 'Tiamiyu Savage Street', 'Karimu Kotun Street', 'Bishop Aboyade Cole Street',
+  'Adeyemo Alakija Street', 'Akin Ogunlewe Street', 'Water Corporation Road', 'Eleke Crescent',
+  'Oko Awo Street', 'Kasumu Ekemode Street', 'Idowu Martins Street', 'Muri Okunola Street',
+  'Wilmot Point Road', 'Adeola Hopewell Street', 'Walter Carrington Crescent', 'Babatunde Anjous Avenue',
+  'Glover Road', 'Kingsway Road', 'Raymond Njoku Street', 'Probyn Road',
+  'Macgregor Road', 'Cooper Road', 'Lugard Avenue', 'Turnbull Road',
+  'Osborne Road', 'Temple Road', 'Mekunwen Road', 'Odunlami Street',
+  'Breadfruit Street', 'Bamgbose Street', 'Tokunboh Street', 'Hospital Road',
+  'Okesuna Street', 'Ereko Street', 'Issa Williams Street', 'Catholic Mission Street',
+  'Campos Street', 'Docemo Street', 'Apongbon Street', 'Kakawa Street',
+  'Lewis Street', 'Simpson Street', 'Idumota Road', 'Adeniran Ogunsanya Street',
+  'Bode Thomas Street', 'Ogunlana Drive', 'Randle Avenue', 'Akerele Street',
+  'Shitta Street', 'Ijesha Road', 'Eric Moore Road', 'Lagos-Abeokuta Expressway',
+  'Oba Akran Avenue', 'Toyin Street', 'Joel Ogunnaike Street', 'Kodesho Street',
+  'Isaac John Street', 'Medical Road', 'Oduduwa Way', 'Ladipo Kasumu Street',
+  'Lateef Jakande Road', 'Ajao Road', 'Ogba Road', 'Agidingbi Road',
+  'Oba Akinjobi Way', 'Commercial Avenue', 'Tejuosho Street', 'Montgomery Road',
+  'Akoka Road', 'Ojuelegba Road', 'Iwaya Road', 'Jibowu Street',
+  'Alagomeji Street', 'Thorburn Avenue', 'Ado Road', 'Abraham Adesanya Road',
+  'Badore Road', 'Mende Road', 'Gbagada Expressway', 'Creek Road',
+  'Burma Road', 'Warehouse Road', 'Wharf Road', 'Liverpool Road',
+  'Commercial Road', 'Marine Road', 'Point Road', 'Tincan Island Road',
+  'Itire Road', 'Lawanson Road', 'Akinhanmi Street', 'Babs Animashaun Road',
+  'Old Ojo Road', 'Ojo Road', 'Mile 12 Road', 'Sagamu Road',
+  'Ijede Road', 'Oba Sekumade Road', 'Idimu Road', 'Ago Palace Way',
+  'Oshodi Road', 'Mushin Road', 'Fatai Atere Way', 'Old Abeokuta Road',
+  'Ikosi Road', 'Ogudu Road', 'Ojota Road', 'Alapere Road',
+  'Oworonshoki Road', 'Anthony Village Road', 'Ilupeju Bypass', 'Town Planning Way',
+  'Magodo Road', 'Ojodu Road', 'Ikotun-Egbe Road', 'Idimu-Ejigbo Road',
+  'Command Road', 'Akowonjo Road', 'Iyana-Ipaja Road', 'Dopemu Road',
+  'Orile Road', 'Costain Road', 'Ikota Road', 'Ogombo Road',
+  'Okokomaiko Road', 'Ago Okota Road', 'Bariga Road', 'Shomolu Road',
+  'Palmgrove Road', 'Ifako-Ijaiye Road', 'Mangoro Road', 'Secretariat Road',
+  'Alausa Road', 'Oregun Road', 'Kudirat Abiola Way', 'Mobolaji Johnson Avenue',
+  'Isheri Road', 'Oke-Afa Road', 'Ilasamaja Road', 'Mafoluku Road',
+  'Ajah Road', 'Ibeju-Lekki Road', 'Badagry Creek Road', 'Agbara Road',
+  'Egbe Road', 'Ejigbo Road', 'Aboru Road', 'Abule-Egba Road',
+  'Idi-Oro Road', 'Ikeja Airport Road', 'Sapara Williams Street', 'Ayodele Fanoiki Road',
+  'Aromire Avenue', 'Ebute-Ero Street', 'Iddo Road', 'Oyingbo Road',
+  'Egerton Road', 'Eti-Osa Road', 'Ikate Road', 'Elegushi Road',
+  'Ologolo Road', 'Falomo Road'
+];
+// Every road has TWO names: a road is never named for more than 7 km. Roads run 10.5 km, so the first 33 blocks (6.93 km) carry one
+// name and the rest of the road (3.57 km) another. Slot = (index + 24) * 2 + part, 98 slots per direction, all real Lagos street names.
+const STREET_SPLIT_BLOCKS = 33;      // 33 * 210 m = 6.93 km, the longest stretch that keeps one name
+const streetNameTable = { x: [], z: [] };
+{
+  let pi = 0;
+  for (const [axis, base] of [['x', verticalStreetNames], ['z', horizontalStreetNames]]) {
+    for (let slot = 0; slot < 98; slot++) {
+      const idx = (slot >> 1) - 24, part = slot & 1;
+      streetNameTable[axis][slot] = (part === 0 && idx >= -15 && idx <= 15) ? base[idx + 15] : extraStreetNames[pi++ % extraStreetNames.length];
+    }
+  }
+}
+function streetName(axis, index, part = 0) {
+  const t = streetNameTable[axis][(index + 24) * 2 + part];
+  return t || `${axis === 'x' ? 'Lagos North-South' : 'Lagos East-West'} Street ${String(index + 75).padStart(3, '0')}`;
 }
 
 const buildingColliders = [];   // detailed district buildings only (~150)
@@ -1064,6 +1120,7 @@ const CAR_COLORS = [0xb33a3a, 0x2f5d8a, 0xd8d8d0, 0x333a3f, 0xe0b43a, 0x4c7a4b, 
 const DRUM_COLORS = [0x2e5aa8, 0xb23a2a, 0x3a7a4a, 0x8a8f94, 0xc99a2a];
 const KIOSK_COLORS = [0xd5b46e, 0x4f8fb5, 0xc4563f, 0x6aa36b, 0xe0c24a, 0x9b6bb0];
 function addRoadsideProps(cx, cz, box, L) {
+  return;   // roads and walkways are kept clear: no parked cars, cones, drums, bins, kiosks or bushes scattered about
   const xMin = cx * CHUNK_SIZE, zMin = cz * CHUNK_SIZE, STEP = 6;
   for (const rAxis of ['x', 'z']) {
     const aLo = rAxis === 'x' ? xMin : zMin, qLo = rAxis === 'x' ? zMin : xMin;
@@ -1227,31 +1284,66 @@ function infillAt(bi, bj) {
 // building type, and 20-500 apartments scaled by its volume. Nothing is stored up front; entries are cached when first asked for.
 // ============================================================================
 const ADDR_KIND_LABEL = { office: 'Office tower', apartment: 'Apartment tower', mixed: 'Mixed-use tower', residential: 'Residential tower', tenement: 'Residential block', shop: 'Retail building', duplex: 'Duplex block', market: 'Market building' };
-const addrCache = new Map();
+const addrCache = new Map(), streetNumbers = new Map();   // streetNumbers: street key -> Map(building key -> house number)
+const bKey = b => Math.round(b.x * 10) + ',' + Math.round(b.z * 10);
+function streetOfBuilding(b) {   // which road (axis, index) the entrance faces, and where along it the building stands
+  const bI = Math.floor(b.x / ROAD_SPACING), bJ = Math.floor(b.z / ROAD_SPACING), face = b.door.face;
+  const axis = face < 2 ? 'z' : 'x', idx = face === 0 ? bJ + 1 : face === 1 ? bJ : face === 2 ? bI + 1 : bI, along = face < 2 ? b.x : b.z;
+  const part = Math.floor(along / ROAD_SPACING) + BLOCK_N >= STREET_SPLIT_BLOCKS ? 1 : 0;
+  return { axis, idx, along, part, key: axis + idx + ':' + part };
+}
+function numberStreet(st) {   // number every building on one named street 1, 2, 3 ... in order along it (no gaps, no repeats)
+  const list = [], seen = new Set(), lo = st.part === 0 ? 0 : STREET_SPLIT_BLOCKS, hi = st.part === 0 ? STREET_SPLIT_BLOCKS - 1 : 2 * BLOCK_N - 1;
+  const add = b => { if (!b) return; const k = bKey(b); if (seen.has(k)) return; const o = streetOfBuilding(b); if (o.key !== st.key) return; seen.add(k); list.push({ k, along: o.along, side: b.door.face & 1 }); };
+  for (let seg = lo; seg <= hi; seg++) {
+    const sI = seg - BLOCK_N;                                   // block index along the street
+    for (const side of [-1, 0]) add(st.axis === 'z' ? infillAt(sI, st.idx + side) : infillAt(st.idx + side, sI));
+  }
+  for (const b of cityMapSpecs) add(b);                         // the hand-placed district buildings
+  list.sort((a, b) => a.along - b.along || a.side - b.side || (a.k < b.k ? -1 : 1));
+  const m = new Map(); list.forEach((e, i) => m.set(e.k, i + 1));
+  streetNumbers.set(st.key, m);
+  return m;
+}
 function buildingAddress(b) {
-  const key = Math.round(b.x * 10) + ',' + Math.round(b.z * 10);
+  const key = bKey(b);
   let a = addrCache.get(key);
   if (a) return a;
-  const bI = Math.floor(b.x / ROAD_SPACING), bJ = Math.floor(b.z / ROAD_SPACING), face = b.door.face;
-  let axis, idx, along, odd;
-  if (face === 0) { axis = 'z'; idx = bJ + 1; along = b.x; odd = false; }        // faces +z: the road beyond the building
-  else if (face === 1) { axis = 'z'; idx = bJ; along = b.x; odd = true; }
-  else if (face === 2) { axis = 'x'; idx = bI + 1; along = b.z; odd = false; }
-  else { axis = 'x'; idx = bI; along = b.z; odd = true; }
-  const segI = Math.floor(along / ROAD_SPACING), frac = (along - segI * ROAD_SPACING) / ROAD_SPACING;
-  const number = (segI + BLOCK_N) * 100 + Math.min(48, Math.floor(frac * 49)) * 2 + (odd ? 1 : 2);   // unique per street side, 1..4999
+  const st = streetOfBuilding(b);
+  const nums = streetNumbers.get(st.key) || numberStreet(st);
   const R = rngFrom(Math.imul(Math.round(b.x * 10) + 31, 73856093) ^ Math.imul(Math.round(b.z * 10) + 57, 19349663));
   const vol = b.w * b.d * b.floors, t = Math.max(0, Math.min(1, vol / 700000));
   const apartments = Math.max(20, Math.min(500, Math.round((20 + 480 * Math.pow(t, 0.7)) * (0.92 + 0.16 * R()))));
-  const perFloor = Math.ceil(apartments / b.floors), mult = perFloor >= 100 ? 1000 : 100;
-  a = {
-    district: nearestDistrictFor(b.x, b.z)[0], street: streetName(axis, idx), number, kind: b.kind, kindLabel: ADDR_KIND_LABEL[b.kind] || 'Building',
-    floors: b.floors, apartments, perFloor, mult, availShare: 0.25 + 0.35 * R(), seed: Math.floor(R() * 1e9), avail: null
-  };
+  a = { district: nearestDistrictFor(b.x, b.z)[0], street: streetName(st.axis, st.idx, st.part), number: nums.get(key) || 1, kind: b.kind, kindLabel: ADDR_KIND_LABEL[b.kind] || 'Building', floors: b.floors, apartments };
   addrCache.set(key, a);
   return a;
 }
-const apartmentNumber = (a, i) => (Math.floor(i / a.perFloor) + 1) * a.mult + (i % a.perFloor) + 1;   // floor * 100 + unit (floor * 1000 + unit for big floors)
+const apartmentNumber = (a, i) => i + 1;   // apartments are numbered 1..N in every building, no gaps
+function entrancePoint(b, lo) {   // world point on the entrance apron (lo = distance out from the wall)
+  const D = b.door, hw = (b.w + 4) / 2, hd = (b.d + 4) / 2, off = D.off;
+  return D.face === 0 ? [b.x + off, b.z + hd + lo] : D.face === 1 ? [b.x - off, b.z - hd - lo] : D.face === 2 ? [b.x + hw + lo, b.z - off] : [b.x - hw - lo, b.z + off];
+}
+
+// ---- bottom mini-window shown only when the player stands right at a building door ----
+const entranceEl = document.createElement('div');
+entranceEl.id = 'entranceWindow';
+document.head.insertAdjacentHTML('beforeend', `<style>
+#entranceWindow{position:fixed;left:50%;bottom:58px;transform:translate(-50%,16px);width:min(460px,calc(100vw - 20px));box-sizing:border-box;padding:12px 14px;border-radius:16px;background:rgba(32,183,101,.20);color:#fff;text-shadow:0 1px 2px rgba(0,40,15,.9);border:1px solid rgba(150,255,190,.45);box-shadow:0 8px 24px rgba(0,0,0,.18);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);font:12px/1.35 "DM Sans",system-ui,sans-serif;z-index:900;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
+#entranceWindow.show{opacity:1;transform:translate(-50%,0);pointer-events:auto}
+#entranceWindow .ew-x{position:absolute;top:8px;right:8px;width:26px;height:26px;border:0;border-radius:50%;background:rgba(0,40,15,.45);color:#fff;font:700 15px/26px system-ui,sans-serif;text-align:center;cursor:pointer;padding:0;text-shadow:none}
+#entranceWindow .ew-eyebrow{font-size:9px;font-weight:800;letter-spacing:1.6px;color:#d4ffe2}
+#entranceWindow .ew-title{font-size:16px;font-weight:800;margin:2px 30px 6px 0}
+#entranceWindow .ew-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px}
+#entranceWindow .ew-grid span{color:#d4ffe2;font-size:10px;display:block}
+#entranceWindow .ew-grid b{font-size:12px}
+#entranceWindow .ew-list{margin-top:6px;max-height:84px;overflow-y:auto;display:flex;flex-wrap:wrap;gap:4px;touch-action:pan-y}
+#entranceWindow .ew-list i{cursor:pointer;font-style:normal;font-size:10px;font-weight:700;padding:2px 6px;border-radius:6px;background:rgba(255,255,255,.22);color:#fff}
+#entranceWindow .ew-list i.sel{background:#14a35a;color:#fff}
+#entranceWindow .ew-buy{width:100%;margin-top:8px;border:0;border-radius:10px;padding:10px;background:#14a35a;color:#fff;font:inherit;font-weight:800;font-size:13px;cursor:pointer;text-shadow:none}
+#entranceWindow .ew-buy:disabled{background:rgba(255,255,255,.2);color:#e6fff0;cursor:default}
+@media(max-width:700px){#entranceWindow{bottom:176px;font-size:11px}}
+</style>`);
+document.body.appendChild(entranceEl);
 const APARTMENT_PRICE = 5000;   // naira, every apartment
 let ownedApartments = {};
 try { ownedApartments = JSON.parse(localStorage.getItem('til-apartments') || '{}') || {}; } catch (e) { ownedApartments = {}; }
@@ -1261,35 +1353,12 @@ function availableApartments(a) {   // nothing is bought yet, so every apartment
   for (let i = 0; i < a.apartments; i++) { const n = apartmentNumber(a, i); if (!owned.includes(n)) all.push(n); }
   return all;
 }
-function entrancePoint(b, lo) {   // world point on the entrance apron (lo = distance out from the wall)
-  const D = b.door, hw = (b.w + 4) / 2, hd = (b.d + 4) / 2, off = D.off;
-  return D.face === 0 ? [b.x + off, b.z + hd + lo] : D.face === 1 ? [b.x - off, b.z - hd - lo] : D.face === 2 ? [b.x + hw + lo, b.z - off] : [b.x - hw - lo, b.z + off];
-}
-
-// ---- bottom mini-window shown at a building entrance ----
-const entranceEl = document.createElement('div');
-entranceEl.id = 'entranceWindow';
-document.head.insertAdjacentHTML('beforeend', `<style>
-#entranceWindow{position:fixed;left:50%;bottom:58px;transform:translate(-50%,16px);width:min(460px,calc(100vw - 20px));box-sizing:border-box;padding:12px 14px;border-radius:16px;background:rgba(8,25,17,.80);color:#f4fff6;border:1px solid rgba(255,255,255,.28);box-shadow:0 10px 30px rgba(0,0,0,.35);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);font:12px/1.35 "DM Sans",system-ui,sans-serif;z-index:900;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
-#entranceWindow.show{opacity:1;transform:translate(-50%,0);pointer-events:auto}
-#entranceWindow .ew-eyebrow{font-size:9px;font-weight:800;letter-spacing:1.6px;color:#8ce1a8}
-#entranceWindow .ew-title{font-size:16px;font-weight:800;margin:2px 0 6px}
-#entranceWindow .ew-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px}
-#entranceWindow .ew-grid span{color:#a9c9b3;font-size:10px;display:block}
-#entranceWindow .ew-grid b{font-size:12px}
-#entranceWindow .ew-list{margin-top:6px;max-height:84px;overflow-y:auto;display:flex;flex-wrap:wrap;gap:4px;touch-action:pan-y}
-#entranceWindow .ew-list i{cursor:pointer;font-style:normal;font-size:10px;font-weight:700;padding:2px 6px;border-radius:6px;background:rgba(140,225,168,.18);color:#d9ffe6}
-#entranceWindow .ew-list i.sel{background:#20b765;color:#fff}
-#entranceWindow .ew-buy{width:100%;margin-top:8px;border:0;border-radius:10px;padding:10px;background:#20b765;color:#fff;font:inherit;font-weight:800;font-size:13px;cursor:pointer}
-#entranceWindow .ew-buy:disabled{background:rgba(255,255,255,.14);color:#a9c9b3;cursor:default}
-@media(max-width:700px){#entranceWindow{bottom:176px;font-size:11px}}
-</style>`);
-document.body.appendChild(entranceEl);
-let entranceShownKey = null, entranceAddr = null, entranceSel = null;
+let entranceShownKey = null, entranceDismissed = null, entranceAddr = null, entranceSel = null;
 const naira = n => '₦' + n.toLocaleString('en-US');
+function hideEntrance() { entranceEl.classList.remove('show'); entranceShownKey = null; entranceAddr = null; entranceSel = null; }
 function renderEntrance() {
   const a = entranceAddr, list = availableApartments(a);
-  entranceEl.innerHTML = `<div class="ew-eyebrow">BUILDING ENTRANCE</div><div class="ew-title">No. ${a.number} ${a.street}</div>
+  entranceEl.innerHTML = `<button class="ew-x" type="button" aria-label="Close">✕</button><div class="ew-eyebrow">BUILDING ENTRANCE</div><div class="ew-title">No. ${a.number} ${a.street}</div>
     <div class="ew-grid"><div><span>District</span><b>${a.district}</b></div><div><span>Building type</span><b>${a.kindLabel}</b></div>
     <div><span>House number</span><b>${a.number}</b></div><div><span>Total apartments</span><b>${a.apartments} (${a.floors} floors)</b></div>
     <div><span>Available to buy</span><b>${list.length}</b></div><div><span>Price per apartment</span><b>${naira(APARTMENT_PRICE)}</b></div></div>
@@ -1299,6 +1368,7 @@ function renderEntrance() {
 }
 entranceEl.addEventListener('click', e => {
   if (!entranceAddr) return;
+  if (e.target.closest('.ew-x')) { entranceDismissed = entranceShownKey; hideEntrance(); return; }   // stays closed until the player walks away and comes back
   const chip = e.target.closest('i[data-n]');
   if (chip) { entranceSel = +chip.dataset.n; renderEntrance(); const sel = entranceEl.querySelector('.ew-list i.sel'); if (sel) sel.scrollIntoView({ block: 'nearest' }); return; }
   if (e.target.closest('.ew-buy') && entranceSel !== null) {
@@ -1309,18 +1379,20 @@ entranceEl.addEventListener('click', e => {
     toast(`Apartment ${bought} at No. ${entranceAddr.number} ${entranceAddr.street} is yours · ${naira(APARTMENT_PRICE)}`);
   }
 });
+const ENTRANCE_SHOW = 6, ENTRANCE_HIDE = 9;   // metres from the door: must be right at it to appear, a small step away to vanish
 function updateEntranceWindow() {
   const px = player.position.x, pz = player.position.z, bi0 = Math.floor(px / ROAD_SPACING), bj0 = Math.floor(pz / ROAD_SPACING);
   let best = null, bd = Infinity;
-  const test = b => { if (!b) return; const [ex, ez] = entrancePoint(b, 4), d = Math.hypot(px - ex, pz - ez); if (d < bd) { bd = d; best = b; } };
+  const test = b => { if (!b) return; const [ex, ez] = entrancePoint(b, 2), d = Math.hypot(px - ex, pz - ez); if (d < bd) { bd = d; best = b; } };
   for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) test(infillAt(bi0 + i, bj0 + j));
   for (const b of cityMapSpecs) if (Math.abs(b.x - px) < 260 && Math.abs(b.z - pz) < 260) test(b);
-  if (!best || bd > (entranceShownKey ? 20 : 13)) {   // a little hysteresis so the window does not flicker at the edge
-    if (entranceShownKey) { entranceEl.classList.remove('show'); entranceShownKey = null; entranceAddr = null; entranceSel = null; }
+  if (!best || bd > (entranceShownKey ? ENTRANCE_HIDE : ENTRANCE_SHOW)) {
+    if (entranceShownKey) hideEntrance();
+    if (!best || bd > ENTRANCE_HIDE) entranceDismissed = null;   // walked away: the window may appear again next time
     return;
   }
-  const key = Math.round(best.x * 10) + ',' + Math.round(best.z * 10);
-  if (key === entranceShownKey) return;
+  const key = bKey(best);
+  if (key === entranceShownKey || key === entranceDismissed) return;
   entranceShownKey = key; entranceAddr = buildingAddress(best); entranceSel = null;
   renderEntrance();
   entranceEl.classList.add('show');
@@ -1711,9 +1783,7 @@ function buildChunkContent(cx, cz) {
     const L = { bushes: [], tufts: [], rocks: [], cones: [], drums: [], bins: [] };
     for (const r of fieldRectsIn(xMin, x1, zMin, z1)) {
       const it = fieldItems(r);
-      for (const b of it.bushes) if (inC(b)) { L.bushes.push(b); registerStreetBlock(b.x,b.z,Math.max(0.7,b.sx*0.72),Math.max(0.7,b.sz*0.72)); }
       for (const b of it.tufts) if (inC(b)) L.tufts.push(b);
-      for (const b of it.rocks) if (inC(b)) { L.rocks.push(b); registerStreetBlock(b.x,b.z,1.5,1.5); }
     }
     addRoadsideProps(cx, cz, box, L);
     vegMats();
