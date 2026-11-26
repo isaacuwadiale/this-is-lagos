@@ -281,14 +281,14 @@ const lampGlow = newMat({ color: 0xffe7ad, emissive: 0xffc66b, emissiveIntensity
 // Lightweight bus shelter parts: shared assets, instanced per streamed chunk.
 // Keep the established 18.33-unit shelter height; do not compress it to the roof height
 // used by the earlier compact placeholder version.
-const shelterRoofMat = mat(0x1c5fd1, 0.4, 0.15), shelterBenchMat = mat(0x39434f, 0.6, 0.2), shelterFrameMat = mat(0x1a2a3c, 0.45, 0.35);
+const shelterRoofMat = mat(0x1c5fd1, 0.4, 0.15), shelterBenchMat = mat(0x39434f, 0.6, 0.2), shelterFrameMat = mat(0xb9c2ca, 0.28, 0.82);
 const shelterGlassMat = newMat({ color: 0x9fd2ea, roughness: 0.08, metalness: 0.1, transparent: true, opacity: IS_MOBILE ? 0.42 : 0.3, depthWrite: false });   // see-through glass walls
 const shelterRoofHeight = BUS_SHELTER_HEIGHT;
 const SEAT_THICK = 0.22, SEAT_TOP = BUS_SHELTER_HEIGHT * 0.20, SEAT_Y = SEAT_TOP - SEAT_THICK / 2;   // seat surface sits at 0.20 of the shelter height
 const shelterWallHeight = BUS_SHELTER_HEIGHT - 0.8;   // (kept for reference)
 const GLASS_Y = 0.5 + (BUS_SHELTER_HEIGHT - 0.95) / 2, GLASS_H = BUS_SHELTER_HEIGHT - 0.95;   // glass runs from just above the ground up to the roof
 const POST_H = BUS_SHELTER_HEIGHT - 0.45;                                                      // steel posts end under the roof slab
-const BACK_POSTS = [-10.5, -3.5, 3.5, 10.5], FRONT_POSTS = [-10.5, -3.5, 3.5, 10.5];
+const BACK_POSTS = [-10.5, -3.5, 3.5, 10.5], FRONT_POSTS = [-10.5, 10.5]; // keep the entrance clear: remove its two centre bars
 const BUS_MARK_W = 4, BUS_MARK_L = 9;   // legend: 4 across the lane (half of the original 8), stretched 9 along it like real road lettering
 const busLaneCanvas = document.createElement('canvas');
 busLaneCanvas.width = 256; busLaneCanvas.height = 128;   // 128 KB, no mipmaps
@@ -1061,22 +1061,23 @@ function addRoadsideProps(cx, cz, box, L) {
           const dim = (len, wid) => rAxis === 'x' ? [wid, len] : [len, wid];
           if (t < 0.26) {                                              // car parked in the kerb lane
             const col = CAR_COLORS[Math.floor(h2(1) * CAR_COLORS.length)], [x, z] = at(AVE_HALF - 6, q), [bw, bl] = dim(4.6, 1.95), [kw, kl] = dim(2.5, 1.75);
+            registerStreetBlock(x, z, 2.8, 1.5);
             const sh = h2(2) < 0.5 ? -0.35 : 0.35, [ox, oz] = rAxis === 'x' ? [0, sh] : [sh, 0];
             box(bw, 0.9, bl, col, x, 0.35, z); box(kw, 0.78, kl, 0x2d3b45, x + ox, 1.25, z + oz);
             for (const a of [-1.45, 1.45]) for (const b of [-1, 1]) { const [wx, wz] = rAxis === 'x' ? [x + b * 0.98, z + a] : [x + a, z + b * 0.98], [ww, wl] = dim(0.8, 0.36); box(ww, 0.8, wl, 0x16181b, wx, 0, wz); }
           } else if (t < 0.40) {                                       // a few traffic cones
-            for (let k = 0, m = 2 + Math.floor(h2(3) * 3); k < m; k++) { const [x, z] = at(AVE_HALF - 2.2 - h2(4 + k) * 1.2, q + k * 2.4); L.cones.push({ x, y: 0, z, sx: 1, sy: 1, sz: 1, color: 0xff6a1a }); }
+            for (let k = 0, m = 2 + Math.floor(h2(3) * 3); k < m; k++) { const [x, z] = at(AVE_HALF - 2.2 - h2(4 + k) * 1.2, q + k * 2.4); registerStreetBlock(x,z,0.65,0.65); L.cones.push({ x, y: 0, z, sx: 1, sy: 1, sz: 1, color: 0xff6a1a }); }
           } else if (t < 0.52) {                                       // oil drums by the building line
-            for (let k = 0, m = 2 + Math.floor(h2(5) * 3); k < m; k++) { const [x, z] = at(AVE_HALF + 9 + h2(6 + k) * 1.5, q + (k - 1) * 1.1 + h2(9 + k) * 0.4); L.drums.push({ x, y: 0, z, sx: 1, sy: 1, sz: 1, color: DRUM_COLORS[Math.floor(h2(12 + k) * DRUM_COLORS.length)] }); }
+            for (let k = 0, m = 2 + Math.floor(h2(5) * 3); k < m; k++) { const [x, z] = at(AVE_HALF + 9 + h2(6 + k) * 1.5, q + (k - 1) * 1.1 + h2(9 + k) * 0.4); registerStreetBlock(x,z,0.8,0.8); L.drums.push({ x, y: 0, z, sx: 1, sy: 1, sz: 1, color: DRUM_COLORS[Math.floor(h2(12 + k) * DRUM_COLORS.length)] }); }
           } else if (t < 0.63) {                                       // litter bin
-            const [x, z] = at(AVE_HALF + 7, q); L.bins.push({ x, y: 0, z, sx: 1, sy: 1, sz: 1, color: h2(7) < 0.5 ? 0x3c5a45 : 0x4d5156 });
+            const [x, z] = at(AVE_HALF + 7, q); registerStreetBlock(x,z,0.9,0.9); L.bins.push({ x, y: 0, z, sx: 1, sy: 1, sz: 1, color: h2(7) < 0.5 ? 0x3c5a45 : 0x4d5156 });
           } else if (t < 0.75) {                                       // roadside kiosk with a coloured canopy
-            const [x, z] = at(AVE_HALF + 6.4, q), [bw, bl] = dim(3.6, 2.6), [rw, rl] = dim(4.6, 3.6);
+            const [x, z] = at(AVE_HALF + 6.4, q); registerStreetBlock(x,z,2.4,2.0); const [bw, bl] = dim(3.6, 2.6), [rw, rl] = dim(4.6, 3.6);
             box(bw, 2.6, bl, 0xe6e0d2, x, 0, z); box(rw, 0.25, rl, KIOSK_COLORS[Math.floor(h2(8) * KIOSK_COLORS.length)], x, 2.6, z);
           } else {                                                     // bush clump at the edge of the walkway
             for (let k = 0, m = 1 + Math.floor(h2(10) * 3); k < m; k++) {
               const [x, z] = at(AVE_HALF + 8.4 - h2(14 + k) * 0.6, q + (k - 1) * 2.2), s = 0.9 + h2(17 + k) * 0.9;
-              L.bushes.push({ x, y: 0.05, z, ry: h2(20 + k) * 6.28, sx: s * 1.1, sy: s * 0.8, sz: s * 1.1, color: BUSH_TINTS[Math.floor(h2(23 + k) * BUSH_TINTS.length)] });
+              registerStreetBlock(x,z,1.35,1.35); L.bushes.push({ x, y: 0.05, z, ry: h2(20 + k) * 6.28, sx: s * 1.1, sy: s * 0.8, sz: s * 1.1, color: BUSH_TINTS[Math.floor(h2(23 + k) * BUSH_TINTS.length)] });
             }
           }
         }
@@ -1196,6 +1197,12 @@ function infillAt(bi, bj) {
 }
 
 const CELL = 64, detailGrid = new Map();
+const STREET_BLOCK_CELL = 24, streetBlockGrid = new Map();
+function registerStreetBlock(x, z, rx, rz) {
+  const b = { minX: x-rx, maxX: x+rx, minZ: z-rz, maxZ: z+rz };
+  for (let gx=Math.floor(b.minX/STREET_BLOCK_CELL); gx<=Math.floor(b.maxX/STREET_BLOCK_CELL); gx++)
+    for (let gz=Math.floor(b.minZ/STREET_BLOCK_CELL); gz<=Math.floor(b.maxZ/STREET_BLOCK_CELL); gz++) { const k=gx+','+gz; let a=streetBlockGrid.get(k); if(!a) streetBlockGrid.set(k,a=[]); a.push(b); }
+}
 for (const b of buildingColliders)
   for (let cx = Math.floor(b.minX / CELL); cx <= Math.floor(b.maxX / CELL); cx++)
     for (let cz = Math.floor(b.minZ / CELL); cz <= Math.floor(b.maxZ / CELL); cz++) {
@@ -1208,6 +1215,9 @@ function collidesWithBuilding(x, z) {
   if (r && x > r.minX && x < r.maxX && z > r.minZ && z < r.maxZ) return true;
   const list = detailGrid.get(Math.floor(x / CELL) + ',' + Math.floor(z / CELL));
   if (list) for (const b of list) if (x > b.minX && x < b.maxX && z > b.minZ && z < b.maxZ) return true;
+  const nearby = streetBlockGrid.get(Math.floor(x/STREET_BLOCK_CELL)+','+Math.floor(z/STREET_BLOCK_CELL));
+  if (nearby) for (const b of nearby) if (x > b.minX && x < b.maxX && z > b.minZ && z < b.maxZ) return true;
+  for (const b of amenityColliders) if (x > b.minX && x < b.maxX && z > b.minZ && z < b.maxZ) return true;
   return false;
 }
 
@@ -1362,6 +1372,7 @@ function buildRoads(cx, cz, group, asphaltRecs) {
       const sx = gx + side * (half + SHELTER_OFFSET), bx = sx + side * (SHELTER_DEPTH / 2 - 0.1), fx = sx - side * (SHELTER_DEPTH / 2 - 0.15);
       shelterRoofs.push({ x: sx, y: shelterRoofHeight - 0.225, z: q, sx: SHELTER_DEPTH + 0.8, sy: 0.45, sz: SHELTER_LEN + 1.0 });
       shelterBacks.push({ x: bx, y: GLASS_Y, z: q, sx: 0.14, sy: GLASS_H, sz: SHELTER_LEN });
+      registerStreetBlock(bx,q,0.65,SHELTER_LEN/2); registerStreetBlock(sx + side*1.7,q - (SHELTER_LEN/2 - 0.07),SHELTER_DEPTH/4,0.65); registerStreetBlock(sx + side*1.7,q + (SHELTER_LEN/2 - 0.07),SHELTER_DEPTH/4,0.65);
       for (const e of [-1, 1]) shelterSides.push({ x: sx + side * 1.7, y: GLASS_Y, z: q + e * (SHELTER_LEN / 2 - 0.07), sx: SHELTER_DEPTH / 2, sy: GLASS_H, sz: 0.14 });
       for (const dz of BACK_POSTS) shelterFrames.push({ x: bx, y: POST_H / 2, z: q + dz, sx: 0.3, sy: POST_H, sz: 0.3 });
       for (const dz of FRONT_POSTS) shelterFrames.push({ x: fx, y: POST_H / 2, z: q + dz, sx: 0.3, sy: POST_H, sz: 0.3 });
@@ -1416,6 +1427,7 @@ function buildRoads(cx, cz, group, asphaltRecs) {
       const sz = gz + side * (half + SHELTER_OFFSET), bz = sz + side * (SHELTER_DEPTH / 2 - 0.1), fz = sz - side * (SHELTER_DEPTH / 2 - 0.15);
       shelterRoofs.push({ x: q, y: shelterRoofHeight - 0.225, z: sz, sx: SHELTER_LEN + 1.0, sy: 0.45, sz: SHELTER_DEPTH + 0.8 });
       shelterBacks.push({ x: q, y: GLASS_Y, z: bz, sx: SHELTER_LEN, sy: GLASS_H, sz: 0.14 });
+      registerStreetBlock(q,bz,SHELTER_LEN/2,0.65); registerStreetBlock(q - (SHELTER_LEN/2 - 0.07),sz + side*1.7,0.65,SHELTER_DEPTH/4); registerStreetBlock(q + (SHELTER_LEN/2 - 0.07),sz + side*1.7,0.65,SHELTER_DEPTH/4);
       for (const e of [-1, 1]) shelterSides.push({ x: q + e * (SHELTER_LEN / 2 - 0.07), y: GLASS_Y, z: sz + side * 1.7, sx: 0.14, sy: GLASS_H, sz: SHELTER_DEPTH / 2 });
       for (const dx of BACK_POSTS) shelterFrames.push({ x: q + dx, y: POST_H / 2, z: bz, sx: 0.3, sy: POST_H, sz: 0.3 });
       for (const dx of FRONT_POSTS) shelterFrames.push({ x: q + dx, y: POST_H / 2, z: fz, sx: 0.3, sy: POST_H, sz: 0.3 });
@@ -1569,9 +1581,9 @@ function buildChunkContent(cx, cz) {
     const L = { bushes: [], tufts: [], rocks: [], cones: [], drums: [], bins: [] };
     for (const r of fieldRectsIn(xMin, x1, zMin, z1)) {
       const it = fieldItems(r);
-      for (const b of it.bushes) if (inC(b)) L.bushes.push(b);
+      for (const b of it.bushes) if (inC(b)) { L.bushes.push(b); registerStreetBlock(b.x,b.z,Math.max(0.7,b.sx*0.72),Math.max(0.7,b.sz*0.72)); }
       for (const b of it.tufts) if (inC(b)) L.tufts.push(b);
-      for (const b of it.rocks) if (inC(b)) L.rocks.push(b);
+      for (const b of it.rocks) if (inC(b)) { L.rocks.push(b); registerStreetBlock(b.x,b.z,1.5,1.5); }
     }
     addRoadsideProps(cx, cz, box, L);
     vegMats();
@@ -1585,6 +1597,7 @@ function buildChunkContent(cx, cz) {
   job(() => {                                                               // 4. palms
     const trees = chunkTrees(cx, cz);
     if (!trees.length) return;
+    for (const t of trees) registerStreetBlock(t.x,t.z,Math.max(1.1,t.s*1.15),Math.max(1.1,t.s*1.15));
     for (let type = 0; type < 2; type++) {
       const recs = [];
       for (const t of trees) {
@@ -2323,7 +2336,7 @@ function navMakePath(from, dest) {
     const la = navLoc(A), D = navDijkstra(la.ends);
     sb.forEach((B, k) => { const r = navRoute(from, dest, A, B, la, lbs[k], D); if (r && (!best || r.len < best.len - 0.5)) best = r; });
   }
-  return best || navFinish([[from[0], from[1]], [dest.x, dest.z]], [null], dest);
+  return best;
 }
 const navFmtDist = m => m < 950 ? Math.max(10, Math.round(m / 10) * 10) + ' m' : (m / 1000).toFixed(1) + ' km';
 const navFmtDur = s => { const m = Math.max(1, Math.round(s / 60)); return m < 60 ? m + ' min' : Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : ''); };
@@ -2391,6 +2404,7 @@ function navRefreshSheet() {
 }
 function navPlanTo(dest) {
   const route = navMakePath([player.position.x, player.position.z], dest);
+  if (!route) { mapCardEl.style.display = 'none'; mapDirEl.style.display = 'none'; alert('No passable road route is available to this destination. Choose a destination beside an open road.'); return; }
   nav.plan = { dest, route, mode: nav.lastMode };
   mapCardEl.style.display = 'none';
   navRefreshSheet(); mapDirEl.style.display = 'block';
@@ -2416,6 +2430,7 @@ function navStart() {
   const p = nav.plan; if (!p) return;
   nav.active = true; nav.mode = nav.lastMode = p.mode; nav.dest = p.dest;
   nav.route = navMakePath([player.position.x, player.position.z], p.dest);
+  if (!nav.route) { alert('The route is no longer available. Please choose another destination.'); return; }
   nav.plan = null; nav.arrived = false; nav.offT = 0; nav.uiT = 1; nav.line = null;
   mapDirEl.style.display = 'none'; mapCardEl.style.display = 'none'; mapSelDest = null;
   mapTrail.length = 0; navMapTurn = 0; navMapTurnRefresh();
@@ -2452,7 +2467,7 @@ function updateNav(dt) {
     navQ('navIcon').textContent = '🏁'; navQ('navMain').textContent = 'You have arrived'; navQ('navSub').textContent = dest.name;
     return;
   }
-  if (off > NAV_OFF_ROUTE) { if ((nav.offT += dt) > 1.5) { nav.route = navMakePath([px, pz], dest); nav.offT = 0; } } else nav.offT = 0;   // wandered off: re-route
+  if (off > NAV_OFF_ROUTE) { if ((nav.offT += dt) > 1.5) { const reroute = navMakePath([px, pz], dest); if (reroute) nav.route = reroute; nav.offT = 0; } } else nav.offT = 0;   // wandered off: re-route
 
   if ((nav.uiT += dt) >= 0.2) {
     nav.uiT = 0;
