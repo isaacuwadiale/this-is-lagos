@@ -112,9 +112,14 @@ async function submitAuth() {
   submit.disabled = true;
   try {
     if (mode === 'signup') {
-      const { data, error } = await supabase.auth.signUp({
-        email, password, options: { data: { display_name: name } }
-      });
+const { data, error } = await supabase.auth.signUp({
+  email,
+  password,
+  options: {
+    data: { display_name: name },
+    emailRedirectTo: 'https://isaacuwadiale.github.io/this-is-lagos/'
+  }
+});
       if (error) throw error;
       if (!data.session) {
         setMessage('Account created. Check your email to confirm it, then sign in.');
