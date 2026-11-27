@@ -136,6 +136,7 @@ const { data, error } = await supabase.auth.signUp({
       await loadProfile();
       renderProfile();
       setMessage('Welcome back.');
+setTimeout(() => hide(), 1200);
     }
   } catch (e) {
     setMessage(e?.message || 'Could not complete account request.', true);
