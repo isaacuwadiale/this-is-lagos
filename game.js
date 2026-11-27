@@ -2294,7 +2294,7 @@ document.head.appendChild(mapStyleEl);
 const cityMapPanel = document.createElement('section');
 cityMapPanel.id = 'cityMapPanel'; cityMapPanel.setAttribute('aria-label', 'City map');
 cityMapPanel.innerHTML = `<canvas id="cityMapCanvas"></canvas>
-<div class="mapChip" id="mapSearchBox"><span>🔎</span><input id="mapSearch" type="text" placeholder="Search Lagos" autocomplete="off" spellcheck="false"></div>
+<div class="mapChip" id="mapSearchBox"><span>🔎</span><input id="mapSearch" type="text" placeholder="Search places, streets, e.g. 11 Allen Avenue" autocomplete="off" spellcheck="false"></div>
 <div id="mapResults"></div>
 <button id="cityMapClose" type="button" aria-label="Close map">×</button>
 <div class="mapChip" id="mapCompass" title="North is up">▲N</div>
@@ -3104,29 +3104,106 @@ function mapShowCard(hit) {
 
 // ---- search -----------------------------------------------------------------
 let mapSearchIndex = null;
-function mapSearchItems(q) {
-  if (!mapSearchIndex) {
-    mapSearchIndex = [];
-    for (const d of baseDistrictDefs) mapSearchIndex.push({ name: d[0], sub: 'District', x: d[1], z: d[2], s: 0.3 });
-    for (const f of cityMapFacilities) if (f.type !== 'sportscomplex' && f.label) mapSearchIndex.push({ name: f.label, sub: MAP_FACILITY_LABEL[f.type], x: f.x, z: f.z, s: 1.4 });
-    for (let i = -15; i <= 15; i++) { mapSearchIndex.push({ name: streetName('x', i), sub: 'Street', x: i * ROAD_SPACING, z: null, s: 0.7 }); mapSearchIndex.push({ name: streetName('z', i), sub: 'Street', x: null, z: i * ROAD_SPACING, s: 0.7 }); }
+const MAP_KIND_WORDS = { office: 'office tower', apartment: 'apartment tower', mixed: 'mixed use tower', residential: 'residential tower', tenement: 'residential block', shop: 'retail shop building', duplex: 'duplex block', market: 'market building' };
+const SEARCH_HINT_WORDS = ['street', 'road', 'avenue', 'way', 'crescent', 'drive', 'expressway', 'lane', 'district', 'lagoon', 'river', 'beach', 'sports centre', 'football', 'tennis', 'basketball', 'market', 'car park', 'tower', 'apartment', 'office'];
+function searchLev(a, b) {   // tiny edit distance, for close-spelling suggestions
+  const m = a.length, n = b.length; if (Math.abs(m - n) > 1) return 2;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) { const cur = [i]; for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); prev = cur; }
+  return prev[n];
+}
+function mapSearchBuild() {
+  mapSearchIndex = [];
+  for (const d of districtDefs) mapSearchIndex.push({ type: 'place', name: d[0], sub: 'District', x: d[1], z: d[2], s: 0.3 });
+  for (const f of cityMapFacilities) if (f.label) mapSearchIndex.push({ type: 'place', name: f.label, sub: MAP_FACILITY_LABEL[f.type] || 'Place', x: f.x, z: f.z, s: 1.4 });
+  mapSearchIndex.push({ type: 'place', name: 'Lagos Lagoon', alias: 'river water creek sea waterfront', sub: 'Lagoon · river', x: 610, z: 930, s: 0.4 });
+  mapSearchIndex.push({ type: 'place', name: 'Lagoon Beach', alias: 'sand shore waterfront river', sub: 'Beach', x: 590, z: 805, s: 0.9 });
+  for (const axis of ['x', 'z']) for (let idx = -24; idx <= 24; idx++) for (let part = 0; part < 2; part++)
+    mapSearchIndex.push({ type: 'street', name: streetName(axis, idx, part), sub: 'Street', axis, idx, part });
+}
+function mapSearchMatch(it, toks) {   // null = no match, lower = better
+  const words = it._w || (it._w = (it.name + ' ' + (it.alias || '')).toLowerCase().split(/[\s\-.]+/).filter(Boolean));
+  let sc = 0;
+  for (const t of toks) {
+    let best = 9;
+    for (const w of words) {
+      if (w.startsWith(t)) best = Math.min(best, w === t ? 0 : 0.5);
+      else if (w.includes(t)) best = Math.min(best, 1.5);
+      else if (t.length >= 4 && w.length >= 3 && (searchLev(w.slice(0, t.length), t) <= 1 || searchLev(w.slice(0, t.length + 1), t) <= 1)) best = Math.min(best, 2.5);   // close spelling
+    }
+    if (best === 9) return null; sc += best;
   }
-  q = q.trim().toLowerCase();
+  return sc - (it.name.toLowerCase().startsWith(toks.join(' ')) ? 1 : 0);
+}
+function mapStreetCentre(it) {   // the point on that named street nearest to the middle of the current map view
+  const lo = (it.part === 0 ? -BLOCK_N : STREET_SPLIT_BLOCKS - BLOCK_N) * ROAD_SPACING, hi = (it.part === 0 ? STREET_SPLIT_BLOCKS - BLOCK_N : BLOCK_N) * ROAD_SPACING;
+  return it.axis === 'x' ? [it.idx * ROAD_SPACING, Math.max(lo, Math.min(hi, mapView.cz))] : [Math.max(lo, Math.min(hi, mapView.cx)), it.idx * ROAD_SPACING];
+}
+const mapSearchDist = it => { const [x, z] = it.type === 'street' ? mapStreetCentre(it) : [it.x, it.z]; return Math.hypot(x - mapView.cx, z - mapView.cz); };
+function buildingFromKey(key) {
+  const [x, z] = key.split(',').map(v => +v / 10);
+  const b = infillAt(Math.floor(x / ROAD_SPACING), Math.floor(z / ROAD_SPACING));
+  return b && bKey(b) === key ? b : cityMapSpecs.find(c => bKey(c) === key) || null;
+}
+function mapSearchItems(q) {
+  if (!mapSearchIndex) mapSearchBuild();
+  q = q.trim().toLowerCase().replace(/[,#]/g, ' ').replace(/\bno\.?\s*(?=\d)/g, '');   // "No. 11 Allen Avenue" works too
   if (!q) return [];
-  const starts = [], has = [];
-  for (const it of mapSearchIndex) { const n = it.name.toLowerCase(); if (n.startsWith(q)) starts.push(it); else if (n.includes(q)) has.push(it); }
-  return starts.concat(has).slice(0, 7);
+  const toks = q.split(/\s+/).filter(Boolean), numTok = toks.find(t => /^\d+$/.test(t)), words = toks.filter(t => t !== numTok);
+  const out = [], seen = new Set(), push = it => { const k = it.name + '|' + it.sub; if (!seen.has(k)) { seen.add(k); out.push(it); } };
+  const ranked = (items, ts) => items.map(it => [mapSearchMatch(it, ts), it]).filter(e => e[0] !== null).sort((a, b) => a[0] - b[0] || mapSearchDist(a[1]) - mapSearchDist(b[1]));
+  if (numTok) {   // an address: a house number plus the start of a street name (or just a number: nearest streets)
+    const streets = mapSearchIndex.filter(it => it.type === 'street');
+    const hits = words.length ? ranked(streets, words).slice(0, 5).map(e => e[1]) : streets.filter(it => { const c = mapStreetCentre(it); return Math.abs((it.axis === 'x' ? c[0] : c[1]) - (it.axis === 'x' ? mapView.cx : mapView.cz)) < ROAD_SPACING * 3; }).sort((a, b) => mapSearchDist(a) - mapSearchDist(b)).slice(0, 5);
+    for (const st of hits) push({ type: 'addr', name: `${+numTok} ${st.name}`, sub: 'Address', st, n: +numTok });
+  }
+  if (words.length) {
+    for (const [, it] of ranked(mapSearchIndex, words).slice(0, 8)) push(it);
+    const kinds = Object.keys(MAP_KIND_WORDS).filter(k => mapSearchMatch({ name: MAP_KIND_WORDS[k] }, words) !== null);
+    if (kinds.length) {   // structures: the nearest hand-built towers / blocks of that kind
+      cityMapSpecs.filter(b => kinds.includes(b.kind)).sort((a, b) => Math.hypot(a.x - mapView.cx, a.z - mapView.cz) - Math.hypot(b.x - mapView.cx, b.z - mapView.cz)).slice(0, 3)
+        .forEach(b => { const ad = buildingAddress(b); push({ type: 'bldg', b, name: `${ad.kindLabel} · No. ${ad.number} ${ad.street}`, sub: 'Building' }); });
+    }
+  }
+  if (!out.length && words.length) {   // nothing close: offer the nearest-looking keywords
+    const last = words[words.length - 1], hints = SEARCH_HINT_WORDS.filter(h => h.startsWith(last[0]) || searchLev(h.slice(0, last.length), last) <= 2).slice(0, 4);
+    hints.forEach(h => push({ type: 'hint', name: [...words.slice(0, -1), h].join(' '), sub: 'Did you mean…' }));
+  }
+  return out.slice(0, 8);
 }
 function mapGoSearch(it) {
-  mapFlyTo(it.x === null ? mapView.cx : it.x, it.z === null ? mapView.cz : it.z, it.s);
-  mapResultsEl.style.display = 'none'; mapSearchEl.value = it.name; mapSearchEl.blur();
+  if (it.type === 'hint') { mapSearchEl.value = it.name; mapSearchEl.dispatchEvent(new Event('input')); return; }
+  mapResultsEl.style.display = 'none'; mapSearchEl.blur();
+  if (it.type === 'addr') {
+    const st = { axis: it.st.axis, idx: it.st.idx, part: it.st.part, key: it.st.axis + it.st.idx + ':' + it.st.part };
+    const nums = streetNumbers.get(st.key) || numberStreet(st);
+    let key = null; for (const [k, v] of nums) if (v === it.n) { key = k; break; }
+    mapSearchEl.value = it.name;
+    const b = key && buildingFromKey(key);
+    if (b) { mapFlyTo(b.x, b.z, 1.0); mapShowCard({ b }); return; }
+    const c = mapStreetCentre(it.st);   // no such house: show the street and how many houses it has
+    mapFlyTo(c[0], c[1], 0.5);
+    mapShowCard({ s: { name: it.st.name, sub: nums.size ? `No. ${it.n} does not exist. This street has house numbers 1 to ${nums.size}.` : 'No buildings on this street', x: c[0], z: c[1], s: 0.5 } });
+    return;
+  }
+  if (it.type === 'bldg') { mapSearchEl.value = it.name; mapFlyTo(it.b.x, it.b.z, 1.0); mapShowCard({ b: it.b }); return; }
+  mapSearchEl.value = it.name;
+  if (it.type === 'street') {
+    const c = mapStreetCentre(it), st = { axis: it.axis, idx: it.idx, part: it.part, key: it.axis + it.idx + ':' + it.part };
+    const n = (streetNumbers.get(st.key) || numberStreet(st)).size;
+    mapFlyTo(c[0], c[1], 0.5);
+    mapShowCard({ s: { name: it.name, sub: n ? `Street · house numbers 1 to ${n}` : 'Street', x: c[0], z: c[1], s: 0.5 } });
+    return;
+  }
+  mapFlyTo(it.x, it.z, it.s);
   mapShowCard({ s: it });
 }
 mapSearchEl.addEventListener('input', () => {
   const items = mapSearchItems(mapSearchEl.value);
   mapResultsEl.innerHTML = '';
   items.forEach(it => { const b = document.createElement('button'); b.type = 'button'; b.innerHTML = `${it.name}<small>${it.sub}</small>`; b.addEventListener('click', () => mapGoSearch(it)); mapResultsEl.appendChild(b); });
-  mapResultsEl.style.display = items.length ? 'block' : 'none';
+  if (!items.length && mapSearchEl.value.trim()) { const d = document.createElement('div'); d.style.cssText = 'padding:10px 14px;color:#5f6368;font-size:13px'; d.textContent = 'No places or addresses found. Try a street, district, sports centre or "11 Allen Avenue".'; mapResultsEl.appendChild(d); }
+  mapResultsEl.style.display = items.length || mapSearchEl.value.trim() ? 'block' : 'none';
 });
 mapSearchEl.addEventListener('keydown', e => {
   e.stopPropagation();                                   // typing must not move the player
